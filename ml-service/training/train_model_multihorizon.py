@@ -501,10 +501,26 @@ def train_horizon_model(X: pd.DataFrame, y: pd.Series, horizon_days: int,
     # holdout period, which would leak future outcome information into
     # training.
     # ─────────────────────────────────────────────────────────────────
+    ts_all = pd.to_datetime(pd.Series(snapshot_ts).reset_index(drop=True))
+
+    # The holdout is taken by row position, so "temporal" holds only while the
+    # frame is in timestamp order. It is: the loader's query ends
+    # `ORDER BY snapshot_ts` and nothing between there and here reorders. That
+    # is an invariant three files apart, though, and if it ever breaks this
+    # split silently stops being temporal -- the embargo below would still run,
+    # the numbers would still look plausible, and nothing would say the holdout
+    # had become an arbitrary slice. Cheaper to assert it than to discover it
+    # in a metric.
+    if not ts_all.is_monotonic_increasing:
+        raise ValueError(
+            "snapshot_ts is not sorted ascending; the temporal holdout below "
+            "splits by row position and would not be temporal. Check that the "
+            "feature query still ends with ORDER BY snapshot_ts."
+        )
+
     holdout_idx = int(len(X) * 0.80)
     X_dev,  X_test = X.iloc[:holdout_idx].copy(), X.iloc[holdout_idx:].copy()
     y_dev,  y_test = y.iloc[:holdout_idx].copy(), y.iloc[holdout_idx:].copy()
-    ts_all = pd.to_datetime(pd.Series(snapshot_ts).reset_index(drop=True))
     ts_dev, ts_test = ts_all.iloc[:holdout_idx], ts_all.iloc[holdout_idx:]
     eq_all = pd.Series(equipment_ids).reset_index(drop=True).astype(int)
     eq_test = eq_all.iloc[holdout_idx:]
