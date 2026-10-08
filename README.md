@@ -395,7 +395,7 @@ npm run db:migrate     # applies migrations/ — creates the full schema on a cl
 
 Drizzle migrations (`shared/schema.ts` → `migrations/`) are the **single DDL owner**:
 one `drizzle-kit migrate` builds every table (equipment, rentals, feature
-snapshots, sensor logs, drift + model-metrics tables). The Node and Python
+snapshots, sensor logs, sessions, drift + model-metrics tables). The Node and Python
 services only read and write — neither creates tables at runtime.
 
 ### 3. Start services

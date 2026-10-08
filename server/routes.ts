@@ -5,10 +5,11 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { api } from "@shared/routes";
 import session from "express-session";
+import { createSessionStore, SESSION_TTL_MS } from "./services/session-store";
 import bcrypt from "bcryptjs";
 import { maintenanceEvents, equipment, equipmentRiskScores, rentals, equipmentFailurePredictions, equipmentSwaps } from "@shared/schema";
 import { eq, desc, asc, count, sql, and, like } from "drizzle-orm";
-import { db } from "./db";
+import { db, pool } from "./db";
 import { predictiveMaintenanceService } from './services/predictive-maintenance-fixed';
 import { featureEngineeringService } from './services/feature-engineering';
 import { assetRiskPredictions } from "@shared/schema";
@@ -34,15 +35,21 @@ export async function registerRoutes(
   // Without this, Express won't see HTTPS and won't set secure cookies.
   app.set("trust proxy", 1);
 
+  // SEC-3: sessions are persisted in MySQL rather than express-session's
+  // in-process MemoryStore, which leaks and loses every session on restart.
+  // See services/session-store.ts for the table contract and rationale.
+  const sessionStore = createSessionStore(session, pool);
+
   app.use(
     session({
       secret: process.env.SESSION_SECRET || "dev_secret_key",
+      store: sessionStore,
       resave: false,
       saveUninitialized: false,
       cookie: {
         secure: process.env.NODE_ENV === "production",
         sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
-        maxAge: 24 * 60 * 60 * 1000,
+        maxAge: SESSION_TTL_MS,
       },
     })
   );

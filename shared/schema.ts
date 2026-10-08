@@ -1,4 +1,4 @@
-import { mysqlTable, varchar, serial, bigint, int, smallint, tinyint, timestamp, decimal, date, text, mysqlEnum, index} from "drizzle-orm/mysql-core";
+import { mysqlTable, varchar, serial, bigint, int, smallint, tinyint, timestamp, decimal, date, text, mediumtext, mysqlEnum, index} from "drizzle-orm/mysql-core";
 import { relations } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -48,6 +48,18 @@ export const users = mysqlTable("users", {
   password: varchar("password", { length: 255 }).notNull(),
   role: varchar("role", { length: 50, enum: ["ADMINISTRATOR", "VIEWER"] }).default("VIEWER").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
+});
+
+// Session store backing table (SEC-3). Shape is dictated by
+// express-mysql-session, not by us -- column names and types must match what
+// the library's queries expect. It is declared here so Drizzle stays the only
+// owner of DDL (ARCH-1); the store itself runs with createDatabaseTable:false.
+// The migration pins session_id to utf8mb4_bin so lookups stay case-sensitive,
+// which Drizzle cannot express at the column level.
+export const sessions = mysqlTable("sessions", {
+  sessionId: varchar("session_id", { length: 128 }).primaryKey(),
+  expires: int("expires", { unsigned: true }).notNull(),
+  data: mediumtext("data"),
 });
 
 export const jobSites = mysqlTable("job_sites", {
