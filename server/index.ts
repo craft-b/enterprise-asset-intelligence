@@ -432,8 +432,20 @@ function scheduleNightlyRescore() {
   // database) would otherwise surface as an unhandled rejection stack. Print
   // the message the check actually wrote and exit non-zero so the host's
   // restart/backoff sees a failed start.
-  console.error(
-    `[BOOT] startup failed: ${err instanceof Error ? err.message : String(err)}`
-  );
+  //
+  // The chain is unwrapped because drizzle wraps every query error in a
+  // DrizzleQueryError whose own message is just the SQL -- the reason the
+  // query failed (ECONNREFUSED, ER_ACCESS_DENIED_ERROR, ER_NO_SUCH_TABLE)
+  // only appears on `cause`, and that is the part an operator needs.
+  const chain: string[] = [];
+  for (let e: any = err; e != null && chain.length < 4; e = e.cause) {
+    const code = e.code ? ` [${e.code}]` : "";
+    const message = e instanceof Error ? e.message : String(e);
+    // The outermost message is printed whole -- our own checks put remediation
+    // (e.g. the openssl command) on a second line. Nested driver errors are
+    // compressed to one line so the chain stays readable.
+    chain.push(`${chain.length === 0 ? message : message.split("\n")[0]}${code}`);
+  }
+  console.error(`[BOOT] startup failed: ${chain.join("\n  caused by: ")}`);
   process.exit(1);
 });
