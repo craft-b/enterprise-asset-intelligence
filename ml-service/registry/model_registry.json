@@ -1,0 +1,40 @@
+{
+  "champion": "v1.17",
+  "challenger": null,
+  "retired": [
+    "v1.15",
+    "v1.16"
+  ],
+  "history": [
+    {
+      "event": "auto_bootstrap",
+      "version": "v1.15",
+      "role": "champion",
+      "timestamp": "2026-07-08T02:16:18.413200+00:00"
+    },
+    {
+      "event": "registered",
+      "version": "v1.15",
+      "role": "challenger",
+      "timestamp": "2026-07-08T02:16:18.415537+00:00"
+    },
+    {
+      "event": "registered",
+      "version": "v1.16",
+      "role": "challenger",
+      "timestamp": "2026-07-08T17:26:02.104477+00:00"
+    },
+    {
+      "event": "registered",
+      "version": "v1.17",
+      "role": "challenger",
+      "timestamp": "2026-07-09T01:30:42.830201+00:00"
+    },
+    {
+      "event": "promoted",
+      "new_champion": "v1.17",
+      "old_champion": "v1.15",
+      "timestamp": "2026-07-09T04:21:12.412151+00:00"
+    }
+  ]
+}
