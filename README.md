@@ -433,7 +433,7 @@ On first login, the app automatically redirects to `/setup`. Choose one of two p
 |---|---|---|
 | `DATABASE_URL` | ✅ | Full MySQL DSN — read by the Node/Drizzle server. Must point at the same database as the `DB_*` vars below. |
 | `DB_HOST` / `DB_PORT` / `DB_USER` / `DB_PASSWORD` / `DB_NAME` | ✅ | Individual MySQL connection vars — read by the Python ML service (SQLAlchemy) |
-| `SESSION_SECRET` | ✅ | Express session signing key |
+| `SESSION_SECRET` | ✅ | Express session signing key, 32+ chars. Enforced at boot: with `NODE_ENV=production` the server exits if it is unset, too short, or still a placeholder. Outside production an unset value falls back to a random per-process secret, so logins do not survive a restart. |
 | `GROQ_API_KEY` | ✅ | Groq API key for LLM recommendations |
 | `AGENT_API_KEY` | ✅ | Bearer token for agent API (`/api/agent/*`). Generate: `python -c "import secrets; print(secrets.token_hex(32))"` |
 | `GROQ_MODEL` | — | Groq model ID (default: `llama-3.1-8b-instant`) |

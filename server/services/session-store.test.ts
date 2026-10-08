@@ -10,13 +10,14 @@
 // against a stub pool and checking every identifier in it against the real
 // migration file. No database required.
 
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, vi, afterEach } from "vitest";
 import { readFileSync, readdirSync } from "fs";
 import { join } from "path";
 import session from "express-session";
 import mysql from "mysql2";
 import {
   createSessionStore,
+  resolveSessionSecret,
   sessionStoreOptions,
   SESSION_TABLE,
   SESSION_COLUMNS,
@@ -142,5 +143,74 @@ describe("session store (SEC-3)", () => {
     expect(opts.clearExpired).toBe(true);
     expect(opts.checkExpirationInterval).toBeGreaterThan(0);
     expect(emitted.some(q => /DELETE FROM `sessions` WHERE `expires` </i.test(q))).toBe(true);
+  });
+});
+
+describe("session secret guard (SEC-2)", () => {
+  const good = "a".repeat(64);
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("accepts a sufficiently long secret unchanged", () => {
+    expect(resolveSessionSecret({ SESSION_SECRET: good } as any)).toBe(good);
+  });
+
+  it("trims surrounding whitespace", () => {
+    expect(resolveSessionSecret({ SESSION_SECRET: `  ${good}  ` } as any)).toBe(good);
+  });
+
+  it("fails in production when SESSION_SECRET is unset", () => {
+    expect(() => resolveSessionSecret({ NODE_ENV: "production" } as any)).toThrow(
+      /SESSION_SECRET must be set/
+    );
+  });
+
+  it("fails in production when SESSION_SECRET is empty or whitespace", () => {
+    for (const v of ["", "   "]) {
+      expect(() =>
+        resolveSessionSecret({ NODE_ENV: "production", SESSION_SECRET: v } as any)
+      ).toThrow(/SESSION_SECRET must be set/);
+    }
+  });
+
+  it("rejects the old hardcoded fallback and the .env.example placeholder", () => {
+    // The placeholder matters: it is what a copied-but-unedited .env supplies.
+    const envExample = readFileSync(join(__dirname, "..", "..", ".env.example"), "utf-8");
+    const placeholder = envExample.match(/^SESSION_SECRET=(.+)$/m)![1].trim();
+
+    for (const bad of ["dev_secret_key", placeholder]) {
+      expect(() => resolveSessionSecret({ SESSION_SECRET: bad } as any), bad).toThrow();
+    }
+  });
+
+  it("rejects a secret that is too short, in dev as well as production", () => {
+    const short = "a".repeat(31);
+    expect(() => resolveSessionSecret({ SESSION_SECRET: short } as any)).toThrow(/31 characters/);
+    expect(() =>
+      resolveSessionSecret({ NODE_ENV: "production", SESSION_SECRET: short } as any)
+    ).toThrow(/31 characters/);
+  });
+
+  it("never falls back to a constant — dev secrets are random per process", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const a = resolveSessionSecret({} as any);
+    const b = resolveSessionSecret({} as any);
+
+    expect(a).not.toBe(b);
+    expect(a.length).toBeGreaterThanOrEqual(64);
+    expect(a).not.toContain("dev_secret_key");
+    expect(warn).toHaveBeenCalled();
+    expect(String(warn.mock.calls[0][0])).toMatch(/not survive a restart/);
+  });
+
+  it("is the only source of the signing secret in routes.ts", () => {
+    // A reintroduced `process.env.SESSION_SECRET || "..."` would bypass every
+    // check above while still compiling and passing the tests.
+    const routes = readFileSync(join(__dirname, "..", "routes.ts"), "utf-8");
+    expect(routes).toContain("secret: resolveSessionSecret()");
+    expect(routes).not.toMatch(/SESSION_SECRET\s*\|\|/);
   });
 });

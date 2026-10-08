@@ -5,7 +5,7 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { api } from "@shared/routes";
 import session from "express-session";
-import { createSessionStore, SESSION_TTL_MS } from "./services/session-store";
+import { createSessionStore, resolveSessionSecret, SESSION_TTL_MS } from "./services/session-store";
 import bcrypt from "bcryptjs";
 import { maintenanceEvents, equipment, equipmentRiskScores, rentals, equipmentFailurePredictions, equipmentSwaps } from "@shared/schema";
 import { eq, desc, asc, count, sql, and, like } from "drizzle-orm";
@@ -42,7 +42,7 @@ export async function registerRoutes(
 
   app.use(
     session({
-      secret: process.env.SESSION_SECRET || "dev_secret_key",
+      secret: resolveSessionSecret(),
       store: sessionStore,
       resave: false,
       saveUninitialized: false,

@@ -427,4 +427,13 @@ function scheduleNightlyRescore() {
     // Start daily PM simulation (runs at 06:00, advances simulation + logs PM events)
     scheduleDailyPM();
   });
-})();
+})().catch((err: unknown) => {
+  // Boot-time misconfiguration (a missing SESSION_SECRET, an unreachable
+  // database) would otherwise surface as an unhandled rejection stack. Print
+  // the message the check actually wrote and exit non-zero so the host's
+  // restart/backoff sees a failed start.
+  console.error(
+    `[BOOT] startup failed: ${err instanceof Error ? err.message : String(err)}`
+  );
+  process.exit(1);
+});
