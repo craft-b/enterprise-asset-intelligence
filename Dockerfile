@@ -32,8 +32,19 @@ COPY --from=builder /app/package.json ./
 # ml-service/registry is needed by routes.ts to read feature importance files
 COPY --from=builder /app/ml-service/registry ./ml-service/registry
 
+# Migrations are applied at start by the entrypoint, so the migration files,
+# the drizzle config and the schema it points at must all be in the runtime
+# image -- not just the build stage.
+COPY --from=builder /app/migrations ./migrations
+COPY --from=builder /app/shared ./shared
+COPY --from=builder /app/drizzle.config.ts ./
+COPY --from=builder /app/tsconfig.json ./
+
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
 ENV NODE_ENV=production
 
 EXPOSE 5000
 
-CMD ["node", "dist/index.cjs"]
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

@@ -1,0 +1,140 @@
+# render.yaml — Render Blueprint for Enterprise Asset Intelligence
+#
+# Two Docker web services:
+#   eai-api  Node/Express API + the built React SPA   (public)
+#   eai-ml   FastAPI ML service                       (public, token-gated)
+#
+# The database is NOT defined here. Render offers Postgres only, and this stack
+# is MySQL-specific (drizzle-orm/mysql2 on the Node side, pymysql on the Python
+# side), so MySQL is supplied externally — TiDB Cloud Serverless has a free
+# tier and is wire-compatible. See docs/DEPLOYMENT.md for the full walkthrough.
+#
+# ── Free-tier caveats, stated plainly ────────────────────────────────────────
+# `plan: free` means an instance is suspended after ~15 minutes without
+# inbound traffic and takes 30-60s to wake. Consequences:
+#
+#   * The ML service sleeps independently of the API, so the first prediction
+#     after an idle period pays that cold start. ML_HEALTH_TIMEOUT_MS and
+#     ML_TIMEOUT_MS below are raised accordingly; with the code defaults
+#     (3s / 10s) every such request would fail.
+#   * Free tier has no persistent disk, so the model registry starts empty on
+#     every wake. MODEL_BUNDLE_URL makes the ML entrypoint fetch the champion
+#     artifacts at start. Without it the service comes up with no predictor,
+#     and training one in 512MB is not realistic.
+#   * Free instance hours are pooled across all free services in the account,
+#     so keeping both of these warm with an external pinger would exhaust the
+#     monthly allowance. Let them sleep.
+#
+# Upgrading to paid: set `plan: starter` on eai-api, `plan: standard` on eai-ml
+# (512MB is tight for sklearn + SHAP; measured steady state is ~340MB), and add
+# a disk to eai-ml mounted at /app/ml-service/registry so artifacts persist and
+# MODEL_BUNDLE_URL becomes unnecessary.
+
+envVarGroups:
+  # ML_SERVICE_TOKEN must be IDENTICAL on both services: Node sends it as
+  # X-Service-Token, the FastAPI middleware compares it. A group is the only
+  # way to have Render generate one secret shared by two services.
+  #
+  # It must also be non-empty. The ML service's auth middleware is a no-op when
+  # the variable is blank, which on a public service means /train and
+  # /models/promote would be open to anyone.
+  - name: eai-shared
+    envVars:
+      - key: ML_SERVICE_TOKEN
+        generateValue: true
+
+services:
+  # ── Node API + SPA ────────────────────────────────────────────────────────
+  - type: web
+    name: eai-api
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    # Unauthenticated and does not touch the database, so it reports process
+    # liveness rather than readiness.
+    healthCheckPath: /api/health
+    autoDeployTrigger: commit
+    envVars:
+      - fromGroup: eai-shared
+
+      - key: NODE_ENV
+        value: production
+
+      # Gates the secure/sameSite cookie flags AND is enforced by
+      # resolveSessionSecret(), which refuses to boot in production without a
+      # real secret. Render generates a 32+ char value, so this is satisfied.
+      - key: SESSION_SECRET
+        generateValue: true
+
+      # Set in the dashboard — it carries the database password.
+      # TiDB requires TLS, which mysql2 reads from the DSN query string:
+      #   mysql://USER:PASS@gateway01.<region>.prod.aws.tidbcloud.com:4000/eai
+      #     ?ssl={"minVersion":"TLSv1.2","rejectUnauthorized":true}
+      # Without the ssl parameter the connection is rejected.
+      - key: DATABASE_URL
+        sync: false
+
+      # Full https:// origin of eai-ml. Render cannot compose a URL from
+      # another service's host in a blueprint, so paste it after the first
+      # deploy: https://eai-ml.onrender.com (confirm the exact name — Render
+      # appends a suffix if the name is taken).
+      - key: ML_SERVICE_URL
+        sync: false
+
+      # Raised for free-tier cold starts; see the note at the top.
+      - key: ML_HEALTH_TIMEOUT_MS
+        value: "90000"
+      - key: ML_TIMEOUT_MS
+        value: "120000"
+
+      - key: MODEL_VERSION
+        value: v1
+
+  # ── FastAPI ML service ────────────────────────────────────────────────────
+  - type: web
+    name: eai-ml
+    runtime: docker
+    plan: free
+    region: oregon
+    # Its Dockerfile does `COPY requirements.txt .` relative to ml-service/,
+    # so the build context is that directory, not the repo root.
+    dockerfilePath: ./ml-service/Dockerfile
+    dockerContext: ./ml-service
+    # Exempt from the service-token middleware so Render can poll it.
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    envVars:
+      - fromGroup: eai-shared
+
+      - key: ENVIRONMENT
+        value: production
+
+      # The Python side prefers DATABASE_URL over the DB_* vars (see
+      # engine/db_url.py) and translates mysql2's ssl parameter into the
+      # spelling pymysql understands, so this is the same string as eai-api's.
+      # One DSN for both services, which also removes the old footgun of
+      # DATABASE_URL and DB_* drifting apart.
+      - key: DATABASE_URL
+        sync: false
+
+      # HTTPS URL of a .tar.gz of the champion registry files, fetched at start
+      # because free tier has no disk. A GitHub release asset works.
+      - key: MODEL_BUNDLE_URL
+        sync: false
+      # Pinned digest of that archive. The archive contains pickles, and
+      # unpickling executes code, so a swapped asset would otherwise turn a
+      # restart into arbitrary code execution. Update when the bundle changes.
+      - key: MODEL_BUNDLE_SHA256
+        value: 2ac9c74f87ce7610229fdb9c31fbd9fef1a9c5439d0337d8615fc09cc3900ed4
+
+      # Deterministic template recommendations. Turning this on additionally
+      # needs GROQ_API_KEY.
+      - key: GENAI_RECOMMENDATIONS
+        value: "off"
+
+      - key: MODEL_VERSION
+        value: v1
+      - key: PYTHONIOENCODING
+        value: utf-8

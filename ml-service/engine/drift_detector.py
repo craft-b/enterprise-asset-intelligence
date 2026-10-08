@@ -611,17 +611,13 @@ class DriftDetector:
     # ── Internal ──────────────────────────────────────────────────────────────
 
     def _get_engine(self):
-        import os
         from dotenv import load_dotenv
         from sqlalchemy import create_engine
+        from engine.db_url import sqlalchemy_url
         env_path = Path(__file__).parent.parent.parent / ".env"
         load_dotenv(dotenv_path=env_path)
-        url = (
-            f"mysql+pymysql://{os.getenv('DB_USER','root')}:{os.getenv('DB_PASSWORD','')}"
-            f"@{os.getenv('DB_HOST','localhost')}:{os.getenv('DB_PORT','3306')}"
-            f"/{os.getenv('DB_NAME','asset_inventory')}"
-        )
-        return create_engine(url, pool_pre_ping=True)
+        # DATABASE_URL when set, else the DB_* vars; TLS handled there.
+        return create_engine(sqlalchemy_url(), pool_pre_ping=True)
 
     def _persist_feature(self, results: dict, batch_size: int, model_version: str):
         try:

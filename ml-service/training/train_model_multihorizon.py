@@ -184,15 +184,9 @@ def get_db_connection():
     from dotenv import load_dotenv
     env_path = Path(__file__).parent.parent.parent / ".env"
     load_dotenv(dotenv_path=env_path)
-    db_host = os.getenv('DB_HOST', 'localhost')
-    db_port = int(os.getenv('DB_PORT', '3306'))
-    db_user = os.getenv('DB_USER', 'root')
-    db_pass = os.getenv('DB_PASSWORD', '')
-    db_name = os.getenv('DB_NAME', 'asset_inventory')
-    engine = create_engine(
-        f"mysql+pymysql://{db_user}:{db_pass}@{db_host}:{db_port}/{db_name}",
-        pool_pre_ping=True
-    )
+    # DATABASE_URL when set, else the DB_* vars; TLS handled there.
+    from engine.db_url import sqlalchemy_url
+    engine = create_engine(sqlalchemy_url(), pool_pre_ping=True)
     return engine
 
 

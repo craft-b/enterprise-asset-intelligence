@@ -1,6 +1,6 @@
 # Enterprise Asset Intelligence
 
-**Live demo:** not yet deployed — see [Deployment Status](#deployment-status). Runs locally in a few minutes via [Quickstart](#quickstart).
+**Live demo:** not yet deployed — a Render blueprint is ready, see [Deployment Status](#deployment-status). Runs locally in a few minutes via [Quickstart](#quickstart).
 
 Predictive maintenance platform for heavy construction equipment rental fleets — encoding the same failure-prediction and risk-scoring logic used in industrial and manufacturing equipment reliability programs. Asset degradation curves, hazard functions, and maintenance-interval optimization transfer directly from a production line's rotating equipment to a rental fleet's excavators and skid steers, which is the direct link to 26 years of CPG/manufacturing process engineering behind this project. It's a full-stack system that simulates fleet operations, engineers features from operational data, trains calibrated Random Forest models, and serves multi-horizon failure probability predictions across 10, 30, and 60-day windows — with cost-optimized intervention recommendations and a rental dispatch risk guard.
 
@@ -446,7 +446,15 @@ On first login, the app automatically redirects to `/setup`. Choose one of two p
 
 ## Deployment Status
 
-There is no hosted instance yet — Docker Compose (`docker-compose.yml`, three services: client, server, ml-service) is currently the only way to run the full stack, and `railway.toml` configs exist for the server and ML service but haven't been used for a live deployment. Getting a clickable demo online (frontend + Node API + FastAPI ML service + a free-tier MySQL host) is the next infrastructure step, tracked separately from this pass. Until then, use [Quickstart](#quickstart) to run everything locally — the "Load Demo Data" onboarding path seeds a full fleet with a trained model in under two minutes.
+There is no hosted instance yet, but the path to one is now committed rather than aspirational: [`render.yaml`](render.yaml) defines both services and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) walks through it end to end. What remains is account work — creating the database and pasting three values — not code.
+
+Three things that deployment needed, and now has:
+
+- **Migrations run on start.** The Node image ships `migrations/` and applies them before the server listens, so a clean database gets the full schema (including `sessions`) on first deploy. A migration failure exits non-zero instead of running against a mismatched schema.
+- **One DSN for both services.** The Python side prefers `DATABASE_URL` over the `DB_*` vars and rewrites `mysql2`'s TLS parameter into `pymysql`'s spelling ([`ml-service/engine/db_url.py`](ml-service/engine/db_url.py)), so a managed host that mandates TLS works without per-service config drift.
+- **Model artifacts without a disk.** Pickles aren't in git, and free hosting tiers have no persistent storage, so the ML entrypoint fetches the champion bundle at start from a checksum-pinned URL.
+
+Honest about the free tier: instances suspend after ~15 minutes idle and take 30–60s to wake, and 512MB serves the champion (measured ~340MB) but will not train one. The caveats and the ~$33/mo configuration that removes them are in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Docker Compose (`docker-compose.yml`) remains the way to run all three services locally, and [Quickstart](#quickstart) seeds a full fleet with a trained model in under two minutes.
 
 ---
 

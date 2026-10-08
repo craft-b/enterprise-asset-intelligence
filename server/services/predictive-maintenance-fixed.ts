@@ -13,7 +13,25 @@ import { eq, desc } from "drizzle-orm";
 import { enhancedFeatureService as featureEngineeringService } from "./feature-engineering-enhanced";
 import { IMPUTATION_DEFAULTS, COLD_START, isColdStart } from "./imputation";
 import { mlFetch, ML_SERVICE_URL } from "./ml-client";
-const ML_TIMEOUT_MS  = 10_000;
+// Request timeouts for the ML plane, overridable because the right value is a
+// property of the deployment, not the code. Alongside a warm container 10s is
+// generous. On a host that suspends an idle instance (Render free, Fly
+// scale-to-zero) the first request after a sleep pays a 30-60s cold start, so
+// the defaults below would fail every prediction until something else woke the
+// service -- raise both there.
+function envMs(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    console.warn(`[ML] ignoring invalid ${name}=${raw}; using ${fallback}ms`);
+    return fallback;
+  }
+  return parsed;
+}
+
+const ML_TIMEOUT_MS        = envMs("ML_TIMEOUT_MS", 10_000);
+const ML_HEALTH_TIMEOUT_MS = envMs("ML_HEALTH_TIMEOUT_MS", 3_000);
 
 // ── Public types (unchanged from previous implementation) ─────────────────────
 
@@ -74,7 +92,7 @@ async function callMLService(
 async function checkMLServiceHealth(): Promise<boolean> {
   try {
     const controller = new AbortController();
-    const timeout    = setTimeout(() => controller.abort(), 3_000);
+    const timeout    = setTimeout(() => controller.abort(), ML_HEALTH_TIMEOUT_MS);
     const response   = await mlFetch(`/health`, { signal: controller.signal });
     clearTimeout(timeout);
     return response.ok;

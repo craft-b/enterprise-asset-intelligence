@@ -1,0 +1,15 @@
+# Files that are executed inside Linux containers must keep LF endings
+# regardless of the checkout platform. With core.autocrlf=true on Windows a
+# CRLF checkout gets COPY'd into the image and the kernel then reads the
+# shebang as `/bin/sh\r`, failing with a notably unhelpful
+# "docker-entrypoint.sh: not found".
+*.sh            text eol=lf
+Dockerfile      text eol=lf
+*.Dockerfile    text eol=lf
+Dockerfile.*    text eol=lf
+
+# Model artifacts and archives must never be line-ending converted.
+*.pkl           binary
+*.tar.gz        binary
+*.png           binary
+*.jpg           binary
