@@ -134,6 +134,14 @@ services:
       - key: GENAI_RECOMMENDATIONS
         value: "off"
 
+      # Swagger/ReDoc/openapi.json. Stated explicitly rather than left
+      # absent: they have to bypass the service-token check to function, so
+      # serving them here would publish every path and schema of a service
+      # whose endpoints are otherwise gated. Flip to "true" only if you
+      # want the API browsable by anyone with the URL.
+      - key: ENABLE_API_DOCS
+        value: "false"
+
       - key: MODEL_VERSION
         value: v1
       - key: PYTHONIOENCODING

@@ -199,18 +199,29 @@ curl -s https://eai-ml.onrender.com/health
 
 # The token gate — must be 401, never 200:
 curl -s -o /dev/null -w '%{http_code}\n' -X POST https://eai-ml.onrender.com/train
+
+# The docs gate - must be 401 or 404, never 200:
+for p in /docs /redoc /openapi.json; do
+  printf '%-16s %s\n' "$p" "$(curl -s -o /dev/null -w '%{http_code}' "https://eai-ml.onrender.com$p")"
+done
 ```
 
-That last one is the check worth repeating after any env change. A `200` means
-`ML_SERVICE_TOKEN` is not set on `eai-ml` and anyone can retrain or promote a
-model.
+Those last two are worth repeating after any env change.
+
+A `200` from `/train` means `ML_SERVICE_TOKEN` is not set on `eai-ml`. The auth
+middleware is a no-op when that variable is blank, so anyone could retrain or
+promote a model.
+
+A `200` from a doc path means `ENABLE_API_DOCS` was turned on, publishing every
+path and schema of the service.
 
 ## Known gaps on this setup
 
-- **Swagger UI is public.** `/docs`, `/redoc` and `/openapi.json` are exempt
-  from the token gate so Render can reach `/health`. The endpoints themselves
-  still require the token, but the API surface is browsable. Gating it needs a
-  code change (`FastAPI(docs_url=None)` behind an env flag).
+- **Swagger UI is off.** `ENABLE_API_DOCS` is `"false"` in `render.yaml`, so
+  `/docs`, `/redoc` and `/openapi.json` are not registered as routes at all --
+  they 404 even for a caller holding the service token. Only `/health` bypasses
+  the token check, because platform health checks cannot send one. Set the flag
+  to `"true"` only if you want the API browsable by anyone with the URL.
 - **The ML service is a public web service.** Render's private services are a
   paid feature, so the token is the only thing in front of it. It is compared
   with `hmac.compare_digest`, and admin verbs are audit-logged with the

@@ -109,6 +109,9 @@ services:
       GROQ_MODEL: ${GROQ_MODEL:-llama-3.1-8b-instant}
       # LLM-1: recommendations are opt-in; off = deterministic template only
       GENAI_RECOMMENDATIONS: ${GENAI_RECOMMENDATIONS:-off}
+      # Local stack: docs are useful here and nothing is exposed beyond the
+      # host. Deployments leave this unset -- see docs/DEPLOYMENT.md.
+      ENABLE_API_DOCS: ${ENABLE_API_DOCS:-true}
       MODEL_VERSION: ${MODEL_VERSION:-v1}
     volumes:
       # Model artifacts persist across container rebuilds.

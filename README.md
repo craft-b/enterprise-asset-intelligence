@@ -287,7 +287,11 @@ A discrete-event simulator advances a cursor date day by day:
 
 ## API Reference
 
-Full interactive docs at **http://localhost:8000/docs** when running.
+Full interactive docs at **http://localhost:8000/docs** when running with
+`ENABLE_API_DOCS=true` (set in `.env.example` and `docker-compose.yml`).
+They are off by default because Swagger has to bypass the service-token
+check to load its own schema, so on a reachable deployment it would publish
+the whole API surface of an otherwise gated service.
 
 ### Inference
 
@@ -440,6 +444,7 @@ On first login, the app automatically redirects to `/setup`. Choose one of two p
 | `LLM_PROVIDER` | — | `groq` or `ollama` (default: `groq`) |
 | `MLFLOW_TRACKING_URI` | — | MLflow server URI. If unset, MLflow logging is skipped (safe no-op). |
 | `SLACK_WEBHOOK_URL` | — | Incoming webhook URL for `monitor.py` alerts. If unset, Slack notifications are silently skipped. |
+| `ENABLE_API_DOCS` | — | Serves `/docs`, `/redoc` and `/openapi.json` on the ML service. Off unless truthy; these paths bypass the service-token check, so leave it off anywhere reachable. |
 | `PYTHONIOENCODING` | — | Set to `utf-8` on Windows to avoid codec errors |
 
 ---

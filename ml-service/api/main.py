@@ -85,6 +85,32 @@ async def lifespan(app: FastAPI):
 # APP
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────────
+# API DOCS GATE
+#
+# Swagger UI, ReDoc and the OpenAPI schema are off unless ENABLE_API_DOCS is
+# truthy. They have to sit outside the service-token check to be usable at all
+# (Swagger fetches its own openapi.json from the browser, with no token), so
+# leaving them on would publish the full API surface of a service whose other
+# endpoints are deliberately gated -- every path, parameter and schema,
+# including /train and /models/promote.
+#
+# Default is OFF rather than "off when ENVIRONMENT=production": a gate that
+# depends on remembering an unrelated variable fails open on exactly the
+# deploy that forgets it. Local development opts in instead -- .env.example
+# and docker-compose.yml both set it.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _truthy(value: str | None) -> bool:
+    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+DOCS_ENABLED = _truthy(os.getenv("ENABLE_API_DOCS"))
+
+if not DOCS_ENABLED:
+    print("[DOCS] API docs disabled (set ENABLE_API_DOCS=true to serve /docs, /redoc, /openapi.json)")
+
+
 app = FastAPI(
     title="Enterprise Asset Intelligence — ML Service",
     description=(
@@ -95,8 +121,12 @@ app = FastAPI(
     ),
     version="2.0.0",
     lifespan=lifespan,
-    docs_url="/docs",
-    redoc_url="/redoc",
+    # None removes the route entirely -- a disabled doc path 404s rather than
+    # existing unauthenticated. openapi_url must go too, or the schema stays
+    # readable even with the UIs off.
+    docs_url="/docs" if DOCS_ENABLED else None,
+    redoc_url="/redoc" if DOCS_ENABLED else None,
+    openapi_url="/openapi.json" if DOCS_ENABLED else None,
 )
 
 app.add_middleware(
@@ -120,7 +150,11 @@ app.add_middleware(
 # ─────────────────────────────────────────────────────────────────────────────
 
 ML_SERVICE_TOKEN = os.getenv("ML_SERVICE_TOKEN", "").strip()
-_AUTH_EXEMPT = {"/health", "/docs", "/redoc", "/openapi.json"}
+# /health must stay exempt: platform health checks cannot send the token.
+# The doc paths are exempt only while they exist at all.
+_AUTH_EXEMPT = {"/health"}
+if DOCS_ENABLED:
+    _AUTH_EXEMPT |= {"/docs", "/redoc", "/openapi.json"}
 _ADMIN_PATHS = {"/train", "/models/promote", "/drift/compute-reference"}
 
 if not ML_SERVICE_TOKEN:
