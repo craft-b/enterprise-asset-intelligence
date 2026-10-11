@@ -76,6 +76,15 @@ services:
       - key: DATABASE_URL
         sync: false
 
+      # The SPA is hosted separately (static host), so the browser calls this
+      # API cross-origin. Set this to the exact frontend origin, e.g.
+      #   https://enterprise-asset-intelligence.vercel.app
+      # Comma-separated for more than one. A wildcard is refused at boot:
+      # the session cookie means credentialed requests, and browsers reject
+      # a wildcard Allow-Origin alongside Allow-Credentials.
+      - key: ALLOWED_ORIGINS
+        sync: false
+
       # Full https:// origin of eai-ml. Render cannot compose a URL from
       # another service's host in a blueprint, so paste it after the first
       # deploy: https://eai-ml.onrender.com (confirm the exact name — Render

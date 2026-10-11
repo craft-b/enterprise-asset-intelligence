@@ -6,6 +6,7 @@ import { storage } from "./storage";
 import { api } from "@shared/routes";
 import session from "express-session";
 import { createSessionStore, resolveSessionSecret, SESSION_TTL_MS } from "./services/session-store";
+import { applyCors } from "./services/cors";
 import bcrypt from "bcryptjs";
 import { maintenanceEvents, equipment, equipmentRiskScores, rentals, equipmentFailurePredictions, equipmentSwaps } from "@shared/schema";
 import { eq, desc, asc, count, sql, and, like } from "drizzle-orm";
@@ -34,6 +35,10 @@ export async function registerRoutes(
   // Railway (and most cloud platforms) sit behind a reverse proxy.
   // Without this, Express won't see HTTPS and won't set secure cookies.
   app.set("trust proxy", 1);
+
+  // Before the session and the routes: a preflight must be answered without
+  // touching the session, and a blocked origin should never reach a handler.
+  applyCors(app);
 
   // SEC-3: sessions are persisted in MySQL rather than express-session's
   // in-process MemoryStore, which leaks and loses every session on restart.

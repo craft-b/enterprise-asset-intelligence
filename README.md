@@ -445,21 +445,26 @@ On first login, the app automatically redirects to `/setup`. Choose one of two p
 | `MLFLOW_TRACKING_URI` | — | MLflow server URI. If unset, MLflow logging is skipped (safe no-op). |
 | `SLACK_WEBHOOK_URL` | — | Incoming webhook URL for `monitor.py` alerts. If unset, Slack notifications are silently skipped. |
 | `ENABLE_API_DOCS` | — | Serves `/docs`, `/redoc` and `/openapi.json` on the ML service. Off unless truthy; these paths bypass the service-token check, so leave it off anywhere reachable. |
+| `ALLOWED_ORIGINS` | — | Comma-separated browser origins allowed to call the API with cookies. Only needed when the SPA is hosted separately. A wildcard is refused at boot. |
+| `VITE_API_URL` | — | Client-side, baked in at build time. API origin when the SPA is hosted separately; unset means same-origin. |
 | `PYTHONIOENCODING` | — | Set to `utf-8` on Windows to avoid codec errors |
 
 ---
 
 ## Deployment Status
 
-There is no hosted instance yet, but the path to one is now committed rather than aspirational: [`render.yaml`](render.yaml) defines both services and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) walks through it end to end. What remains is account work — creating the database and pasting three values — not code.
+There is no hosted instance yet, but the path to one is committed rather than aspirational, and it costs nothing to run: [`render.yaml`](render.yaml) and [`vercel.json`](vercel.json) define it, and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) walks through it end to end. What remains is account work — creating the database and pasting four values — not code.
 
-Three things that deployment needed, and now has:
+The SPA is served as a static build (always instant, no instance to suspend) and calls the API cross-origin. That split is what makes a free tier presentable: container hosting suspends an idle instance and takes ~45s to wake, which as a single-origin app would be a blank window. Here the page renders immediately and [an explained gate](client/src/components/api-gate.tsx) holds the app back until the API answers, so the wait is a stated, bounded one instead of an apparent outage.
+
+Four things that deployment needed, and now has:
 
 - **Migrations run on start.** The Node image ships `migrations/` and applies them before the server listens, so a clean database gets the full schema (including `sessions`) on first deploy. A migration failure exits non-zero instead of running against a mismatched schema.
 - **One DSN for both services.** The Python side prefers `DATABASE_URL` over the `DB_*` vars and rewrites `mysql2`'s TLS parameter into `pymysql`'s spelling ([`ml-service/engine/db_url.py`](ml-service/engine/db_url.py)), so a managed host that mandates TLS works without per-service config drift.
 - **Model artifacts without a disk.** Pickles aren't in git, and free hosting tiers have no persistent storage, so the ML entrypoint fetches the champion bundle at start from a checksum-pinned URL.
+- **A cross-origin frontend, without touching 80 call sites.** A single wrapper around `fetch` ([`api-base.ts`](client/src/lib/api-base.ts)) rewrites relative `/api` paths to the configured API origin, so no component changed and a new one cannot forget. The server answers only origins named in `ALLOWED_ORIGINS` ([`cors.ts`](server/services/cors.ts)), and refuses a wildcard at boot — with credentials, browsers reject it anyway.
 
-Honest about the free tier: instances suspend after ~15 minutes idle and take 30–60s to wake, and 512MB serves the champion (measured ~340MB) but will not train one. The caveats and the ~$33/mo configuration that removes them are in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Docker Compose (`docker-compose.yml`) remains the way to run all three services locally, and [Quickstart](#quickstart) seeds a full fleet with a trained model in under two minutes.
+Honest about the free tier: the API and ML service suspend after ~15 minutes idle and take 30–60s to wake, and 512MB serves the champion (measured ~340MB) but will not train one. The caveats and the ~$33/mo configuration that removes them are in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Docker Compose (`docker-compose.yml`) remains the way to run all three services locally, and [Quickstart](#quickstart) seeds a full fleet with a trained model in under two minutes.
 
 ---
 

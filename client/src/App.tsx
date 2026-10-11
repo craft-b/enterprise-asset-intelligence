@@ -6,6 +6,7 @@ import { AuthProvider, useAuth } from "@/hooks/use-auth";
 import { LayoutShell } from "@/components/layout-shell";
 import { Loader2 } from "lucide-react";
 import { useSystemStatus } from "@/hooks/use-system-status";
+import { ApiGate } from "@/components/api-gate";
 
 import Login from "@/pages/login";
 import CommandCenter from "@/pages/command-center";
@@ -100,10 +101,14 @@ function Router() {
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <Router />
-        <Toaster />
-      </AuthProvider>
+      {/* Outside AuthProvider on purpose: the session lookup is itself an
+          API call, so it must not fire until the API has answered. */}
+      <ApiGate>
+        <AuthProvider>
+          <Router />
+          <Toaster />
+        </AuthProvider>
+      </ApiGate>
     </QueryClientProvider>
   );
 }
