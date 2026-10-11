@@ -97,6 +97,21 @@ mysql://USER:PASSWORD@gateway01.REGION.prod.aws.tidbcloud.com:4000/eai?ssl={"min
 `mysql2` enables TLS only when the DSN asks. Percent-encode `@ : / ? # &` if
 they appear in the password.
 
+> **On shared clusters:** the connection user TiDB Serverless gives you is
+> cluster-wide, so this credential — sitting in Render's environment — can also
+> reach any other database on the same cluster. A scoped user would be better:
+>
+> ```sql
+> CREATE USER 'eai_app'@'%' IDENTIFIED BY '<long random password>';
+> GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER, INDEX ON eai.* TO 'eai_app'@'%';
+> ```
+>
+> Serverless refuses `GRANT ALL` from the SQL editor ("You are not allowed to
+> create a user with GRANT"), and may refuse the narrower form too. If it does,
+> the default user is workable — just know the blast radius of a leaked
+> `DATABASE_URL` is the whole cluster, not one database. Put EAI on its own
+> cluster if anything else there matters.
+
 The Python service reads this same string:
 [`engine/db_url.py`](../ml-service/engine/db_url.py) prefers `DATABASE_URL`
 over the `DB_*` vars and rewrites the TLS parameter into pymysql's spelling.
