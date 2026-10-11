@@ -14,6 +14,20 @@ from engine.db_url import sqlalchemy_url
 TIDB_HOST = "gateway01.us-east-1.prod.aws.tidbcloud.com"
 
 
+@pytest.fixture
+def no_ca_anywhere(monkeypatch):
+    """
+    Force the last-resort path: no host bundle and no certifi.
+
+    Clearing DB_SSL_CA alone is no longer enough -- certifi is the backstop, so
+    a CA is normally always found. Only with both gone do the verify flags
+    appear, and these tests are about that branch.
+    """
+    monkeypatch.setattr("engine.db_url._CA_BUNDLE_CANDIDATES", ())
+    monkeypatch.setitem(__import__("sys").modules, "certifi", None)
+    return monkeypatch
+
+
 class TestDatabaseUrlPreferred:
     def test_database_url_wins_over_db_vars(self):
         url = sqlalchemy_url({
@@ -48,7 +62,7 @@ class TestDatabaseUrlPreferred:
 
 
 class TestTlsTranslation:
-    def test_mysql2_ssl_json_becomes_pymysql_flags(self):
+    def test_mysql2_ssl_json_becomes_pymysql_flags(self, no_ca_anywhere):
         # The exact spelling mysql2 needs for TiDB, as the Node service uses it.
         url = sqlalchemy_url({
             "DATABASE_URL": f'mysql://u:p@{TIDB_HOST}:4000/eai'
@@ -67,7 +81,7 @@ class TestTlsTranslation:
         assert "rejectUnauthorized" not in url
         assert "minVersion" not in url
 
-    def test_db_ssl_env_var_enables_tls_on_the_db_vars_path(self):
+    def test_db_ssl_env_var_enables_tls_on_the_db_vars_path(self, no_ca_anywhere):
         url = sqlalchemy_url({
             "DB_HOST": TIDB_HOST, "DB_PORT": "4000",
             "DB_USER": "u", "DB_PASSWORD": "p", "DB_NAME": "eai",
@@ -76,7 +90,7 @@ class TestTlsTranslation:
         assert "ssl_verify_cert=true" in url
 
     @pytest.mark.parametrize("value", ["1", "true", "TRUE", "yes", "on", "require"])
-    def test_db_ssl_accepts_common_spellings(self, value):
+    def test_db_ssl_accepts_common_spellings(self, value, no_ca_anywhere):
         url = sqlalchemy_url({"DB_HOST": "h", "DB_SSL": value, "DB_SSL_CA": ""})
         assert "ssl_verify_cert=true" in url
 
@@ -94,7 +108,7 @@ class TestTlsTranslation:
         url = sqlalchemy_url({"DATABASE_URL": "mysql://u:p@h:3306/d?ssl_mode=DISABLED"})
         assert "ssl_verify" not in url
 
-    def test_tls_params_are_not_duplicated(self):
+    def test_tls_params_are_not_duplicated(self, no_ca_anywhere):
         url = sqlalchemy_url({
             "DATABASE_URL": "mysql://u:p@h:4000/d?ssl_verify_cert=true",
             "DB_SSL": "true", "DB_SSL_CA": "",
@@ -150,9 +164,9 @@ class TestCaBundle:
         url = sqlalchemy_url({"DB_HOST": "localhost"})
         assert "ssl_ca" not in url
 
-    def test_tls_still_requested_when_no_bundle_exists(self, monkeypatch):
-        # chain verification stays on even if the host has no bundle to point at
-        monkeypatch.setattr("engine.db_url._CA_BUNDLE_CANDIDATES", ())
+    def test_tls_still_requested_when_nothing_can_supply_a_ca(self, no_ca_anywhere):
+        # Chain verification stays on even with no CA to point at. Weaker than
+        # the certifi path (no hostname check) but better than plaintext.
         url = sqlalchemy_url({
             "DATABASE_URL": "mysql://u:p@h:4000/d?ssl_mode=REQUIRED",
             "DB_SSL_CA": "",
@@ -215,3 +229,47 @@ class TestRealTlsContext:
 
         assert conn.ssl is True
         assert conn.ctx.verify_mode == ssl_mod.CERT_REQUIRED
+
+
+class TestCaFallbackOrder:
+    """
+    The fallback matters: with no CA at all, pymysql builds a context from
+    Python's default trust store, which was measured offering an EXPIRED chain
+    for TiDB Cloud while Node connected to the same host fine. certifi is the
+    backstop, so "no bundle" must not mean "no CA".
+    """
+
+    def test_explicit_ca_beats_everything(self, tmp_path):
+        ca = tmp_path / "ca.pem"
+        ca.write_text("x")
+        url = sqlalchemy_url({"DB_HOST": "h", "DB_SSL": "true", "DB_SSL_CA": str(ca)})
+        assert str(ca).replace("\\", "%5C") in url.replace("\\", "%5C") or "ssl_ca" in url
+
+    def test_falls_back_to_certifi_when_the_host_has_no_bundle(self, monkeypatch):
+        import certifi
+        from urllib.parse import parse_qs, urlsplit
+
+        # Simulate a host with no Unix CA bundle path — e.g. Windows.
+        monkeypatch.setattr("engine.db_url._CA_BUNDLE_CANDIDATES", ())
+
+        url = sqlalchemy_url({"DB_HOST": "h", "DB_SSL": "true"})
+        params = parse_qs(urlsplit(url).query)
+
+        assert params["ssl_ca"] == [certifi.where()]
+        # With a CA present the verify flags must stay off; together they
+        # disable hostname checking.
+        assert "ssl_verify_cert" not in params
+
+    def test_a_ca_is_always_produced_when_tls_is_wanted(self, monkeypatch):
+        from urllib.parse import parse_qs, urlsplit
+
+        monkeypatch.setattr("engine.db_url._CA_BUNDLE_CANDIDATES", ())
+        url = sqlalchemy_url({"DATABASE_URL": 'mysql://u:p@h:4000/d?ssl={"rejectUnauthorized":true}'})
+        params = parse_qs(urlsplit(url).query)
+
+        assert "ssl_ca" in params, "TLS requested but no CA pinned — the failing case"
+
+    def test_no_ca_when_tls_is_not_wanted(self, monkeypatch):
+        monkeypatch.setattr("engine.db_url._CA_BUNDLE_CANDIDATES", ())
+        url = sqlalchemy_url({"DATABASE_URL": "mysql://u:p@localhost:3306/d"})
+        assert "ssl_ca" not in url

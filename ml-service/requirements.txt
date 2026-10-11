@@ -24,6 +24,13 @@ mysql-connector-python==9.5.0
 groq==0.11.0
 requests==2.32.3
 
+# ---- TLS ----------------------------------------------------------------
+# Current CA roots for database TLS. Was already present via requests; now
+# direct, because engine/db_url.py falls back to it when the host has no CA
+# bundle of its own. Python's default trust store offered an expired chain
+# for TiDB Cloud, so this is load-bearing rather than cosmetic.
+certifi>=2024.2.2
+
 # ── Data Validation ───────────────────────────────────────────────────────────
 pydantic==2.9.2
 

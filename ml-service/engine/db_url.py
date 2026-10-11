@@ -57,14 +57,32 @@ _CA_BUNDLE_CANDIDATES = (
 
 
 def _ca_bundle(env) -> str | None:
-    """Path to a CA bundle for hostname verification, or None if none is found."""
+    """
+    Path to a CA bundle, or None if nothing usable is found.
+
+    Order: an explicit DB_SSL_CA, then the host's own bundle (it reflects the
+    machine's trust configuration and gets OS updates), then certifi.
+
+    certifi is not just a convenience for platforms without a Unix bundle
+    path. Falling through to Python's default trust store was measured against
+    TiDB Cloud and failed with CERTIFICATE_VERIFY_FAILED ("certificate has
+    expired") where Node, using its own bundled roots, connected to the same
+    host fine -- the default store offered an expired chain. Pinning a current
+    bundle avoids depending on whatever the platform happens to trust.
+    """
     explicit = (env.get("DB_SSL_CA") or "").strip()
     if explicit:
         return explicit
+
     for path in _CA_BUNDLE_CANDIDATES:
         if os.path.isfile(path):
             return path
-    return None
+
+    try:
+        import certifi
+    except ImportError:
+        return None
+    return certifi.where()
 
 #: mysql2-flavoured TLS keys that must not reach pymysql.
 _FOREIGN_TLS_KEYS = {"ssl", "sslaccept", "ssl_mode"}
