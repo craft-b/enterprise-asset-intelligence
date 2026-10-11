@@ -97,20 +97,34 @@ mysql://USER:PASSWORD@gateway01.REGION.prod.aws.tidbcloud.com:4000/eai?ssl={"min
 `mysql2` enables TLS only when the DSN asks. Percent-encode `@ : / ? # &` if
 they appear in the password.
 
-> **On shared clusters:** the connection user TiDB Serverless gives you is
-> cluster-wide, so this credential — sitting in Render's environment — can also
-> reach any other database on the same cluster. A scoped user would be better:
+> **On shared clusters:** the connection user TiDB Serverless hands you is
+> cluster-wide, so that credential — sitting in Render's environment — can also
+> reach every other database on the cluster. Give EAI its own scoped user:
 >
 > ```sql
-> CREATE USER 'eai_app'@'%' IDENTIFIED BY '<long random password>';
-> GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER, INDEX ON eai.* TO 'eai_app'@'%';
+> CREATE USER 'PREFIX.eai_app'@'%' IDENTIFIED BY '<48 hex chars>';
+> GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER, INDEX ON eai.* TO 'PREFIX.eai_app'@'%';
+> SHOW GRANTS FOR 'PREFIX.eai_app'@'%';
 > ```
 >
-> Serverless refuses `GRANT ALL` from the SQL editor ("You are not allowed to
-> create a user with GRANT"), and may refuse the narrower form too. If it does,
-> the default user is workable — just know the blast radius of a leaked
-> `DATABASE_URL` is the whole cluster, not one database. Put EAI on its own
-> cluster if anything else there matters.
+> Three things make this fail in ways the error messages only half explain:
+>
+> - **The username must start with your cluster prefix** (`ztBmeZ6...`), which
+>   the Connect panel shows. Without it: *"User name must start with ..."*.
+> - **Run the statements one at a time.** The SQL Editor executes only the
+>   statement under the cursor, so a pasted block runs just the last line. A
+>   `GRANT` to a user that was never created reports *"You are not allowed to
+>   create a user with GRANT"* — which reads like a permissions ban and is
+>   really MySQL refusing to create a user implicitly.
+> - **`CREATE` and `ALTER` are required**, not just read/write: the first boot
+>   runs migrations that create 23 tables.
+>
+> Use a hex password (`openssl rand -hex 24`). Base64 contains `+` and `/`,
+> which need percent-encoding inside a DSN and silently break auth otherwise.
+>
+> If scoping genuinely is not available on your plan, the default user works —
+> just know a leaked `DATABASE_URL` then exposes the whole cluster rather than
+> one database, and put EAI on its own cluster if the neighbours matter.
 
 The Python service reads this same string:
 [`engine/db_url.py`](../ml-service/engine/db_url.py) prefers `DATABASE_URL`
