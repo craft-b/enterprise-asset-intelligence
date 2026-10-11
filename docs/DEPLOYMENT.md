@@ -155,7 +155,9 @@ Then fill in the values marked `sync: false`:
 | `eai-api` | `ML_SERVICE_URL` | `https://eai-ml.onrender.com` — the real origin, no trailing slash |
 
 Check the hostname on the `eai-ml` page; Render appends a suffix if the name
-was taken. `ALLOWED_ORIGINS` stays unset on the proxy path — see step 4.
+was taken. Those four are the only values the blueprint asks for —
+`ALLOWED_ORIGINS` defaults to empty and is needed only on the cross-origin
+path in step 4.
 
 ## 4. Frontend (Vercel)
 

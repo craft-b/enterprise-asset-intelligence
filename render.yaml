@@ -82,8 +82,13 @@ services:
       # Comma-separated for more than one. A wildcard is refused at boot:
       # the session cookie means credentialed requests, and browsers reject
       # a wildcard Allow-Origin alongside Allow-Credentials.
+      # Empty on the default (proxy) topology: Vercel forwards /api to this
+      # service, so the browser sees one origin and there is no cross-origin
+      # request to allow. Left as a value rather than a prompt so applying
+      # the blueprint does not ask for something most setups must leave
+      # blank -- and because a wrong value here fails the boot by design.
       - key: ALLOWED_ORIGINS
-        sync: false
+        value: ""
 
       # Full https:// origin of eai-ml. Render cannot compose a URL from
       # another service's host in a blueprint, so paste it after the first
