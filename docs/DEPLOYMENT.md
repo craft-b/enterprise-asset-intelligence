@@ -36,19 +36,35 @@ it ([`api-gate.tsx`](../client/src/components/api-gate.tsx)), and the app
 enters as soon as the API answers. That turns an apparent outage into a stated,
 bounded wait.
 
-It costs one piece of indirection: the SPA and API are on different origins, so
-`/api/*` has to be redirected and the session cookie has to survive cross-site.
+It costs one piece of indirection: the SPA and the API are on different hosts,
+so `/api/*` has to reach the API and the session cookie has to survive.
 
-- **Request routing** — [`api-base.ts`](../client/src/lib/api-base.ts) wraps
-  `fetch` once at startup and rewrites relative `/api` paths to `VITE_API_URL`.
-  There are ~80 call sites written with relative paths; a wrapper means none of
-  them changed and a new one cannot forget.
+**The default is to proxy, not to call cross-origin.** `vercel.json` rewrites
+`/api/*` to the Render API, so the browser only ever sees one origin. That
+matters because of cookies: EAI authenticates with a session cookie, and a
+cookie set by `onrender.com` while the page is `vercel.app` is a *third-party*
+cookie. Safari blocks those by default, so a visitor there would sign in and
+land straight back on the login screen. Proxying makes the cookie first-party
+and sidesteps CORS entirely.
+
+The direct cross-origin path is still fully supported and tested — set
+`VITE_API_URL` and `ALLOWED_ORIGINS` and it works — but it inherits the
+third-party cookie problem, so prefer the proxy unless you have a reason not
+to.
+
+- **Request routing** — with the proxy, relative `/api` paths simply stay
+  relative and Vercel forwards them; the wrapper in
+  [`api-base.ts`](../client/src/lib/api-base.ts) is a no-op. If instead you set
+  `VITE_API_URL`, that wrapper rewrites the ~80 relative call sites to the API
+  origin at runtime, so none of them changed and a new one cannot forget.
 - **Cookies** — already correct for this: the session sets
   `sameSite: "none"; secure: true` in production, and every request sends
   credentials.
-- **CORS** — [`cors.ts`](../server/services/cors.ts) answers only origins named
-  in `ALLOWED_ORIGINS`, with credentials. A wildcard is refused at boot, since
-  `Allow-Origin: *` is invalid with `Allow-Credentials` and browsers reject it.
+- **CORS** — not needed with the proxy, since the browser sees same-origin
+  requests. For the direct path, [`cors.ts`](../server/services/cors.ts) answers
+  only origins named in `ALLOWED_ORIGINS`, with credentials. A wildcard is
+  refused at boot, since `Allow-Origin: *` is invalid with `Allow-Credentials`
+  and browsers reject it.
 
 ## What free tier actually gives you
 
@@ -139,30 +155,51 @@ Then fill in the values marked `sync: false`:
 | `eai-api` | `ML_SERVICE_URL` | `https://eai-ml.onrender.com` — the real origin, no trailing slash |
 
 Check the hostname on the `eai-ml` page; Render appends a suffix if the name
-was taken. `ALLOWED_ORIGINS` comes in step 4, once the frontend has a URL.
+was taken. `ALLOWED_ORIGINS` stays unset on the proxy path — see step 4.
 
 ## 4. Frontend (Vercel)
 
-1. Vercel → **Add New** → **Project** → import the same repo.
-2. [`vercel.json`](../vercel.json) sets the build (`npm run build:client` →
-   `dist/public`) and the SPA rewrite. Leave the framework preset as-is.
-3. Add one environment variable:
+1. **Edit `vercel.json` first.** The proxy destination has to be literal —
+   Vercel does not interpolate environment variables in this file. Replace the
+   host with your own API URL from step 3 and commit:
 
-| Variable | Value |
-|---|---|
-| `VITE_API_URL` | `https://eai-api.onrender.com` — no trailing slash |
+   ```json
+   { "source": "/api/:path*", "destination": "https://YOUR-API.onrender.com/api/:path*" }
+   ```
 
-`VITE_API_URL` is inlined at **build** time, not read at runtime. Changing it
-means redeploying the frontend, not just restarting it.
+2. Vercel → **Add New** → **Project** → import this repo.
 
-4. Deploy, then take the resulting URL and set it back on Render:
+3. Leave the defaults. `vercel.json` already sets the build
+   (`npm run build:client` → `dist/public`), the SPA fallback and the proxy.
+   Root Directory stays the repo root.
 
-| Service | Variable | Value |
+4. **Set no environment variables.** Leaving `VITE_API_URL` unset is what keeps
+   requests relative so the proxy handles them. Setting it would switch the app
+   to direct cross-origin calls and reintroduce the third-party cookie problem.
+
+5. Deploy. Nothing needs to change on Render afterwards — with the proxy there
+   is no second origin, so `ALLOWED_ORIGINS` can stay unset.
+
+### Preview deployments
+
+Every branch and pull request gets its own `*.vercel.app` hostname. Those work
+with the proxy, because the API is reached through whatever host served the
+page. (On the direct cross-origin path they would each need adding to
+`ALLOWED_ORIGINS` — another reason to prefer the proxy.)
+
+### If you use the direct cross-origin path instead
+
+Skip the `vercel.json` rewrite, and set these instead:
+
+| Where | Variable | Value |
 |---|---|---|
-| `eai-api` | `ALLOWED_ORIGINS` | `https://your-project.vercel.app` |
+| Vercel | `VITE_API_URL` | `https://eai-api.onrender.com` — no trailing slash |
+| Render `eai-api` | `ALLOWED_ORIGINS` | `https://your-project.vercel.app` |
 
-Until that is set the browser blocks every API response, and the symptom is a
-CORS error in the console with a perfectly healthy-looking server.
+`VITE_API_URL` is inlined at **build** time, so changing it needs a redeploy,
+not a restart. Until `ALLOWED_ORIGINS` is set the browser blocks every
+response while the server looks perfectly healthy — a CORS error in the
+console is the only symptom. And expect Safari to drop the session cookie.
 
 ## 5. First boot
 
@@ -219,9 +256,13 @@ curl -s https://eai-api.onrender.com/api/health
 curl -s https://eai-ml.onrender.com/health
 # model_loaded true, model_version v1.17
 
-# CORS: must echo the frontend origin, never *
-curl -s -D- -o /dev/null -H 'Origin: https://your-project.vercel.app' \
-  https://eai-api.onrender.com/api/health | grep -i access-control
+# The proxy: Vercel serves it, Render answers it, one origin to the browser
+curl -s https://your-project.vercel.app/api/health
+# healthy JSON here; a 404 means the vercel.json rewrite host is wrong
+
+# Only on the direct cross-origin path - must echo the origin, never *
+# curl -s -D- -o /dev/null -H 'Origin: https://your-project.vercel.app' \
+#   https://eai-api.onrender.com/api/health | grep -i access-control
 
 # The token gate - must be 401, never 200:
 curl -s -o /dev/null -w '%{http_code}\n' -X POST https://eai-ml.onrender.com/train
@@ -252,5 +293,9 @@ path and schema of the service.
   with `hmac.compare_digest`, and admin verbs are audit-logged.
 - **Swagger UI is off** (`ENABLE_API_DOCS=false`). The routes are not
   registered at all, so they 404 even with a valid token.
+- **Session cookies are first-party only because of the proxy.** Switching to
+  direct cross-origin calls makes the cookie third-party, and Safari drops
+  it. A custom domain with the API on a subdomain would also solve it, at
+  the cost of owning a domain.
 - **No CI gate on deploy.** `autoDeployTrigger: commit` ships whatever lands on
   `main`; the Actions workflow runs the Python tests but does not block it.

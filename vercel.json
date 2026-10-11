@@ -5,7 +5,14 @@
   "installCommand": "npm install",
   "framework": null,
   "rewrites": [
-    { "source": "/((?!assets/).*)", "destination": "/index.html" }
+    {
+      "source": "/api/:path*",
+      "destination": "https://eai-api.onrender.com/api/:path*"
+    },
+    {
+      "source": "/((?!assets/).*)",
+      "destination": "/index.html"
+    }
   ],
   "headers": [
     {
