@@ -30,62 +30,16 @@ set -e
 REGISTRY="${REGISTRY_DIR:-/app/ml-service/registry}"
 FETCH_TIMEOUT="${MODEL_FETCH_TIMEOUT:-30}"
 FETCH_RETRIES="${MODEL_FETCH_RETRIES:-3}"
-# One variable for the download path: the shell and the Python child must
-# agree on it, and hardcoding /tmp in both silently diverges wherever the
-# two resolve it differently.
-BUNDLE_TMP="${TMPDIR:-/tmp}/eai-models.tar.gz"
 
 have_models() {
     # A glob that matches nothing exits non-zero, hence find rather than ls.
     [ -n "$(find "$REGISTRY" -maxdepth 1 -name 'rf_*.pkl' -print -quit 2>/dev/null)" ]
 }
 
+# One implementation, used by the Dockerfile too, so build-time and runtime
+# behaviour cannot drift apart. See fetch-models.py.
 fetch_bundle() {
-    mkdir -p "$REGISTRY"
-
-    # python rather than curl: the slim base image has no curl, and this avoids
-    # another apt layer. A real User-Agent is sent because some CDNs treat the
-    # default Python-urllib string as a bot.
-    MODEL_BUNDLE_URL="$MODEL_BUNDLE_URL" \
-    FETCH_TIMEOUT="$FETCH_TIMEOUT" \
-    FETCH_RETRIES="$FETCH_RETRIES" \
-    BUNDLE_TMP="$BUNDLE_TMP" \
-    python - <<'PY'
-import os, sys, time, urllib.request, urllib.error
-
-url      = os.environ["MODEL_BUNDLE_URL"]
-timeout  = float(os.environ["FETCH_TIMEOUT"])
-attempts = int(os.environ["FETCH_RETRIES"])
-dest     = os.environ["BUNDLE_TMP"]
-
-if not url.lower().startswith("https://"):
-    print(f"[ENTRYPOINT] refusing non-HTTPS MODEL_BUNDLE_URL: {url}", flush=True)
-    sys.exit(2)
-
-request = urllib.request.Request(url, headers={
-    "User-Agent": "eai-ml-service/1.0 (+https://github.com/craft-b/enterprise-asset-intelligence)",
-    "Accept": "application/octet-stream",
-})
-
-for attempt in range(1, attempts + 1):
-    started = time.time()
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response, \
-             open(dest, "wb") as out:
-            while chunk := response.read(1 << 16):
-                out.write(chunk)
-        size = os.path.getsize(dest)
-        print(f"[ENTRYPOINT] downloaded {size} bytes in {time.time()-started:.1f}s", flush=True)
-        sys.exit(0)
-    except Exception as exc:
-        detail = getattr(exc, "code", None) or type(exc).__name__
-        print(f"[ENTRYPOINT] attempt {attempt}/{attempts} failed after "
-              f"{time.time()-started:.1f}s: {detail}", flush=True)
-        if attempt < attempts:
-            time.sleep(2 * attempt)   # brief backoff; the port scan is waiting
-
-sys.exit(1)
-PY
+    REGISTRY_DIR="$REGISTRY"     MODEL_BUNDLE_URL="$MODEL_BUNDLE_URL"     MODEL_BUNDLE_SHA256="$MODEL_BUNDLE_SHA256"     MODEL_FETCH_TIMEOUT="$FETCH_TIMEOUT"     MODEL_FETCH_RETRIES="$FETCH_RETRIES"     python /app/ml-service/fetch-models.py
 }
 
 if have_models; then
@@ -96,32 +50,9 @@ elif [ -z "$MODEL_BUNDLE_URL" ]; then
 else
     echo "[ENTRYPOINT] registry is empty — fetching model bundle"
 
-    # Deliberately outside `set -e`: a failed fetch must not kill the container.
+    # Outside `set -e` on purpose: a failed fetch must not kill the container.
     if fetch_bundle; then
-        ok=1
-    else
-        ok=0
-    fi
-
-    if [ "$ok" = "1" ] && [ -n "$MODEL_BUNDLE_SHA256" ]; then
-        # The archive holds pickles, and unpickling executes code. Pin the digest
-        # so a swapped release asset cannot turn a restart into code execution.
-        if echo "${MODEL_BUNDLE_SHA256}  ${BUNDLE_TMP}" | sha256sum -c - >/dev/null 2>&1; then
-            echo "[ENTRYPOINT] checksum verified"
-        else
-            echo "[ENTRYPOINT] checksum MISMATCH — refusing to extract"
-            rm -f "$BUNDLE_TMP"
-            ok=0
-        fi
-    elif [ "$ok" = "1" ]; then
-        echo "[ENTRYPOINT] WARNING: MODEL_BUNDLE_SHA256 unset — extracting an"
-        echo "[ENTRYPOINT] unverified archive of pickles. Set it."
-    fi
-
-    if [ "$ok" = "1" ]; then
-        tar -xzf "$BUNDLE_TMP" -C "$REGISTRY"
-        rm -f "$BUNDLE_TMP"
-        echo "[ENTRYPOINT] extracted $(find "$REGISTRY" -maxdepth 1 -name 'rf_*.pkl' | wc -l) model files"
+        echo "[ENTRYPOINT] model bundle ready"
     else
         echo "[ENTRYPOINT] ---------------------------------------------------"
         echo "[ENTRYPOINT] Could not obtain the model bundle. Starting anyway."
