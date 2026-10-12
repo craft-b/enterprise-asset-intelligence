@@ -35,6 +35,10 @@ app.use(
 
 app.use(express.urlencoded({ extended: false }));
 
+// Sensor uploads arrive as raw CSV. 20mb covers ~50k readings, which is the
+// row cap the ingest service enforces anyway.
+app.use(express.text({ type: ["text/csv", "text/plain"], limit: "20mb" }));
+
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
     hour: "numeric",

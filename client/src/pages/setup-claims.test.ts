@@ -49,26 +49,29 @@ describe("setup page claims", () => {
     expect(ROUTES).toContain("app.post");
   });
 
-  it("does not claim sensor ingestion while no endpoint accepts one", () => {
-    if (hasSensorIngestion()) {
-      // Ingestion now exists — the card may advertise it again, and should.
-      return;
-    }
+  it("matches the copy to whether ingestion exists", () => {
+    // Asserted in both directions so the test cannot go quiet. Before the
+    // endpoint existed the card advertised it anyway; now that it exists, the
+    // card should say so, and if it is ever removed this fails again.
+    const advertises = /import sensor readings|sensor data from csv/i.test(SETUP);
 
+    expect(
+      advertises,
+      hasSensorIngestion()
+        ? "POST /api/sensor-readings exists but Start Fresh does not mention importing readings"
+        : "Start Fresh advertises sensor import but no endpoint accepts a reading"
+    ).toBe(hasSensorIngestion());
+  });
+
+  it("never claims to connect to live sensor sources", () => {
+    // Importing a CSV is not a telematics integration, and the distinction is
+    // the sort a reviewer checks.
     expect(SETUP).not.toMatch(/connect real sensor/i);
     expect(SETUP).not.toMatch(/sensor data sources/i);
   });
 
-  it("says where sensor data actually comes from", () => {
+  it("only promises training on production history once data can get in", () => {
     if (hasSensorIngestion()) return;
-    // Being plain about the simulator is the point, not an apology for it.
-    expect(SETUP).toMatch(/simulator/i);
-  });
-
-  it("does not promise training on production history", () => {
-    if (hasSensorIngestion()) return;
-    // Features are computed from sensor readings, so without ingestion there is
-    // no production history to train on.
     expect(SETUP).not.toMatch(/production history/i);
   });
 });

@@ -8,6 +8,7 @@ import session from "express-session";
 import { createSessionStore, resolveSessionSecret, SESSION_TTL_MS } from "./services/session-store";
 import { applyCors } from "./services/cors";
 import { toPublicUser } from "./services/public-user";
+import { csvToRecords, ingestReadings, MAX_ROWS } from "./services/sensor-ingest";
 import bcrypt from "bcryptjs";
 import { maintenanceEvents, equipment, equipmentRiskScores, rentals, equipmentFailurePredictions, equipmentSwaps } from "@shared/schema";
 import { eq, desc, asc, count, sql, and, like } from "drizzle-orm";
@@ -837,6 +838,74 @@ export async function registerRoutes(
     } catch (error) {
       res.status(500).json({ message: 'Failed to fetch maintenance events' });
     }
+  });
+
+  // ── SENSOR INGESTION ──────────────────────────────────────────────────────
+  // The front door for real fleet data. Accepts a CSV body (text/csv) or
+  // JSON { readings: [...] }. Validation is all-or-nothing and re-uploading
+  // the same file is safe -- see services/sensor-ingest.ts for why both.
+  app.post('/api/sensor-readings', requireAdmin, async (req, res) => {
+    try {
+      const isCsv = typeof req.body === 'string';
+
+      let records: { value: Record<string, unknown>; row: number }[];
+      let parseErrors: { row: number; message: string }[] = [];
+
+      if (isCsv) {
+        ({ records, errors: parseErrors } = csvToRecords(req.body as string));
+      } else {
+        const readings = (req.body as any)?.readings;
+        if (!Array.isArray(readings)) {
+          return res.status(400).json({
+            message: 'Send a CSV body with Content-Type text/csv, or JSON { readings: [...] }',
+          });
+        }
+        // Row numbers are 1-based and count a header, so a JSON array's
+        // first element is "row 2" and matches what a CSV would report.
+        records = readings.map((value: Record<string, unknown>, i: number) => ({
+          value,
+          row: i + 2,
+        }));
+      }
+
+      if (parseErrors.length > 0) {
+        return res.status(400).json({
+          message: 'Could not read the file',
+          inserted: 0,
+          duplicates: 0,
+          errors: parseErrors,
+        });
+      }
+
+      const result = await ingestReadings(records);
+      if (result.errors.length > 0) {
+        return res.status(400).json({
+          message: `Rejected: ${result.errors.length} problem(s) found. Nothing was imported.`,
+          ...result,
+        });
+      }
+
+      res.status(201).json({
+        message:
+          `Imported ${result.inserted} reading(s)` +
+          (result.duplicates > 0 ? `, skipped ${result.duplicates} already stored` : ''),
+        ...result,
+      });
+    } catch (error: any) {
+      console.error('[sensor-ingest]', error);
+      res.status(500).json({ message: error?.message ?? 'Failed to import readings' });
+    }
+  });
+
+  // Columns the uploader accepts, so the UI can show a template rather than
+  // making someone guess the header names.
+  app.get('/api/sensor-readings/template', requireAuth, (_req, res) => {
+    res.type('text/csv').send(
+      'equipment_id,timestamp,engine_rpm,engine_temp,oil_pressure,coolant_temp,' +
+      'fuel_consumption,hydraulic_pressure,hydraulic_temp,hydraulic_flow_rate,' +
+      'vibration_x,vibration_y,vibration_z,operating_hours,load_percentage,' +
+      'idle_time,ambient_temp,error_codes,warning_count\n'
+    );
   });
 
   app.post('/api/maintenance', requireAdmin, async (req, res) => {

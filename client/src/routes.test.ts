@@ -50,7 +50,10 @@ function navigationTargets(): Array<{ target: string; file: string }> {
     for (const pattern of patterns) {
       for (const m of text.matchAll(pattern)) {
         const target = m[1].replace(/\$\{[^}]*\}/g, "X").split("?")[0];
-        if (target.startsWith("/")) {
+        // /api/* is a server endpoint, not a client route. A download link
+        // such as the sensor CSV template legitimately points at one, and the
+        // router is never meant to match it.
+        if (target.startsWith("/") && !target.startsWith("/api/")) {
           found.push({ target, file: file.slice(SRC.length + 1).replace(/\\/g, "/") });
         }
       }
@@ -99,9 +102,10 @@ describe("SPA navigation", () => {
     // which is the 404 that was actually reported.
     const mlDashboard = readFileSync(join(SRC, "pages", "ml-dashboard.tsx"), "utf-8");
     const targets = [...mlDashboard.matchAll(/href:\s*["'`](\/[^"'`]*)["'`]/g)].map(m => m[1]);
+    const spaTargets = targets.filter(t => !t.startsWith("/api/"));
 
-    expect(targets.length).toBeGreaterThan(0);
-    for (const target of targets) {
+    expect(spaTargets.length).toBeGreaterThan(0);
+    for (const target of spaTargets) {
       expect(isServed(target, routes), `${target} has no route`).toBe(true);
     }
   });

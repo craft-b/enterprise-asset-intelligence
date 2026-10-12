@@ -39,6 +39,7 @@ import { Plus, Search, AlertTriangle, Edit, Trash2 } from "lucide-react";
 import { EquipmentForm } from "@/components/equipment-form";
 import { EquipmentDetailView } from "@/components/equipment-detail-view";
 import { cn } from "@/lib/utils";
+import { SensorUpload } from "@/components/sensor-upload";
 
 // Risk Badge Component — receives pre-fetched prediction row, no per-unit fetch
 function RiskBadge({ prediction }: { prediction: any }) {
@@ -131,6 +132,8 @@ export default function EquipmentList() {
         </div>
         
         {isAdmin && (
+          <div className="flex items-center gap-2">
+          <SensorUpload />
           <Dialog open={isNewEquipmentOpen} onOpenChange={setIsNewEquipmentOpen}>
             <DialogTrigger asChild>
               <Button>
@@ -147,6 +150,7 @@ export default function EquipmentList() {
               <EquipmentForm onSuccess={() => setIsNewEquipmentOpen(false)} />
             </DialogContent>
           </Dialog>
+          </div>
         )}
       </div>
 

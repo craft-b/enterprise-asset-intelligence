@@ -309,26 +309,16 @@ export default function SetupPage() {
               </div>
               <CardTitle className="text-base">Start Fresh</CardTitle>
               <CardDescription className="text-xs">
-                Skip demo data and enter your own equipment and maintenance records.
-                Sensor readings come from the built-in simulator — there is no
-                ingestion endpoint yet.
+                Skip demo data and bring your own: add equipment, import sensor
+                readings from a CSV, and train on your fleet's actual history.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
               <ul className="text-xs text-slate-600 space-y-1">
-                {/*
-                  These describe what this path can actually do. It previously
-                  listed "Connect real sensor data sources", which does not
-                  exist: nothing accepts a sensor reading, and the only writes
-                  to sensor_data_logs come from the simulator. For a project
-                  whose argument is that its metrics are stated honestly, a UI
-                  claiming a capability it does not have is the worst possible
-                  place to overstate.
-                */}
                 {[
                   "Add your own equipment inventory",
                   "Log actual maintenance events",
-                  "Generate sensor history with the simulator",
+                  "Import sensor readings from CSV",
                   "Train once ~100 labeled snapshots exist",
                   "No demo fleet in your data",
                 ].map((item) => (
