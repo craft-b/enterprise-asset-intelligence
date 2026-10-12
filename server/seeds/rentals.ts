@@ -1,5 +1,6 @@
 import { db } from "../db";
 import { sql } from "drizzle-orm";
+import { isDuplicateKey } from "./seed-errors";
 
 // Generates a date string N days before the reference date
 function daysAgo(ref: Date, days: number): string {
@@ -58,8 +59,11 @@ export async function seedRentals(
            ${receiveDate}, ${receiveHours}, ${returnDate}, ${returnHours},
            'RENT', ${status}, ${operator}, 'COMPANY_DELIVERY')
       `);
-    } catch {
-      // Skip duplicate or FK violations silently
+    } catch (error) {
+      // A duplicate PO on a re-run is fine. A foreign-key violation is not:
+      // it means sites or vendors are missing, which is how this seeder
+      // silently produced zero rentals while reporting success.
+      if (!isDuplicateKey(error)) throw error;
     }
   }
 }

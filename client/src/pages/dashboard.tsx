@@ -149,14 +149,14 @@ export default function Dashboard() {
             </p>
           </div>
           <div className="flex flex-wrap justify-center gap-3 pt-2">
-            <Link href="/equipment/new">
+            <Link href="/equipment">
               <a className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors">
                 <Truck className="h-4 w-4" />
                 Add Equipment
                 <ChevronRight className="h-4 w-4" />
               </a>
             </Link>
-            <Link href="/ml-dashboard">
+            <Link href="/ml-performance">
               <a className="inline-flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium hover:bg-muted transition-colors">
                 <BarChart3 className="h-4 w-4" />
                 Explore ML Features
