@@ -114,3 +114,34 @@ describe("describeMlFailure", () => {
     await expect(describeMlFailure(broken, "/train")).resolves.toMatch(/502/);
   });
 });
+
+describe("gateway errors are not blamed on the URL", () => {
+  const gateway = (status: number) =>
+    new Response("<html>502 Bad Gateway</html>", {
+      status,
+      statusText: "Bad Gateway",
+      headers: { "content-type": "text/html; charset=utf-8" },
+    });
+
+  it.each([502, 503, 504])("explains that %s means the service did not answer", async code => {
+    // The deployed instance returned 502 from the CORRECT origin while the
+    // container was starting. Telling someone to check ML_SERVICE_URL there
+    // sends them to re-verify a setting that is already right.
+    const message = await describeMlFailure(gateway(code), "/train");
+
+    expect(message).toMatch(/did not respond/);
+    expect(message).toMatch(/waking from idle|out of memory/);
+    expect(message).not.toMatch(/Check ML_SERVICE_URL/);
+  });
+
+  it("still blames the URL for an HTML 404, which is the misconfiguration", async () => {
+    const notFound = new Response("<html>Oh no</html>", {
+      status: 404,
+      statusText: "Not Found",
+      headers: { "content-type": "text/html" },
+    });
+
+    const message = await describeMlFailure(notFound, "/train");
+    expect(message).toMatch(/Check ML_SERVICE_URL/);
+  });
+});

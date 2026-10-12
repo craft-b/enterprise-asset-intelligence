@@ -117,7 +117,15 @@ export async function describeMlFailure(res: Response, path: string): Promise<st
     } else {
       // HTML means something other than the ML service answered.
       detail = `${res.status} ${res.statusText} (${contentType})`;
-      if (contentType.includes("html")) {
+      // A gateway status from the right host means the service did not answer,
+      // not that the address is wrong -- saying "check your URL" there sends
+      // someone to re-verify a setting that is already correct.
+      if (res.status === 502 || res.status === 503 || res.status === 504) {
+        detail +=
+          " — the ML service did not respond. It may be waking from idle," +
+          " or it ran out of memory and restarted. Training in particular" +
+          " needs more memory than a small instance has.";
+      } else if (contentType.includes("html")) {
         detail +=
           " — that is a web page, not the ML service. Check ML_SERVICE_URL" +
           ` points at the service itself; it is currently "${ML_SERVICE_URL}".`;

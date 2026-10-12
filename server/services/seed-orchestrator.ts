@@ -195,9 +195,21 @@ async function runSeedPipeline() {
     setStep(6, "completed", `${labeled} snapshots labeled`);
 
     // ── Step 7: Train model ────────────────────────────────────────────────
+    // Not fatal. Training three 200-tree forests with SHAP loaded needs more
+    // memory than a small instance has, so on free hosting this step fails by
+    // design — and aborting here used to take predictions and the drift
+    // baseline down with it, leaving a seeded fleet with an empty risk queue
+    // and nothing to look at. The service ships a trained champion in its
+    // image, so the steps below work regardless of whether this one does.
     setStep(7, "running", "Contacting ML service...");
-    await trainAndPoll();
-    setStep(7, "completed", "Model trained successfully");
+    try {
+      await trainAndPoll();
+      setStep(7, "completed", "Model trained successfully");
+    } catch (err: any) {
+      const why = err?.message ?? String(err);
+      console.warn("[SEED] training step failed; continuing with the model the ML service already has:", why);
+      setStep(7, "failed", `Skipped — ${why}`.slice(0, 300));
+    }
 
     // ── Step 8: Batch predictions ──────────────────────────────────────────
     setStep(8, "running");
@@ -431,7 +443,42 @@ async function seedFailureEvents(
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Training on the seeded dataset typically takes ~2-4 minutes; allow headroom.
+/**
+ * Wait for the ML service to answer /health.
+ *
+ * A host that suspends an idle container answers the first request with a
+ * gateway error while it starts, so POSTing straight to /train returns 502
+ * and reads like a failure rather than a cold start. /health is exempt from
+ * the service token and touches nothing, so it is the cheapest way to find
+ * out whether anyone is home.
+ */
+async function waitForMlService(timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  let attempt = 0;
+  while (Date.now() < deadline) {
+    attempt++;
+    try {
+      const res = await mlFetch("/health");
+      if (res.ok) return true;
+    } catch {
+      // not up yet
+    }
+    setStep(7, "running", `Waking the ML service… (attempt ${attempt})`);
+    await sleep(5000);
+  }
+  return false;
+}
+
 async function trainAndPoll(timeoutMs = 420_000): Promise<void> {
+  // Give a suspended instance a chance to start before judging it.
+  const awake = await waitForMlService(Number(process.env.ML_HEALTH_TIMEOUT_MS ?? 90_000));
+  if (!awake) {
+    throw new Error(
+      "ML service did not come up in time. On free hosting it suspends when " +
+      "idle; open its /health URL once and retry."
+    );
+  }
+
   const trainRes = await mlFetch("/train", { method: "POST" }, { actorId: "seed" });
   if (!trainRes.ok) {
     // Not the raw body: a misdirected request returns an HTML page, and
