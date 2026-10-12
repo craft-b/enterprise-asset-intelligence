@@ -28,6 +28,7 @@ import {
   Cell,
 } from "recharts";
 import { Button } from "@/components/ui/button";
+import { useSystemStatus } from "@/hooks/use-system-status";
 import { useAuth } from "@/hooks/use-auth";
 import {
   Activity,
@@ -634,6 +635,9 @@ function ChampionChallengerCard() {
 
 export default function MLPerformanceDashboard() {
   const { data: modelMetrics, isLoading, error } = useModelMetrics();
+  // The setup checklist below reports real progress, so it needs the same
+  // counts the rest of the app uses rather than hardcoded flags.
+  const { data: systemStatus } = useSystemStatus();
 
   if (isLoading) {
     return (
@@ -649,30 +653,52 @@ export default function MLPerformanceDashboard() {
   // Honest empty state: API says no trained model exists (available:false) —
   // show the setup path instead of fabricated numbers (ML-9).
   if (error || !modelMetrics || !modelMetrics.available) {
+    // Each step reports whether it is actually satisfied. These were
+    // hardcoded -- step one always complete, the rest never -- so following
+    // a step's link did the work but the checklist never acknowledged it,
+    // leaving no way to tell what still needed doing.
+    const equipmentCount = systemStatus?.equipmentCount ?? 0;
+    const snapshotCount  = systemStatus?.snapshotCount ?? 0;
+    const modelTrained   = systemStatus?.modelTrained ?? false;
+
+    // Matches the trainer's own floor: fewer labeled rows than this and
+    // training is refused, so the step is not yet satisfiable.
+    const MIN_SNAPSHOTS_TO_TRAIN = 100;
+
     const steps = [
       {
-        done: true,
+        done: !!systemStatus,
         label: "System initialized",
-        detail: "Database ready and schema applied",
+        detail: systemStatus
+          ? "Database ready and schema applied"
+          : "Waiting for the API",
       },
       {
-        done: false,
+        done: equipmentCount > 0,
         label: "Add equipment",
-        detail: "At least one asset is required to generate sensor data",
+        detail: equipmentCount > 0
+          ? `${equipmentCount} asset${equipmentCount === 1 ? "" : "s"} registered`
+          : "At least one asset is required to generate sensor data",
         href: "/equipment",
         action: "Add Equipment",
       },
       {
-        done: false,
+        done: snapshotCount > 0,
         label: "Run demo seed (or accumulate live data)",
-        detail: "Load Demo Data on the Setup page to populate historical snapshots and failure events",
+        detail: snapshotCount > 0
+          ? `${snapshotCount} feature snapshot${snapshotCount === 1 ? "" : "s"} recorded`
+          : "Load Demo Data on the Setup page to populate historical snapshots and failure events",
         href: "/setup",
         action: "Go to Setup",
       },
       {
-        done: false,
+        done: modelTrained,
         label: "Train the model",
-        detail: "Once ≥100 labeled snapshots exist, trigger training from the Predictive Maintenance page",
+        detail: modelTrained
+          ? "A trained model is registered"
+          : snapshotCount >= MIN_SNAPSHOTS_TO_TRAIN
+            ? `${snapshotCount} snapshots available — training can run now`
+            : `${snapshotCount} of ${MIN_SNAPSHOTS_TO_TRAIN} labeled snapshots needed before training`,
         href: "/predictive-maintenance",
         action: "Predictive Maintenance",
       },
