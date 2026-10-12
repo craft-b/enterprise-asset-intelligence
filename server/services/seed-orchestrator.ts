@@ -24,7 +24,7 @@ import { seedRentals } from "../seeds/rentals";
 import { seedMaintenanceConfig } from "../seeds/maintenance-config";
 import { featureEngineeringService } from "./feature-engineering";
 import { predictiveMaintenanceService } from "./predictive-maintenance-fixed";
-import { mlFetch } from "./ml-client";
+import { mlFetch, describeMlFailure } from "./ml-client";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SEED CURSOR DATE — the "today" date used for all seeded data
@@ -434,8 +434,9 @@ async function seedFailureEvents(
 async function trainAndPoll(timeoutMs = 420_000): Promise<void> {
   const trainRes = await mlFetch("/train", { method: "POST" }, { actorId: "seed" });
   if (!trainRes.ok) {
-    const body = await trainRes.text();
-    throw new Error(`ML service train failed: ${body}`);
+    // Not the raw body: a misdirected request returns an HTML page, and
+    // interpolating it put an entire web page into the seeding dialog.
+    throw new Error(`ML service train failed — ${await describeMlFailure(trainRes, "/train")}`);
   }
 
   // /train/status returns { running: boolean, log: string[], last_result: { success, ... } | null }

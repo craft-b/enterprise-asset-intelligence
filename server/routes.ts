@@ -9,6 +9,7 @@ import { createSessionStore, resolveSessionSecret, SESSION_TTL_MS } from "./serv
 import { applyCors } from "./services/cors";
 import { toPublicUser } from "./services/public-user";
 import { csvToRecords, ingestReadings, MAX_ROWS } from "./services/sensor-ingest";
+import { validateMlServiceUrl } from "./services/ml-client";
 import bcrypt from "bcryptjs";
 import { maintenanceEvents, equipment, equipmentRiskScores, rentals, equipmentFailurePredictions, equipmentSwaps } from "@shared/schema";
 import { eq, desc, asc, count, sql, and, like } from "drizzle-orm";
@@ -41,6 +42,12 @@ export async function registerRoutes(
   // Before the session and the routes: a preflight must be answered without
   // touching the session, and a blocked origin should never reach a handler.
   applyCors(app);
+
+  // Fail here rather than at the first call to the ML service. A wrong value
+  // is silent until something uses it, and then surfaces as whatever that
+  // other URL happens to return -- a seed run once reported an entire GitHub
+  // error page as its failure message.
+  validateMlServiceUrl(process.env.ML_SERVICE_URL);
 
   // SEC-3: sessions are persisted in MySQL rather than express-session's
   // in-process MemoryStore, which leaks and loses every session on restart.
