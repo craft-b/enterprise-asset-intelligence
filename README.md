@@ -1,6 +1,13 @@
 # Enterprise Asset Intelligence
 
-**Live demo:** not yet deployed — a Render blueprint is ready, see [Deployment Status](#deployment-status). Runs locally in a few minutes via [Quickstart](#quickstart).
+**[Live demo](https://enterprise-asset-intelligence.vercel.app)** — sign in with `admin` / `admin123`.
+
+> The page loads instantly, but the API behind it runs on a free tier that suspends an idle
+> container. If nobody has visited recently the first request waits ~45 seconds while it wakes;
+> the app shows that as a progress screen rather than a blank window, and everything is immediate
+> afterwards. The ML service sleeps separately, so the first prediction can wait once more.
+> Prefer to skip the wait entirely? [Quickstart](#quickstart) runs the whole stack locally in a
+> couple of minutes.
 
 Predictive maintenance platform for heavy construction equipment rental fleets — encoding the same failure-prediction and risk-scoring logic used in industrial and manufacturing equipment reliability programs. Asset degradation curves, hazard functions, and maintenance-interval optimization transfer directly from a production line's rotating equipment to a rental fleet's excavators and skid steers, which is the direct link to 26 years of CPG/manufacturing process engineering behind this project. It's a full-stack system that simulates fleet operations, engineers features from operational data, trains calibrated Random Forest models, and serves multi-horizon failure probability predictions across 10, 30, and 60-day windows — with cost-optimized intervention recommendations and a rental dispatch risk guard.
 
@@ -454,18 +461,42 @@ On first login, the app automatically redirects to `/setup`. Choose one of two p
 
 ## Deployment Status
 
-There is no hosted instance yet, but the path to one is committed rather than aspirational, and it costs nothing to run: [`render.yaml`](render.yaml) and [`vercel.json`](vercel.json) define it, and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) walks through it end to end. What remains is account work — creating the database and pasting four values — not code.
+Deployed across three free tiers, with no monthly bill:
 
-The SPA is served as a static build (always instant, no instance to suspend) and calls the API cross-origin. That split is what makes a free tier presentable: container hosting suspends an idle instance and takes ~45s to wake, which as a single-origin app would be a blank window. Here the page renders immediately and [an explained gate](client/src/components/api-gate.tsx) holds the app back until the API answers, so the wait is a stated, bounded one instead of an apparent outage.
+| Piece | Host | Notes |
+|---|---|---|
+| React SPA | Vercel | Static, so always instant — nothing to suspend |
+| Node API + SPA proxy | Render | Suspends when idle, ~45s to wake |
+| FastAPI ML service | Render | Suspends independently |
+| MySQL | TiDB Cloud Serverless | Always on; Render offers Postgres only |
+
+[`render.yaml`](render.yaml), [`vercel.json`](vercel.json) and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) reproduce it end to end.
+
+Splitting the SPA onto static hosting is what makes a free tier presentable. Served from the API
+container, a cold start would be a blank browser window for 45 seconds — indistinguishable from a
+broken site. Static hosting has nothing to suspend, so the page paints immediately and
+[an explained gate](client/src/components/api-gate.tsx) holds the app back until the API answers.
+The wait becomes a stated, bounded one instead of an apparent outage.
+
+Vercel proxies `/api/*` through to Render rather than the browser calling it cross-origin. That
+is a cookie decision: this app authenticates with a session cookie, and a cookie set by
+`onrender.com` on a page served from `vercel.app` is a third-party cookie, which Safari blocks by
+default. Proxying keeps it first-party, and removes CORS from the picture entirely.
 
 Four things that deployment needed, and now has:
 
 - **Migrations run on start.** The Node image ships `migrations/` and applies them before the server listens, so a clean database gets the full schema (including `sessions`) on first deploy. A migration failure exits non-zero instead of running against a mismatched schema.
 - **One DSN for both services.** The Python side prefers `DATABASE_URL` over the `DB_*` vars and rewrites `mysql2`'s TLS parameter into `pymysql`'s spelling ([`ml-service/engine/db_url.py`](ml-service/engine/db_url.py)), so a managed host that mandates TLS works without per-service config drift.
-- **Model artifacts without a disk.** Pickles aren't in git, and free hosting tiers have no persistent storage, so the ML entrypoint fetches the champion bundle at start from a checksum-pinned URL.
-- **A cross-origin frontend, without touching 80 call sites.** A single wrapper around `fetch` ([`api-base.ts`](client/src/lib/api-base.ts)) rewrites relative `/api` paths to the configured API origin, so no component changed and a new one cannot forget. The server answers only origins named in `ALLOWED_ORIGINS` ([`cors.ts`](server/services/cors.ts)), and refuses a wildcard at boot — with credentials, browsers reject it anyway.
+- **Model artifacts without a disk.** Pickles aren't in git (~280MB of them were removed), and free tiers have no persistent storage, so the champion bundle is fetched from a checksum-pinned release asset and baked into the image at build time — a cold start then has a model with no download on the critical path. The startup fetch remains as a fallback, and if neither succeeds the service starts anyway reporting `model_loaded=false` rather than crash-looping. The archive holds pickles, which execute code when loaded, so the digest is pinned and extraction refuses path-traversing members.
+- **A separately hosted frontend, without touching 80 call sites.** Those call sites use relative `/api` paths, which resolve against the static host once the SPA moves. Under the proxy they stay relative and Vercel forwards them; set `VITE_API_URL` instead and a single wrapper around `fetch` ([`api-base.ts`](client/src/lib/api-base.ts)) rewrites them to the API origin at runtime. Either way no component changed and a new one cannot forget. The direct path is served by [`cors.ts`](server/services/cors.ts), which answers only origins named in `ALLOWED_ORIGINS` and refuses a wildcard at boot — with credentials, browsers reject it anyway.
 
-Honest about the free tier: the API and ML service suspend after ~15 minutes idle and take 30–60s to wake, and 512MB serves the champion (measured ~340MB) but will not train one. The caveats and the ~$33/mo configuration that removes them are in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Docker Compose (`docker-compose.yml`) remains the way to run all three services locally, and [Quickstart](#quickstart) seeds a full fleet with a trained model in under two minutes.
+Honest about the free tier: both Render services suspend after ~15 minutes idle and take 30–60s to
+wake, and 512MB serves the champion model (measured ~340MB resident) but will not train one — so
+the deployed instance loads artifacts baked into its image rather than training on demand. The
+~$33/mo configuration that removes the cold starts is documented in
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Docker Compose (`docker-compose.yml`) runs all three
+services locally, and [Quickstart](#quickstart) seeds a full fleet with a trained model in under
+two minutes.
 
 ---
 
