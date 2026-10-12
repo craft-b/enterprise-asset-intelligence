@@ -28,16 +28,25 @@ export default function SetupPage() {
   const [mode, setMode] = useState<"choose" | "active" | "seeding" | "done">("choose");
   const [confirmReset, setConfirmReset] = useState(false);
 
+  // Set once the admin resets, so the effect below cannot bounce them back to
+  // the "active" view on the stale status that is still cached while the
+  // invalidated query refetches.
+  const [didReset, setDidReset] = useState(false);
+
   const { data: systemStatus } = useSystemStatus();
 
   const { data: seedJob } = useSeedStatus(seedingStarted && mode === "seeding");
 
-  // Show "active" state when system is already seeded and user navigates here directly
+  // Show the "active" summary when someone navigates here directly and the
+  // system already has data. Skipped after a reset: the status query serves
+  // its cached seeded:true until the refetch lands, which would otherwise
+  // throw the admin straight back out of the setup choices they just asked
+  // for -- showing 0 units, with no way back without a reload.
   useEffect(() => {
-    if (systemStatus?.seeded && mode === "choose") {
+    if (systemStatus?.seeded && mode === "choose" && !didReset) {
       setMode("active");
     }
-  }, [systemStatus, mode]);
+  }, [systemStatus, mode, didReset]);
 
   // Detect completion/failure
   useEffect(() => {
@@ -78,6 +87,7 @@ export default function SetupPage() {
     },
     onSuccess: () => {
       setConfirmReset(false);
+      setDidReset(true);
       queryClient.invalidateQueries({ queryKey: ["/api/admin/system-status"] });
       setMode("choose");
     },
