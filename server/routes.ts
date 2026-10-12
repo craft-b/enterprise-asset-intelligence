@@ -7,6 +7,7 @@ import { api } from "@shared/routes";
 import session from "express-session";
 import { createSessionStore, resolveSessionSecret, SESSION_TTL_MS } from "./services/session-store";
 import { applyCors } from "./services/cors";
+import { toPublicUser } from "./services/public-user";
 import bcrypt from "bcryptjs";
 import { maintenanceEvents, equipment, equipmentRiskScores, rentals, equipmentFailurePredictions, equipmentSwaps } from "@shared/schema";
 import { eq, desc, asc, count, sql, and, like } from "drizzle-orm";
@@ -418,7 +419,7 @@ export async function registerRoutes(
     }
     req.session.userId = user.id;
     req.session.role = user.role;
-    res.json(user);
+    res.json(toPublicUser(user));
   });
 
   app.post(api.auth.logout.path, (req, res) => {
@@ -427,7 +428,7 @@ export async function registerRoutes(
 
   app.get(api.auth.me.path, async (req, res) => {
     if (!req.session.userId) return res.status(401).json({ message: "Not logged in" });
-    res.json(await storage.getUser(req.session.userId));
+    res.json(toPublicUser(await storage.getUser(req.session.userId)));
   });
 
   app.post(api.auth.register.path, async (req, res) => {
@@ -441,7 +442,7 @@ export async function registerRoutes(
     });
     req.session.userId = user.id;
     req.session.role = user.role;
-    res.status(201).json(user);
+    res.status(201).json(toPublicUser(user));
   });
 
   // ── EQUIPMENT ─────────────────────────────────────────────────────────────
@@ -2066,16 +2067,27 @@ export async function registerRoutes(
           me.next_due_date AS nextDueDate,
           DATEDIFF(me.next_due_date, ${cursorDate}) AS daysUntilDue
         FROM equipment e
-        JOIN maintenance_events me ON me.id = (
-          SELECT id FROM maintenance_events m2
-          WHERE m2.equipment_id = e.id AND m2.next_due_date IS NOT NULL
-          ORDER BY m2.id DESC LIMIT 1
-        )
+        -- The latest dated event per unit, as a derived table rather than a
+        -- subquery in the ON clause. TiDB rejects the latter outright:
+        --   ER_UNKNOWN_ERROR: ON condition doesn't support subqueries yet
+        -- MySQL accepts it, so this only failed once deployed.
+        JOIN (
+          SELECT m.equipment_id, m.next_due_date
+          FROM maintenance_events m
+          JOIN (
+            SELECT equipment_id, MAX(id) AS id
+            FROM maintenance_events
+            WHERE next_due_date IS NOT NULL
+            GROUP BY equipment_id
+          ) latest ON latest.id = m.id
+        ) me ON me.equipment_id = e.id
         WHERE me.next_due_date <= DATE_ADD(${cursorDate}, INTERVAL 30 DAY)
         ORDER BY me.next_due_date ASC
       `);
       res.json((rows as unknown as any[]) || []);
     } catch (error) {
+      // Logged because this returned 500 for days with no indication why.
+      console.error('[due-soon]', error);
       res.status(500).json({ message: 'Failed to fetch due-soon maintenance' });
     }
   });
