@@ -12,6 +12,10 @@ dist
 server/public
 vite.config.ts.*
 *.tar.gz
+# ...except the champion bundle, which is deliberately committed so the
+# image build needs no network. GitHub's CDN serves 502s to Render's
+# addresses, and a demo whose model depends on that is a demo that breaks.
+!ml-service/models/*.tar.gz
 .env
 
 # OPS-2: model pickles are produced by training — not tracked (were ~280MB)

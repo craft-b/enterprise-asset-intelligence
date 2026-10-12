@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 import sys
 import tarfile
 import tempfile
@@ -111,14 +112,15 @@ def safe_extract(archive: str, target: str) -> int:
 
 
 def main() -> int:
+    local = (os.environ.get("MODEL_BUNDLE_FILE") or "").strip()
     url = (os.environ.get("MODEL_BUNDLE_URL") or "").strip()
     expected = (os.environ.get("MODEL_BUNDLE_SHA256") or "").strip().lower()
     registry = os.environ.get("REGISTRY_DIR") or "/app/ml-service/registry"
     timeout = float(os.environ.get("MODEL_FETCH_TIMEOUT") or 30)
     attempts = int(os.environ.get("MODEL_FETCH_RETRIES") or 3)
 
-    if not url:
-        log("MODEL_BUNDLE_URL is unset - nothing to fetch")
+    if not local and not url:
+        log("neither MODEL_BUNDLE_FILE nor MODEL_BUNDLE_URL is set - nothing to do")
         return 1
 
     os.makedirs(registry, exist_ok=True)
@@ -126,7 +128,18 @@ def main() -> int:
     os.close(handle)
 
     try:
-        if not download(url, archive, timeout, attempts):
+        # A committed bundle beats the network every time: it cannot 502, cannot
+        # be slow, and cannot be swapped underneath us.
+        if local and os.path.isfile(local):
+            log(f"using local bundle {local} ({os.path.getsize(local)} bytes)")
+            shutil.copyfile(local, archive)
+        elif local:
+            log(f"MODEL_BUNDLE_FILE not found at {local}")
+            if not url:
+                return 1
+            if not download(url, archive, timeout, attempts):
+                return 1
+        elif not download(url, archive, timeout, attempts):
             return 1
 
         if expected:

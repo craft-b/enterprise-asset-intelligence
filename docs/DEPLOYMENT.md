@@ -132,34 +132,31 @@ over the `DB_*` vars and rewrites the TLS parameter into pymysql's spelling.
 
 ## 2. Model bundle
 
-Registry pickles are not in git (OPS-2), and free tier has no disk, so the ML
-service fetches them at start.
+Nothing to do — the champion bundle is committed at
+`ml-service/models/eai-models-v1.17.tar.gz` (16MB) and extracted into the image
+at build time.
 
-- **File:** `eai-models-v1.17.tar.gz` (16 MB compressed, 50 MB extracted)
-- **SHA256:** `2ac9c74f87ce7610229fdb9c31fbd9fef1a9c5439d0337d8615fc09cc3900ed4`
+It used to be fetched from a GitHub release to keep artifacts out of git
+(OPS-2). That failed in practice: GitHub's CDN answers requests from Render's
+addresses with `502 Bad Gateway`, both from the running container and from the
+build, while the same URL fetches in under two seconds from a laptop. Retrying
+does not help an address-based refusal, so the bundle moved into the repo. One
+current champion ships; superseded versions stay out.
 
-Upload it as a **GitHub release asset** (Releases → Draft a new release → tag
-`models-v1.17` → attach → publish) and copy the download URL. It must be
-`https://`; the entrypoint refuses anything else.
-
-> The archive holds pickles, and unpickling executes code. `render.yaml` pins
-> `MODEL_BUNDLE_SHA256` so a swapped asset cannot turn a restart into code
-> execution. Update the digest if you rebuild the bundle.
-
-Rebuilding it:
+To publish a new champion:
 
 ```bash
 cd ml-service/registry
-tar -czf ../../eai-models-v1.17.tar.gz \
-  rf_10d_v1.17.pkl rf_30d_v1.17.pkl rf_60d_v1.17.pkl \
-  label_encoder_category_v1.17.pkl clip_thresholds_v1.17.json \
-  feature_cols_v1.17.json \
-  feature_importance_10d_v1.17.json feature_importance_30d_v1.17.json \
-  feature_importance_60d_v1.17.json \
-  metadata_10d_v1.17.json metadata_30d_v1.17.json metadata_60d_v1.17.json \
-  drift_reference_v1.17.json drift_reference.json
-sha256sum ../../eai-models-v1.17.tar.gz
+tar -czf ../models/eai-models-v1.18.tar.gz   rf_10d_v1.18.pkl rf_30d_v1.18.pkl rf_60d_v1.18.pkl   label_encoder_category_v1.18.pkl clip_thresholds_v1.18.json   feature_cols_v1.18.json   feature_importance_10d_v1.18.json feature_importance_30d_v1.18.json   feature_importance_60d_v1.18.json   metadata_10d_v1.18.json metadata_30d_v1.18.json metadata_60d_v1.18.json   drift_reference_v1.18.json drift_reference.json
+sha256sum ../models/eai-models-v1.18.tar.gz
 ```
+
+Then update `MODEL_BUNDLE_SHA256` in `ml-service/Dockerfile`, delete the old
+tarball, and commit. The digest is checked before extraction: the archive holds
+pickles, and unpickling executes code, so a swapped file must not load.
+
+Hosting it externally instead still works — set `MODEL_BUNDLE_URL` as a build
+arg or service env var, and it is used whenever the committed file is absent.
 
 ## 3. Backend (Render blueprint)
 

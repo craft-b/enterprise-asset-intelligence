@@ -18,17 +18,17 @@
 #     ML_TIMEOUT_MS below are raised accordingly; with the code defaults
 #     (3s / 10s) every such request would fail.
 #   * Free tier has no persistent disk, so the model registry starts empty on
-#     every wake. MODEL_BUNDLE_URL makes the ML entrypoint fetch the champion
-#     artifacts at start. Without it the service comes up with no predictor,
-#     and training one in 512MB is not realistic.
+#     every wake. The champion bundle is committed and baked into the image at
+#     build time, so this costs nothing at runtime. Training in 512MB is not
+#     realistic, so the image shipping a model is what makes predictions work.
 #   * Free instance hours are pooled across all free services in the account,
 #     so keeping both of these warm with an external pinger would exhaust the
 #     monthly allowance. Let them sleep.
 #
 # Upgrading to paid: set `plan: starter` on eai-api, `plan: standard` on eai-ml
 # (512MB is tight for sklearn + SHAP; measured steady state is ~340MB), and add
-# a disk to eai-ml mounted at /app/ml-service/registry so artifacts persist and
-# MODEL_BUNDLE_URL becomes unnecessary.
+# a disk to eai-ml mounted at /app/ml-service/registry so trained artifacts
+# persist across deploys rather than coming from the image each time.
 
 envVarGroups:
   # ML_SERVICE_TOKEN must be IDENTICAL on both services: Node sends it as
@@ -143,10 +143,13 @@ services:
       - key: DATABASE_URL
         sync: false
 
-      # HTTPS URL of a .tar.gz of the champion registry files, fetched at start
-      # because free tier has no disk. A GitHub release asset works.
+      # Optional. The champion bundle is committed and baked into the image, so
+      # this is only needed to override it with an externally hosted archive.
+      # Left empty: a GitHub release asset was the original design and GitHub
+      # serves 502s to Render's addresses, which is why the bundle moved into
+      # the repo.
       - key: MODEL_BUNDLE_URL
-        sync: false
+        value: ""
       # Pinned digest of that archive. The archive contains pickles, and
       # unpickling executes code, so a swapped asset would otherwise turn a
       # restart into arbitrary code execution. Update when the bundle changes.
