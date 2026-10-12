@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
+import { dismissSetupGate } from "@/lib/setup-gate";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -320,7 +321,7 @@ export default function SetupPage() {
               <Button
                 variant="outline"
                 className="w-full"
-                onClick={() => setLocation("/")}
+                onClick={() => { dismissSetupGate(); setLocation("/"); }}
               >
                 Go to Dashboard
                 <ChevronRight className="ml-2 h-4 w-4" />
@@ -336,7 +337,7 @@ export default function SetupPage() {
               Already have data?{" "}
               <button
                 className="underline text-slate-500 hover:text-slate-700"
-                onClick={() => setLocation("/")}
+                onClick={() => { dismissSetupGate(); setLocation("/"); }}
               >
                 Go to Dashboard
               </button>

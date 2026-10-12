@@ -7,6 +7,7 @@ import { LayoutShell } from "@/components/layout-shell";
 import { Loader2 } from "lucide-react";
 import { useSystemStatus } from "@/hooks/use-system-status";
 import { ApiGate } from "@/components/api-gate";
+import { isSetupGateDismissed, resetSetupGate } from "@/lib/setup-gate";
 
 import Login from "@/pages/login";
 import CommandCenter from "@/pages/command-center";
@@ -41,10 +42,17 @@ function ProtectedRoute({ component: Component }: { component: React.ComponentTy
     return <Redirect to="/login" />;
   }
 
-  // Redirect to setup when the system has no data yet
-  if (systemStatus && !systemStatus.seeded) {
+  // Send first-time visitors to setup, unless they chose Start Fresh there.
+  // Without that exemption the choice is unreachable: it means "I will add my
+  // own equipment", and seeded is equipmentCount > 0, so the guard bounces
+  // them back to the page they just left.
+  if (systemStatus && !systemStatus.seeded && !isSetupGateDismissed()) {
     return <Redirect to="/setup" />;
   }
+
+  // Once data exists the choice has served its purpose. Clearing it means a
+  // later reset shows setup again rather than skipping it forever.
+  if (systemStatus?.seeded) resetSetupGate();
 
   return (
     <LayoutShell>
