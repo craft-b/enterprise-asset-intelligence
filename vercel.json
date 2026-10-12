@@ -7,7 +7,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://eai-api.onrender.com/api/:path*"
+      "destination": "https://eai-api-q3u3.onrender.com/api/:path*"
     },
     {
       "source": "/((?!assets/).*)",

@@ -198,6 +198,14 @@ path in step 4.
    { "source": "/api/:path*", "destination": "https://YOUR-API.onrender.com/api/:path*" }
    ```
 
+   Render suffixes the hostname when the plain name is taken, so take the
+   exact URL from the top of the service page rather than assuming
+   `eai-api.onrender.com`. A wrong host here returns 404 from every API call
+   while the service itself is perfectly healthy.
+
+   ```json
+   ```
+
 2. Vercel → **Add New** → **Project** → import this repo.
 
 3. Leave the defaults. `vercel.json` already sets the build
