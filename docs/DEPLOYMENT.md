@@ -270,7 +270,13 @@ names the cause:
 
 ## 6. Seed the demo data
 
-Open the Vercel URL, register the first account, and use **Load Demo Data**.
+Open the Vercel URL and sign in with the credentials the login page shows
+(`admin` / `admin123`). They exist because `render.yaml` sets
+`SEED_DEMO_USERS=true`, which creates them at boot if absent — without it
+the page advertises an account nobody created, and a visitor who types
+what they were told is rejected.
+
+Then use **Load Demo Data** on the onboarding screen.
 
 **Expect the training step to fail.** Step 7 of the seed pipeline calls the ML
 service's `/train`, which will not complete in 512 MB. You do not need it — the

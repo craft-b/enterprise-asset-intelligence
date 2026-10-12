@@ -446,6 +446,7 @@ On first login, the app automatically redirects to `/setup`. Choose one of two p
 | `SLACK_WEBHOOK_URL` | — | Incoming webhook URL for `monitor.py` alerts. If unset, Slack notifications are silently skipped. |
 | `ENABLE_API_DOCS` | — | Serves `/docs`, `/redoc` and `/openapi.json` on the ML service. Off unless truthy; these paths bypass the service-token check, so leave it off anywhere reachable. |
 | `ALLOWED_ORIGINS` | — | Comma-separated browser origins allowed to call the API with cookies. Only needed when the SPA is hosted separately. A wildcard is refused at boot. |
+| `SEED_DEMO_USERS` | — | Creates the `admin`/`viewer` accounts the login page advertises. Off unless truthy. These are published passwords on an account that can modify data, so enable it only on a demo holding synthetic data. Idempotent — existing accounts are never overwritten. |
 | `VITE_API_URL` | — | Client-side, baked in at build time. API origin when the SPA is hosted separately; unset means same-origin. |
 | `PYTHONIOENCODING` | — | Set to `utf-8` on Windows to avoid codec errors |
 

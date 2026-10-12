@@ -106,6 +106,16 @@ services:
       - key: MODEL_VERSION
         value: v1
 
+      # Creates the admin/viewer accounts the login page advertises. On a
+      # public demo those credentials have to work: a sign-in screen naming
+      # credentials that do not exist loses the visitor, and asking them to
+      # register first loses most of the rest. Enabled HERE rather than by
+      # default because these are published passwords on an account that can
+      # modify equipment and reseed the database -- correct for synthetic
+      # demo data, wrong anywhere real.
+      - key: SEED_DEMO_USERS
+        value: "true"
+
   # ── FastAPI ML service ────────────────────────────────────────────────────
   - type: web
     name: eai-ml
