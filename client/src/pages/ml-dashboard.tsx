@@ -659,7 +659,7 @@ export default function MLPerformanceDashboard() {
         done: false,
         label: "Add equipment",
         detail: "At least one asset is required to generate sensor data",
-        href: "/equipment/new",
+        href: "/equipment",
         action: "Add Equipment",
       },
       {

@@ -39,7 +39,12 @@ function navigationTargets(): Array<{ target: string; file: string }> {
     if (/\.test\.tsx?$/.test(file)) continue;
     const text = readFileSync(file, "utf-8");
     const patterns = [
+      // JSX attribute:  <Link href="/equipment">
       /href="(\/[^"]*)"/g,
+      // Object property: { label: "Add equipment", href: "/equipment" }
+      // This form is how /equipment/new survived the first sweep -- the setup
+      // steps on the ML dashboard are data, not markup.
+      /href:\s*["'`](\/[^"'`]*)["'`]/g,
       /setLocation\(\s*[`'"]([^`'"]+)/g,
     ];
     for (const pattern of patterns) {
@@ -87,6 +92,18 @@ describe("SPA navigation", () => {
 
     const detail = dead.map(d => `${d.target}  (${d.file})`).join("\n  ");
     expect(dead, dead.length ? `dead navigation targets:\n  ${detail}` : "").toEqual([]);
+  });
+
+  it("the ML dashboard setup steps all resolve", () => {
+    // Every step offers a button; "Add equipment" pointed at /equipment/new,
+    // which is the 404 that was actually reported.
+    const mlDashboard = readFileSync(join(SRC, "pages", "ml-dashboard.tsx"), "utf-8");
+    const targets = [...mlDashboard.matchAll(/href:\s*["'`](\/[^"'`]*)["'`]/g)].map(m => m[1]);
+
+    expect(targets.length).toBeGreaterThan(0);
+    for (const target of targets) {
+      expect(isServed(target, routes), `${target} has no route`).toBe(true);
+    }
   });
 
   it("the dashboard empty state does not send a new visitor to NotFound", () => {
