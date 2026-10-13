@@ -692,9 +692,11 @@ export default function MLPerformanceDashboard() {
     const snapshotCount  = systemStatus?.snapshotCount ?? 0;
     const modelTrained   = systemStatus?.modelTrained ?? false;
 
-    // Matches the trainer's own floor: fewer labeled rows than this and
-    // training is refused, so the step is not yet satisfiable.
-    const MIN_SNAPSHOTS_TO_TRAIN = 100;
+    // The ML service's own gate: engine/data_quality.py FAILs below 500
+    // labeled rows. This said 100, which matched nothing -- not the 40 a demo
+    // seed produces, and not the floor the service actually enforces, so the
+    // checklist implied training was close to possible when it was not.
+    const MIN_SNAPSHOTS_TO_TRAIN = 500;
 
     const steps = [
       {
@@ -724,12 +726,13 @@ export default function MLPerformanceDashboard() {
       },
       {
         done: modelTrained,
-        label: "Train the model",
+        label: "Register or train a model",
         detail: modelTrained
-          ? "A trained model is registered"
+          ? "A model is registered"
           : snapshotCount >= MIN_SNAPSHOTS_TO_TRAIN
             ? `${snapshotCount} snapshots available — training can run now`
-            : `${snapshotCount} of ${MIN_SNAPSHOTS_TO_TRAIN} labeled snapshots needed before training`,
+            : `${snapshotCount} of ${MIN_SNAPSHOTS_TO_TRAIN} labeled snapshots needed to train a new model. ` +
+              `The service ships an evaluated model; it registers itself on restart or when a seed runs.`,
         href: "/predictive-maintenance",
         action: "Predictive Maintenance",
       },
@@ -743,10 +746,18 @@ export default function MLPerformanceDashboard() {
               <Brain className="h-10 w-10 text-primary" />
             </div>
           </div>
-          <h2 className="text-2xl font-bold">ML Dashboard isn't ready yet</h2>
+          {/* Named for the sidebar entry that leads here. Calling itself the
+              "ML Dashboard" sent someone looking for a page by that name. */}
+          <h2 className="text-2xl font-bold">Model Performance isn't ready yet</h2>
           <p className="text-muted-foreground">
-            Complete the steps below to train your first predictive maintenance model.
+            No model is registered yet, so there are no metrics to show.
           </p>
+          {/* Reachable from the empty state, which is the state it exists to
+              get you out of. It was previously in the header below, which
+              renders only once metrics are available. */}
+          <div className="flex justify-center pt-1">
+            <ScoreFleetButton />
+          </div>
         </div>
 
         <div className="space-y-3">
