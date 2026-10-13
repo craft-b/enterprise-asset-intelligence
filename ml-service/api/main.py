@@ -339,6 +339,30 @@ async def feature_importance():
     }
 
 
+@app.get("/models/multi-horizon/metrics", tags=["Model"])
+async def multi_horizon_model_metrics():
+    """
+    The loaded models' own evaluation metadata, per horizon, verbatim.
+
+    Exists so the champion shipped in this image can be registered in the
+    Node-side model_metrics table without a training run. The dashboard reads
+    that table, and training is refused below 500 labeled rows, so a demo
+    seed could never populate it -- the ML dashboard showed a setup checklist
+    while a fully evaluated model sat loaded in memory.
+
+    Returned as-is, including trained_at, data_source, metrics_framing and the
+    label definition: these are the champion's own holdout numbers from the
+    run that produced it, not a measurement of anything in the caller's
+    database, and the fields that say so travel with them.
+    """
+    if not mh_predictor:
+        raise HTTPException(status_code=503, detail="Multi-horizon model not loaded")
+    return {
+        "versions": mh_predictor.versions,
+        "metrics": {str(h): mh_predictor.metadata.get(h, {}) for h in [10, 30, 60]},
+    }
+
+
 @app.get("/models/multi-horizon/info", tags=["Model"])
 async def multi_horizon_model_info():
     """Returns loaded model versions and performance metrics per horizon."""

@@ -25,6 +25,7 @@ import { seedMaintenanceConfig } from "../seeds/maintenance-config";
 import { featureEngineeringService } from "./feature-engineering";
 import { predictiveMaintenanceService } from "./predictive-maintenance-fixed";
 import { mlFetch, describeMlFailure } from "./ml-client";
+import { registerChampionMetrics } from "./champion-metrics";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SEED CURSOR DATE — the "today" date used for all seeded data
@@ -225,10 +226,28 @@ async function runSeedPipeline() {
     } catch (err: any) {
       const why = err?.message ?? String(err);
       console.warn("[SEED] training step failed; continuing with the model the ML service already has:", why);
-      setStep(7, "failed", `Skipped — ${why}`.slice(0, 300));
+
+      // Register the shipped champion's own evaluation instead. Without this
+      // the ML dashboard shows a "train the model" checklist forever: it reads
+      // model_metrics, only a training run writes that table, and training is
+      // refused below 500 labeled rows while this seed produces 40. The model
+      // itself is loaded and fully evaluated; only the paperwork was missing.
+      let registered = "";
+      try {
+        const champion = await registerChampionMetrics();
+        registered =
+          ` Registered ${champion.version} (trained ` +
+          `${champion.trainedAt.toISOString().slice(0, 10)}, ` +
+          `${champion.datasetSize?.toLocaleString() ?? "?"} rows) so its metrics are visible.`;
+        setStep(7, "failed", `Skipped — ${why} · registered ${champion.version}`.slice(0, 300));
+      } catch (regErr: any) {
+        console.warn("[SEED] could not register champion metrics:", regErr?.message ?? regErr);
+        setStep(7, "failed", `Skipped — ${why}`.slice(0, 300));
+      }
+
       addWarning(
         `The model was not retrained (${why}) — the fleet is scored with the ` +
-        `champion model shipped in the ML service image.`
+        `champion model shipped in the ML service image.${registered}`
       );
     }
 

@@ -14,6 +14,7 @@ import { enhancedFeatureService } from "./services/feature-engineering-enhanced"
 import { IMPUTATION_DEFAULTS } from "./services/imputation";
 import { evaluatePMSchedule, generatePMDescription, samplePMCost, MaintenanceTypeKey } from "./services/pm-scheduler";
 import { mlFetch } from "./services/ml-client";
+import { registerChampionIfMissing } from "./services/champion-metrics";
 import { summariseBody } from "./services/request-log";
 
 const app = express();
@@ -431,6 +432,12 @@ function scheduleNightlyRescore() {
     scheduleNightlyRescore();
     // Start daily PM simulation (runs at 06:00, advances simulation + logs PM events)
     scheduleDailyPM();
+    // Make the shipped champion's metrics visible if nothing is registered.
+    // Deliberately after listen() and never awaited: the ML service suspends
+    // when idle and takes ~50s to wake, which is not something to hold a boot
+    // on. It no-ops when a model is already registered, so a deployment
+    // seeded before this existed heals on its next restart without a reseed.
+    void registerChampionIfMissing();
   });
 })().catch((err: unknown) => {
   // Boot-time misconfiguration (a missing SESSION_SECRET, an unreachable

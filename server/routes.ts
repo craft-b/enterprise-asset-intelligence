@@ -21,6 +21,7 @@ import { enhancedFeatureService } from "./services/feature-engineering-enhanced"
 import { evaluatePMSchedule, generatePMDescription, samplePMCost, MaintenanceTypeKey } from "./services/pm-scheduler";
 import { startSeedJob, getSeedStatus, getSystemStatus, resetSystem } from "./services/seed-orchestrator";
 import { mlFetch, describeMlFailure } from "./services/ml-client";
+import { getSimulationDate } from "./services/simulation-clock";
 import { IMPUTATION_DEFAULTS, isColdStart, coldStartMultiHorizon } from "./services/imputation";
 
 declare module "express-session" {
@@ -84,12 +85,9 @@ export async function registerRoutes(
   // Metrics endpoints now return an honest empty state when no model exists.
 
   // ── SIMULATION CURSOR HELPER ──────────────────────────────────────────────
-  async function getSimulationDate(): Promise<Date> {
-    const [stateRows] = await db.execute(sql`SELECT cursor_date, total_days_run FROM simulation_state WHERE id = 1`) as any;
-    return stateRows[0]?.cursor_date
-      ? new Date(stateRows[0].cursor_date)
-      : new Date();
-  }
+  // One definition, in services/simulation-clock.ts. Batch scoring used
+  // new Date() instead of this and scored a fleet six months after its data
+  // ended, which is the kind of thing a second copy invites.
 
   // ── SIMULATION ────────────────────────────────────────────────────────────
   app.get("/api/simulate/state", requireAuth, async (req, res) => {

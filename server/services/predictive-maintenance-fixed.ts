@@ -13,6 +13,7 @@ import { eq, desc } from "drizzle-orm";
 import { enhancedFeatureService as featureEngineeringService } from "./feature-engineering-enhanced";
 import { IMPUTATION_DEFAULTS, COLD_START, isColdStart } from "./imputation";
 import { mlFetch, ML_SERVICE_URL, describeMlFailure } from "./ml-client";
+import { getSimulationDate } from "./simulation-clock";
 // Request timeouts for the ML plane, overridable because the right value is a
 // property of the deployment, not the code. Alongside a warm container 10s is
 // generous. On a host that suspends an idle instance (Render free, Fly
@@ -207,7 +208,12 @@ class PredictiveMaintenanceService {
           );
         }
 
-        const snapshot = await featureEngineeringService.generateSnapshot(equipmentId, new Date());
+        // The simulation cursor, not the wall clock. Scoring at new Date()
+        // put every prediction ~6 months past the end of the seeded data, so
+        // the rolling sensor features were empty and every asset looked
+        // neglected. See services/simulation-clock.ts.
+        const asOf = await getSimulationDate();
+        const snapshot = await featureEngineeringService.generateSnapshot(equipmentId, asOf);
 
         // Cold-start: brand-new assets are out-of-distribution for the model, so a
         // deterministic rule scores them. Tagged with the rule modelVersion (ML-10)
