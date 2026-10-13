@@ -145,3 +145,48 @@ describe("gateway errors are not blamed on the URL", () => {
     expect(message).toMatch(/Check ML_SERVICE_URL/);
   });
 });
+
+describe("a real hosting-provider error page", () => {
+  // Rebuilt from what the deployed instance actually returned for
+  // POST /drift/compute-reference: Render's 502 page, whose two embedded
+  // base64 WOFF2 fonts make it about 180 KB. It was interpolated whole into
+  // the seeding dialog, which rendered the page inside the error.
+  const renderPage =
+    '<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n' +
+    '<title>502</title>\n<style>@font-face { font-family: "Roobert"; ' +
+    'src: url("data:font/woff2;base64,' + "d09GMk9UVE8".repeat(18000) + '"); }' +
+    "</style>\n</head>\n<body>\n<h1>Bad Gateway</h1>\n" +
+    "<div>Request ID: a49a95866e9eef24-PDX</div>\n</body>\n</html>\n";
+
+  const response = () =>
+    new Response(renderPage, {
+      status: 502,
+      statusText: "Bad Gateway",
+      headers: { "content-type": "text/html; charset=utf-8" },
+    });
+
+  it("is large enough to be worth not forwarding", () => {
+    // Guards the fixture: a shrunken page would make the length check vacuous.
+    expect(renderPage.length).toBeGreaterThan(100_000);
+  });
+
+  it("does not reach the message", async () => {
+    const message = await describeMlFailure(response(), "/drift/compute-reference");
+
+    expect(message).not.toContain("<!DOCTYPE");
+    expect(message).not.toContain("@font-face");
+    expect(message).not.toContain("d09GMk9UVE8");
+    expect(message).not.toContain("Request ID");
+    expect(message.length).toBeLessThan(400);
+  });
+
+  it("says the service did not answer, and names the endpoint", async () => {
+    const message = await describeMlFailure(response(), "/drift/compute-reference");
+
+    expect(message).toMatch(/did not respond/);
+    expect(message).toMatch(/\/drift\/compute-reference/);
+    // The URL was correct in this case; sending someone to re-check it wastes
+    // the one piece of information the status actually carries.
+    expect(message).not.toMatch(/Check ML_SERVICE_URL/);
+  });
+});

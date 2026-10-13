@@ -47,6 +47,16 @@ export interface SeedJobState {
   status: "idle" | "running" | "completed" | "failed";
   steps: SeedStep[];
   error?: string;
+  /**
+   * Steps that were skipped without failing the run.
+   *
+   * The three ML steps depend on a service that suspends when idle, so on free
+   * hosting they fail as a matter of course. A binary completed/failed status
+   * had to either throw away a full data load over a cold start, or report
+   * "Demo Data Loaded" and a trained model when neither prediction nor training
+   * had happened. These say which it was.
+   */
+  warnings: string[];
   startedAt?: string;
   completedAt?: string;
 }
@@ -67,6 +77,7 @@ const STEP_NAMES = [
 let jobState: SeedJobState = {
   status: "idle",
   steps: STEP_NAMES.map(name => ({ name, status: "pending" })),
+  warnings: [],
 };
 
 export function getSeedStatus(): SeedJobState {
@@ -77,11 +88,17 @@ function resetJobState() {
   jobState = {
     status: "idle",
     steps: STEP_NAMES.map(name => ({ name, status: "pending" })),
+    warnings: [],
   };
 }
 
 function setStep(index: number, status: StepStatus, detail?: string) {
   jobState.steps[index] = { ...jobState.steps[index], status, detail };
+}
+
+/** Record a step that was skipped but did not sink the run. */
+function addWarning(message: string) {
+  jobState.warnings.push(message);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -209,17 +226,61 @@ async function runSeedPipeline() {
       const why = err?.message ?? String(err);
       console.warn("[SEED] training step failed; continuing with the model the ML service already has:", why);
       setStep(7, "failed", `Skipped — ${why}`.slice(0, 300));
+      addWarning(
+        `The model was not retrained (${why}) — the fleet is scored with the ` +
+        `champion model shipped in the ML service image.`
+      );
     }
 
     // ── Step 8: Batch predictions ──────────────────────────────────────────
-    setStep(8, "running");
-    const predictions = await predictiveMaintenanceService.predictAllEquipment();
-    setStep(8, "completed", `${predictions.length} predictions generated`);
+    // Also not fatal, but it is the step that fills the risk queue, so a
+    // failure here is the difference between a demo and an empty table. It
+    // used to report "0 predictions generated" as completed, with a green
+    // check, whenever the ML service was asleep.
+    setStep(8, "running", "Waking the ML service…");
+    if (!(await waitForMlService(8, ML_WAKE_TIMEOUT_MS))) {
+      setStep(8, "failed", `Skipped — ${ML_ASLEEP}`);
+      addWarning(`No assets were scored: ${ML_ASLEEP} Use "Score Fleet" on the ML dashboard to retry.`);
+    } else {
+      setStep(8, "running", "Scoring fleet…");
+      const { predictions, attempted, firstError } =
+        await predictiveMaintenanceService.predictAllEquipmentWithOutcome();
+
+      if (attempted > 0 && predictions.length === 0) {
+        const why = firstError ?? "no reason reported";
+        setStep(8, "failed", `Scored 0 of ${attempted} — ${why}`.slice(0, 300));
+        addWarning(
+          `No assets were scored (${why}), so the risk queue is empty. ` +
+          `Use "Score Fleet" on the ML dashboard to retry.`
+        );
+      } else if (predictions.length < attempted) {
+        setStep(8, "completed", `${predictions.length} of ${attempted} predictions generated`);
+        addWarning(
+          `${attempted - predictions.length} of ${attempted} assets could not be scored` +
+          (firstError ? ` (${firstError})` : "") + "."
+        );
+      } else {
+        setStep(8, "completed", `${predictions.length} predictions generated`);
+      }
+    }
 
     // ── Step 9: Drift reference ────────────────────────────────────────────
+    // A monitoring baseline. Nothing in the fleet views depends on it, and it
+    // is recomputable from the dashboard, so it does not get to fail a run
+    // that has already loaded the data.
     setStep(9, "running");
-    await bootstrapDriftReference();
-    setStep(9, "completed", "Drift baseline established");
+    try {
+      await bootstrapDriftReference();
+      setStep(9, "completed", "Drift baseline established");
+    } catch (err: any) {
+      const why = err?.message ?? String(err);
+      console.warn("[SEED] drift reference failed; the rest of the seed stands:", why);
+      setStep(9, "failed", `Skipped — ${why}`.slice(0, 300));
+      addWarning(
+        `No drift baseline was computed (${why}) — the Feature Drift Monitor ` +
+        `will be empty until you use "Reset Baseline" on the ML dashboard.`
+      );
+    }
 
     // ── Finalize cursor ────────────────────────────────────────────────────
     await db.execute(sql`
@@ -452,7 +513,7 @@ async function seedFailureEvents(
  * the service token and touches nothing, so it is the cheapest way to find
  * out whether anyone is home.
  */
-async function waitForMlService(timeoutMs: number): Promise<boolean> {
+async function waitForMlService(stepIndex: number, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   let attempt = 0;
   while (Date.now() < deadline) {
@@ -463,21 +524,22 @@ async function waitForMlService(timeoutMs: number): Promise<boolean> {
     } catch {
       // not up yet
     }
-    setStep(7, "running", `Waking the ML service… (attempt ${attempt})`);
+    setStep(stepIndex, "running", `Waking the ML service… (attempt ${attempt})`);
     await sleep(5000);
   }
   return false;
 }
 
+const ML_WAKE_TIMEOUT_MS = Number(process.env.ML_HEALTH_TIMEOUT_MS ?? 90_000);
+
+/** The message for a service that never answered, written once. */
+const ML_ASLEEP =
+  "ML service did not come up in time. On free hosting it suspends when " +
+  "idle; open its /health URL once and retry.";
+
 async function trainAndPoll(timeoutMs = 420_000): Promise<void> {
   // Give a suspended instance a chance to start before judging it.
-  const awake = await waitForMlService(Number(process.env.ML_HEALTH_TIMEOUT_MS ?? 90_000));
-  if (!awake) {
-    throw new Error(
-      "ML service did not come up in time. On free hosting it suspends when " +
-      "idle; open its /health URL once and retry."
-    );
-  }
+  if (!(await waitForMlService(7, ML_WAKE_TIMEOUT_MS))) throw new Error(ML_ASLEEP);
 
   const trainRes = await mlFetch("/train", { method: "POST" }, { actorId: "seed" });
   if (!trainRes.ok) {
@@ -527,8 +589,19 @@ async function trainAndPoll(timeoutMs = 420_000): Promise<void> {
 }
 
 async function bootstrapDriftReference(): Promise<void> {
+  // Wake first, for the same reason training does: the request that follows a
+  // suspension gets a gateway error from the host, not from the service.
+  if (!(await waitForMlService(9, ML_WAKE_TIMEOUT_MS))) throw new Error(ML_ASLEEP);
+
   const res = await mlFetch("/drift/compute-reference", { method: "POST" }, { actorId: "seed" });
-  if (!res.ok) throw new Error(`Drift reference failed: ${await res.text()}`);
+  if (!res.ok) {
+    // Not the raw body. This threw `${await res.text()}` until a sleeping
+    // container answered with a full HTML 502 page, which was then rendered
+    // into the seeding dialog -- fonts, stylesheet and all.
+    throw new Error(
+      `Drift reference failed — ${await describeMlFailure(res, "/drift/compute-reference")}`
+    );
+  }
 }
 
 function sleep(ms: number) {

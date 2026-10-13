@@ -203,15 +203,19 @@ export function useRunPredictions() {
         method: "POST",
         credentials: "include",
       });
-      if (!res.ok) throw new Error("Failed to run predictions");
-      return res.json();
+      // The server distinguishes "service asleep" from "scored 0 of 10" and
+      // says what to do about each; discarding that for a fixed string left
+      // an empty risk queue with no explanation.
+      const body = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(body?.message ?? "Failed to run predictions");
+      return body;
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['/api/predictive-maintenance/fleet-risk'] });
       queryClient.invalidateQueries({ queryKey: ['/api/predictive-maintenance/equipment-with-risk'] });
-      toast({ 
-        title: "Predictions Complete", 
-        description: `Generated ${data.count} risk predictions` 
+      toast({
+        title: "Predictions Complete",
+        description: data?.message ?? `Generated ${data?.count ?? 0} risk predictions`,
       });
     },
     onError: (err) => {

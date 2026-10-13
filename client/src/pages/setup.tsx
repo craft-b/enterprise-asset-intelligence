@@ -12,6 +12,7 @@ import {
   Play,
   CheckCircle2,
   XCircle,
+  AlertTriangle,
   Loader2,
   ChevronRight,
   BarChart3,
@@ -205,24 +206,53 @@ export default function SetupPage() {
 
   if (mode === "done") {
     const success = seedJob?.state === "completed";
+    // Steps that were skipped rather than failed. The ML steps need a service
+    // that suspends when idle, so this is the ordinary outcome on free
+    // hosting, and the run is still worth keeping.
+    const warnings = seedJob?.warnings ?? [];
+
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
         <Card className="w-full max-w-md text-center">
           <CardHeader>
             <div className="mx-auto mb-3 h-12 w-12 rounded-full flex items-center justify-center">
               {success ? (
-                <CheckCircle2 className="h-12 w-12 text-green-500" />
+                warnings.length > 0 ? (
+                  <AlertTriangle className="h-12 w-12 text-amber-500" />
+                ) : (
+                  <CheckCircle2 className="h-12 w-12 text-green-500" />
+                )
               ) : (
                 <XCircle className="h-12 w-12 text-red-500" />
               )}
             </div>
-            <CardTitle>{success ? "Demo Data Loaded" : "Seeding Failed"}</CardTitle>
+            <CardTitle>
+              {!success
+                ? "Seeding Failed"
+                : warnings.length > 0
+                  ? "Demo Data Loaded, with gaps"
+                  : "Demo Data Loaded"}
+            </CardTitle>
             <CardDescription>
+              {/* Claiming "a trained ML model" was false whenever training was
+                  skipped, which on free hosting is every run. */}
               {success
-                ? "Your system is fully populated with 10 equipment units, 6 months of sensor data, maintenance history, and a trained ML model."
+                ? "10 equipment units, 90 days of sensor data, maintenance history and failure events are loaded."
                 : seedJob?.error ?? "An error occurred during setup."}
             </CardDescription>
           </CardHeader>
+
+          {success && warnings.length > 0 && (
+            <div className="px-6 pb-2 text-left">
+              <ul className="space-y-2 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                {warnings.map((w, i) => (
+                  <li key={i} className="text-xs text-amber-900 leading-relaxed">
+                    {w}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           <CardContent>
             {success ? (
               <Button className="w-full" onClick={() => setLocation("/")}>

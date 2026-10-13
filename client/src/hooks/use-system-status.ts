@@ -16,6 +16,8 @@ export type SeedJobStatus = {
   totalSteps: number;
   stepLabel: string;
   log: string[];
+  /** Steps that were skipped without failing the run — see seed-orchestrator. */
+  warnings?: string[];
   error?: string;
 };
 

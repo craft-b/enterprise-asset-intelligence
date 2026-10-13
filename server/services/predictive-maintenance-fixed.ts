@@ -12,7 +12,7 @@ import { assetRiskPredictions, equipmentRiskScores, equipment } from "@shared/sc
 import { eq, desc } from "drizzle-orm";
 import { enhancedFeatureService as featureEngineeringService } from "./feature-engineering-enhanced";
 import { IMPUTATION_DEFAULTS, COLD_START, isColdStart } from "./imputation";
-import { mlFetch, ML_SERVICE_URL } from "./ml-client";
+import { mlFetch, ML_SERVICE_URL, describeMlFailure } from "./ml-client";
 // Request timeouts for the ML plane, overridable because the right value is a
 // property of the deployment, not the code. Alongside a warm container 10s is
 // generous. On a host that suspends an idle instance (Render free, Fly
@@ -74,13 +74,15 @@ async function callMLService(
     });
 
     if (!response.ok) {
-      const text = await response.text();
-      console.error(`[PM] ML service ${response.status} error body:`, text);
-      // Pretty-print if JSON
+      // The body goes to the server log, where a stack trace or an HTML page is
+      // useful. The thrown message is summarised, because it reaches the UI --
+      // interpolating the body here put an entire hosting-provider error page
+      // into a dialog.
+      const summary = await describeMlFailure(response.clone(), "/predict/multi-horizon");
       try {
-        console.error(`[PM] Parsed:`, JSON.stringify(JSON.parse(text), null, 2));
+        console.error(`[PM] ML service ${response.status} body:`, await response.text());
       } catch {}
-      throw new Error(`ML service returned ${response.status}: ${text}`);
+      throw new Error(`ML service returned ${summary}`);
     }
 
     return await response.json();
@@ -287,14 +289,29 @@ class PredictiveMaintenanceService {
   /**
    * Runs predictions for all equipment. Skips individual failures gracefully.
    */
-  async predictAllEquipment(): Promise<RiskPrediction[]> {
+  /**
+   * Score the whole fleet, reporting why it produced nothing when it does.
+   *
+   * The array-returning form below cannot distinguish "no equipment", "the ML
+   * service is asleep" and "every single prediction failed" -- all three come
+   * back as []. The seed pipeline then marked the step completed with
+   * "0 predictions generated" and a green check, which is how a seeded fleet
+   * ended up with an empty risk queue and no indication of why.
+   */
+  async predictAllEquipmentWithOutcome(): Promise<{
+    predictions: RiskPrediction[];
+    attempted: number;
+    serviceAvailable: boolean;
+    firstError?: string;
+  }> {
       const healthy = await checkMLServiceHealth();
       if (!healthy) {
         console.warn(`[PM] ML service unavailable — skipping batch predictions`);
-        return [];
+        return { predictions: [], attempted: 0, serviceAvailable: false };
       }
       const allEquipment = await db.select({ id: equipment.id }).from(equipment);
       const predictions: RiskPrediction[] = [];
+      let firstError: string | undefined;
 
       for (const equip of allEquipment) {
         try {
@@ -316,14 +333,25 @@ class PredictiveMaintenanceService {
               modelVersion: prediction.modelVersion,
             }
           });
-        } catch (err) {
+        } catch (err: any) {
           console.error(`[PM] Failed prediction for equipment ${equip.id}:`, err);
+          // Keep the first reason. Every later one is usually the same cause,
+          // and discarding all of them is what made a batch of zero silent.
+          firstError ??= err?.message ?? String(err);
         }
       }
 
       console.log(`[PM] Batch complete — ${predictions.length}/${allEquipment.length} succeeded`);
-      return predictions;
-    
+      return {
+        predictions,
+        attempted: allEquipment.length,
+        serviceAvailable: true,
+        firstError,
+      };
+  }
+
+  async predictAllEquipment(): Promise<RiskPrediction[]> {
+    return (await this.predictAllEquipmentWithOutcome()).predictions;
   }
 
   /**

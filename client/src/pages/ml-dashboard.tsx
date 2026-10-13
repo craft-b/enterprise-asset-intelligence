@@ -8,6 +8,7 @@ import {
   useChampionChallengerCompare,
   usePromoteChallenger,
   useDataQualityReport,
+  useRunPredictions,
   type HorizonMetrics,
   type DQCheck,
 } from "@/hooks/use-predictive-maintenance";
@@ -85,6 +86,36 @@ function statusTextClass(status: string) {
          status === "WARNING" ? "text-risk-medium" :
          status === "STABLE"  ? "text-risk-low" :
                                 "text-muted-foreground";
+}
+
+/**
+ * Re-score the fleet on demand.
+ *
+ * The mutation behind this existed and nothing rendered it, so when a seed run
+ * finished with no predictions -- the normal outcome when the ML service is
+ * suspended, since scoring every asset is the one step that needs it awake --
+ * the only way to get a risk queue was to re-seed, re-inserting 90 days of
+ * sensor readings to fix a cold start.
+ */
+function ScoreFleetButton() {
+  const run = useRunPredictions();
+  const { user } = useAuth();
+  if ((user as any)?.role !== "ADMINISTRATOR") return null;
+
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      onClick={() => run.mutate()}
+      disabled={run.isPending}
+      title="Score every asset against the current model and refresh the risk queue"
+    >
+      {run.isPending
+        ? <Loader2 className="h-3 w-3 animate-spin mr-1" />
+        : <RefreshCw className="h-3 w-3 mr-1" />}
+      {run.isPending ? "Scoring fleet…" : "Score Fleet"}
+    </Button>
+  );
 }
 
 function DriftMonitorCard() {
@@ -793,11 +824,14 @@ export default function MLPerformanceDashboard() {
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
       {/* Header */}
-      <div>
-        <h2 className="text-3xl font-bold tracking-tight">ML Model Performance</h2>
-        <p className="text-muted-foreground">
-          Predictive maintenance model evaluation and monitoring
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-3xl font-bold tracking-tight">ML Model Performance</h2>
+          <p className="text-muted-foreground">
+            Predictive maintenance model evaluation and monitoring
+          </p>
+        </div>
+        <ScoreFleetButton />
       </div>
 
       {/* Model provenance strip — version, training date, data source up front */}

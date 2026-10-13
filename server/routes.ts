@@ -20,7 +20,7 @@ import { assetRiskPredictions } from "@shared/schema";
 import { enhancedFeatureService } from "./services/feature-engineering-enhanced";
 import { evaluatePMSchedule, generatePMDescription, samplePMCost, MaintenanceTypeKey } from "./services/pm-scheduler";
 import { startSeedJob, getSeedStatus, getSystemStatus, resetSystem } from "./services/seed-orchestrator";
-import { mlFetch } from "./services/ml-client";
+import { mlFetch, describeMlFailure } from "./services/ml-client";
 import { IMPUTATION_DEFAULTS, isColdStart, coldStartMultiHorizon } from "./services/imputation";
 
 declare module "express-session" {
@@ -1128,7 +1128,13 @@ export async function registerRoutes(
         body: JSON.stringify({ snapshots: snapshotsToScore }),
       });
 
-      if (!fastapiRes.ok) throw new Error(`FastAPI multi-horizon error: ${await fastapiRes.text()}`);
+      // Summarised, not the raw body: a sleeping container answers with a
+      // full HTML error page, which this used to forward into the UI.
+      if (!fastapiRes.ok) {
+        throw new Error(
+          `ML batch scoring failed - ${await describeMlFailure(fastapiRes, "/predict/multi-horizon/batch")}`
+        );
+      }
 
       const batchOutput = await fastapiRes.json();
       const fastapiResults = batchOutput.predictions.map((pred: any, idx: number) => ({
@@ -1350,10 +1356,41 @@ export async function registerRoutes(
 
   app.post('/api/predictive-maintenance/predict-all', requireAdmin, async (req, res) => {
     try {
-      const predictions = await predictiveMaintenanceService.predictAllEquipment();
-      res.json({ message: `Generated ${predictions.length} predictions`, count: predictions.length, predictions });
-    } catch (error) {
-      res.status(500).json({ message: 'Failed to run batch predictions' });
+      const outcome = await predictiveMaintenanceService.predictAllEquipmentWithOutcome();
+      const { predictions, attempted, serviceAvailable, firstError } = outcome;
+
+      // A batch of zero used to return 200 with "Generated 0 predictions",
+      // which reads as success. The three reasons it can be zero need
+      // different actions, so they get different answers.
+      if (!serviceAvailable) {
+        return res.status(503).json({
+          message:
+            'The ML service is not responding. On free hosting it suspends when idle — ' +
+            'give it a minute and try again.',
+          count: 0,
+          predictions: [],
+        });
+      }
+      if (attempted > 0 && predictions.length === 0) {
+        return res.status(502).json({
+          message: `Scored 0 of ${attempted} assets. ${firstError ?? 'No reason reported.'}`,
+          count: 0,
+          predictions: [],
+        });
+      }
+
+      res.json({
+        message:
+          predictions.length === attempted
+            ? `Generated ${predictions.length} predictions`
+            : `Generated ${predictions.length} of ${attempted} predictions. ${firstError ?? ''}`.trim(),
+        count: predictions.length,
+        attempted,
+        predictions,
+      });
+    } catch (error: any) {
+      console.error('[PREDICT-ALL]', error);
+      res.status(500).json({ message: error?.message ?? 'Failed to run batch predictions' });
     }
   });
 
@@ -1689,7 +1726,11 @@ export async function registerRoutes(
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(mlPayload),
       });
 
-      if (!mlResponse.ok) return res.status(502).json({ message: `ML service error: ${await mlResponse.text()}` });
+      if (!mlResponse.ok) {
+        return res.status(502).json({
+          message: `ML service error - ${await describeMlFailure(mlResponse, "/predict/project")}`,
+        });
+      }
       res.json(await mlResponse.json());
     } catch (err: any) {
       console.error("[PROJECTION] Error:", err);
@@ -2473,14 +2514,20 @@ export async function registerRoutes(
   app.get("/api/admin/seed/status", requireAuth, async (req, res) => {
     try {
       const raw = getSeedStatus();
-      const completedCount = raw.steps.filter(s => s.status === "completed").length;
+      // Progress counts settled steps, not successful ones. A skipped ML step
+      // has advanced the pipeline, and counting only completions left the bar
+      // stuck at 80% next to the words "All done".
+      const settledCount = raw.steps.filter(
+        s => s.status === "completed" || s.status === "failed"
+      ).length;
       const runningStep = raw.steps.find(s => s.status === "running");
       res.json({
         state: raw.status,
-        currentStep: completedCount,
+        currentStep: settledCount,
         totalSteps: raw.steps.length,
         stepLabel: runningStep?.name ?? (raw.status === "completed" ? "All done" : "Waiting…"),
         log: raw.steps.filter(s => s.detail).map(s => `[${s.name}] ${s.detail}`),
+        warnings: raw.warnings,
         error: raw.error,
       });
     } catch (e: any) {
