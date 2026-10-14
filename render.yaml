@@ -56,6 +56,13 @@ services:
     # liveness rather than readiness.
     healthCheckPath: /api/health
     autoDeployTrigger: commit
+    # Stated as exclusions rather than inclusions: the build context is the
+    # repo root, so almost everything is genuinely an input. The Node image
+    # does not run the Python service, and prose is not an input at all.
+    buildFilter:
+      ignoredPaths:
+        - ml-service/**
+        - "**/*.md"
     envVars:
       - fromGroup: eai-shared
 
@@ -137,6 +144,21 @@ services:
     # Exempt from the service-token middleware so Render can poll it.
     healthCheckPath: /health
     autoDeployTrigger: commit
+    # Only rebuild when this service's own files change.
+    #
+    # Without this every commit to the repo rebuilt the image: reinstalling
+    # scikit-learn, pandas and shap and refetching a 16.7MB model bundle on a
+    # free instance, which runs 15+ minutes and queues behind itself. Seven
+    # consecutive commits that touched no Python did exactly that, and two
+    # builds ended up in flight at once.
+    #
+    # The build context above is ./ml-service, so nothing outside it can
+    # affect the image anyway; render.yaml is included because it carries this
+    # service's own configuration.
+    buildFilter:
+      paths:
+        - ml-service/**
+        - render.yaml
     envVars:
       - fromGroup: eai-shared
 
