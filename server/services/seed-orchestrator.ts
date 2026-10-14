@@ -345,16 +345,30 @@ async function seedEquipment(cursorDate: Date) {
   // on top. Nothing is left under a year old with fewer than 500 lifetime
   // hours, which would trip the cold-start rule in services/imputation.ts and
   // be scored by rule instead of by the model.
+  //
+  // Age alone does not produce a low-risk asset, and assuming it did cost a
+  // round trip. The dominant feature is wear rate --
+  // totalHoursLifetime / (assetAgeYears * 8760) -- which is duty cycle, the
+  // share of wall-clock time a machine has been running, and it is the top
+  // driver on every row. A nearly-new unit with few hours still has a high
+  // duty cycle, because those hours are divided by a very short life: at nine
+  // months and 878 hours an asset scored 0.127, above the 13-year crane's
+  // 0.092, and landed MEDIUM.
+  //
+  // Measured anchor: wear 0.047 scored 0.295, which is LOW. EQ-006 and EQ-009
+  // are sized to land near that -- around three years old and ~1,100 hours --
+  // so the fleet has genuinely lightly-used assets rather than merely young
+  // ones.
   const fleet = [
     { equipmentId: "EQ-001", name: "Liebherr Tower Crane",         category: "Crane",      make: "Liebherr",    model: "81K.1",    serial: "LH-81K-2013-0042",     status: "AVAILABLE", daily: "850.00",  weekly: "5200.00",  monthly: "18000.00", year: 2013, hours: 9800 },
     { equipmentId: "EQ-002", name: "Caterpillar Motor Grader",      category: "Grader",     make: "Caterpillar", model: "140M3",    serial: "CAT-140M3-2014-0091",   status: "AVAILABLE", daily: "620.00",  weekly: "3800.00",  monthly: "13500.00", year: 2014, hours: 8200 },
     { equipmentId: "EQ-003", name: "JLG Telescopic Boom Lift",      category: "Lift",       make: "JLG",         model: "1350SJ",   serial: "JLG-1350SJ-2022-0067",  status: "AVAILABLE", daily: "480.00",  weekly: "2900.00",  monthly: "10200.00", year: 2022, hours: 2400 },
     { equipmentId: "EQ-004", name: "Komatsu Hydraulic Excavator",   category: "Excavator",  make: "Komatsu",     model: "PC210",    serial: "KOM-PC210-2021-0234",   status: "AVAILABLE", daily: "550.00",  weekly: "3300.00",  monthly: "11800.00", year: 2021, hours: 3100 },
     { equipmentId: "EQ-005", name: "Manitowoc Crawler Crane",       category: "Crane",      make: "Manitowoc",   model: "222",      serial: "MAN-222-2016-0088",     status: "AVAILABLE", daily: "920.00",  weekly: "5600.00",  monthly: "19500.00", year: 2016, hours: 6800 },
-    { equipmentId: "EQ-006", name: "Volvo Articulated Hauler",      category: "Hauler",     make: "Volvo",       model: "A40G",     serial: "VOL-A40G-2025-0156",    status: "AVAILABLE", daily: "430.00",  weekly: "2600.00",  monthly: "9200.00",  year: 2025, hours: 450  },
+    { equipmentId: "EQ-006", name: "Volvo Articulated Hauler",      category: "Hauler",     make: "Volvo",       model: "A40G",     serial: "VOL-A40G-2023-0156",    status: "AVAILABLE", daily: "430.00",  weekly: "2600.00",  monthly: "9200.00",  year: 2023, hours: 410  },
     { equipmentId: "EQ-007", name: "Atlas Copco Air Compressor",    category: "Compressor", make: "Atlas Copco", model: "XATS 400", serial: "AC-XATS400-2022-0321",  status: "AVAILABLE", daily: "220.00",  weekly: "1350.00",  monthly: "4800.00",  year: 2022, hours: 1700 },
     { equipmentId: "EQ-008", name: "Bobcat Skid Steer Loader",      category: "Loader",     make: "Bobcat",      model: "S650",     serial: "BOB-S650-2024-0512",    status: "AVAILABLE", daily: "280.00",  weekly: "1700.00",  monthly: "6000.00",  year: 2024, hours: 400  },
-    { equipmentId: "EQ-009", name: "Wacker Neuson Vibratory Roller",category: "Compactor",  make: "Wacker Neuson",model: "RD27",    serial: "WN-RD27-2025-0789",     status: "AVAILABLE", daily: "190.00",  weekly: "1150.00",  monthly: "4100.00",  year: 2025, hours: 350  },
+    { equipmentId: "EQ-009", name: "Wacker Neuson Vibratory Roller",category: "Compactor",  make: "Wacker Neuson",model: "RD27",    serial: "WN-RD27-2023-0789",     status: "AVAILABLE", daily: "190.00",  weekly: "1150.00",  monthly: "4100.00",  year: 2023, hours: 560  },
     { equipmentId: "EQ-010", name: "Generac Industrial Generator",  category: "Generator",  make: "Generac",     model: "XG10000E", serial: "GEN-XG10K-2024-0633",  status: "AVAILABLE", daily: "160.00",  weekly: "980.00",   monthly: "3500.00",  year: 2024, hours: 200  },
   ];
 

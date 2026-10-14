@@ -67,6 +67,19 @@ const MIN_HOURS_ADDED: Record<string, number> = {
 };
 const minAdded = (category: string) => MIN_HOURS_ADDED[category] ?? 5 * 76;
 
+/**
+ * Duty cycle at the cursor: lifetime hours over age in hours.
+ *
+ * Mirrors wearRate in feature-engineering-enhanced.ts, which is the feature
+ * that actually decides the risk band -- it is the top driver on every row.
+ */
+function projectedWearRate(a: Asset): number {
+  const purchase = new Date(`${a.year}-06-15`);
+  const ageYears = (cursor.getTime() - purchase.getTime()) / (365.25 * 24 * 3600 * 1000);
+  if (ageYears <= 0) return Infinity;
+  return (a.hours + minAdded(a.category)) / (ageYears * 8760);
+}
+
 const fleet = parseFleet();
 const cursor = cursorDate();
 
@@ -99,25 +112,50 @@ describe("the demo fleet", () => {
     expect(veryOld.length).toBeGreaterThanOrEqual(2);
   });
 
-  it("has assets too new to be assigned any failure", () => {
-    // Below two years seedFailureEvents injects nothing, which is what makes
-    // a LOW row possible at all.
-    const young = fleet.filter(a => tierAge(a.year, cursor) < 2);
-    expect(young.length).toBeGreaterThanOrEqual(2);
+  it("has lightly-used assets, which is what produces a LOW row", () => {
+    // This assertion previously demanded assets under two years old, on the
+    // assumption that youth produces low risk. It does not, and the fleet
+    // built on that assumption scored zero LOW rows.
+    //
+    // The dominant feature is wear rate -- lifetime hours over age in hours --
+    // which is duty cycle. A nine-month-old unit with 878 hours scored 0.127,
+    // higher than a 13-year-old crane at 0.092, because the hours are divided
+    // by a very short life. Measured: wear 0.047 scored 0.295, which is LOW.
+    const lightlyUsed = fleet.filter(a => projectedWearRate(a) <= 0.055);
+    expect(
+      lightlyUsed.map(a => `${a.code} (${projectedWearRate(a).toFixed(3)})`),
+      "no asset has a low enough duty cycle to score LOW; being new is not " +
+      "enough, since few hours over a short life is still a high duty cycle"
+    ).not.toHaveLength(0);
+    expect(lightlyUsed.length).toBeGreaterThanOrEqual(2);
   });
 
-  it("spreads across the tiers rather than clustering", () => {
-    const tiers = { high: 0, mid: 0, low: 0 };
+  it("works the old assets harder than the lightly-used ones", () => {
+    // Without this the ordering can inverert: the first rebalance gave the
+    // newest units the highest duty cycle in the fleet.
+    const worked = fleet.filter(a => tierAge(a.year, cursor) >= 10);
+    const light = fleet.filter(a => projectedWearRate(a) <= 0.055);
+    const lowestWorked = Math.min(...worked.map(projectedWearRate));
+    const highestLight = Math.max(...light.map(projectedWearRate));
+    expect(highestLight).toBeLessThan(lowestWorked);
+  });
+
+  it("spreads across the failure tiers rather than clustering", () => {
+    // These are seedFailureEvents' injection tiers. The under-two tier is not
+    // required: assets in the 2-5 band mostly draw zero failures anyway, and
+    // demanding one there is what pushed the fleet into the high-duty-cycle
+    // shape that scored no LOW rows. What matters is that the fleet is not all
+    // one age.
+    const tiers = { old: 0, mid: 0, young: 0 };
     for (const a of fleet) {
       const age = tierAge(a.year, cursor);
-      if (age >= 6) tiers.high++;
+      if (age >= 6) tiers.old++;
       else if (age >= 2) tiers.mid++;
-      else tiers.low++;
+      else tiers.young++;
     }
-    // Every tier populated: the point of the demo is a mixed fleet.
-    expect(tiers.high).toBeGreaterThan(0);
+    expect(tiers.old).toBeGreaterThan(0);
     expect(tiers.mid).toBeGreaterThan(0);
-    expect(tiers.low).toBeGreaterThan(0);
+    expect(Math.max(tiers.old, tiers.mid, tiers.young)).toBeLessThan(fleet.length);
   });
 
   it("never trips the cold-start rule at the cursor", () => {
