@@ -511,6 +511,15 @@ Random CV leaks future data into training folds on temporal datasets. TimeSeries
 **Why recompute derived features at inference instead of storing them?**
 Storing derived columns (aging_factor, wear_rate, mechanical_wear_score) creates staleness risk — if the computation logic changes, stored values become inconsistent with what the model was trained on. Recomputing from raw inputs at inference keeps the feature pipeline as the single source of truth.
 
+**Why does the demo fleet have no LOW-risk assets?**
+Because none of it is low risk, and the band boundary says so honestly rather than being moved to look balanced.
+
+The LOW/MEDIUM cut sits at 0.30, and the 30-day model's test-split positive rate is 0.29. So LOW means *less likely to fail than a randomly chosen asset-period*. In a yard of aging rental equipment, nothing qualifies — the scored fleet spans 0.40 to 0.69.
+
+The ordering inside that range is informative, which is the point. Among the mid-band assets the probability tracks `days_since_last_maintenance` monotonically (60d → 0.43, 54d → 0.41, 47d → 0.41, 30d → 0.40), while the three worn assets stay near 0.67 regardless of service recency — EQ-001 has the most recent service in the fleet, 8 days, and still scores 0.691 because `mechanical_wear_score` is saturated. Recent maintenance helps a sound machine and does not rescue a worn one, which is what a maintenance planner would expect.
+
+Two things were deliberately not done to produce a tidier distribution: the age-weighted hazard in the simulator was left alone, and the band thresholds were left alone. The HIGH cut of 0.60 is the operating point the published recall and precision-at-budget were measured at, so moving it would invalidate the numbers on the model page. Recalibrating operating points to a deployment's own base rate is a reasonable next step — it just has to be done by measuring that deployment, not by picking a cut that makes a screenshot look better.
+
 **Why a forward projection engine?**
 Point-in-time predictions answer "what is the risk today?" The projection engine answers "when will this asset cross the HIGH threshold?" — which is the operationally useful question for scheduling maintenance windows.
 
