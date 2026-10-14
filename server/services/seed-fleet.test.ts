@@ -169,3 +169,39 @@ describe("the demo fleet", () => {
     expect(new Set(fleet.map(a => a.serial)).size).toBe(fleet.length);
   });
 });
+
+describe("the ML wake budget", () => {
+  // A seed that loads every table and leaves the risk queue empty is the
+  // expensive failure here, and it happened: both wake attempts ran out of
+  // budget, so training was skipped, the champion was not re-registered, and
+  // nothing was scored -- while every data step reported success.
+  const ORCH = readFileSync(join(__dirname, "seed-orchestrator.ts"), "utf-8");
+
+  it("does not borrow the per-request health timeout", () => {
+    // ML_HEALTH_TIMEOUT_MS bounds a single request in
+    // predictive-maintenance-fixed.ts. Reusing it as a total wake budget gave
+    // one name two meanings, so tuning either silently moved the other.
+    const line = ORCH.match(/const ML_WAKE_TIMEOUT_MS\s*=\s*[^;]+;/);
+    expect(line, "ML_WAKE_TIMEOUT_MS not found").not.toBeNull();
+    expect(line![0]).not.toMatch(/ML_HEALTH_TIMEOUT_MS/);
+    expect(line![0]).toMatch(/ML_WAKE_TIMEOUT_MS/);
+  });
+
+  it("allows many attempts, not one", () => {
+    // The cold start measured 51-62s and the host holds the connection for all
+    // of it, so the budget must be several multiples of a probe.
+    const budget = Number(ORCH.match(/ML_WAKE_TIMEOUT_MS\s*\?\?\s*([\d_]+)/)![1].replace(/_/g, ""));
+    const probe = Number(ORCH.match(/ML_WAKE_PROBE_MS\s*\?\?\s*([\d_]+)/)![1].replace(/_/g, ""));
+
+    expect(budget).toBeGreaterThanOrEqual(180_000);
+    expect(probe).toBeGreaterThan(0);
+    expect(budget / probe).toBeGreaterThanOrEqual(5);
+  });
+
+  it("bounds each probe, so one hung request cannot eat the budget", () => {
+    const fn = ORCH.match(/async function waitForMlService[\s\S]*?\n}/)![0];
+    expect(fn).toMatch(/AbortController/);
+    expect(fn).toMatch(/signal:\s*controller\.signal/);
+    expect(fn).toMatch(/ML_WAKE_PROBE_MS/);
+  });
+});

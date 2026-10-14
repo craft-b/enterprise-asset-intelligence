@@ -102,6 +102,14 @@ services:
         value: "90000"
       - key: ML_TIMEOUT_MS
         value: "120000"
+      # How long the seed keeps trying to wake a suspended ML service, and the
+      # ceiling on any one health probe. A suspended instance holds the
+      # connection open for the whole cold start (measured 51-62s), so without
+      # a per-probe bound the budget buys a single attempt.
+      - key: ML_WAKE_TIMEOUT_MS
+        value: "300000"
+      - key: ML_WAKE_PROBE_MS
+        value: "20000"
 
       - key: MODEL_VERSION
         value: v1

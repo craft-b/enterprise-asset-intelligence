@@ -556,19 +556,41 @@ async function waitForMlService(stepIndex: number, timeoutMs: number): Promise<b
   let attempt = 0;
   while (Date.now() < deadline) {
     attempt++;
+    // Each probe is bounded. Without this the call inherits fetch's lack of a
+    // timeout, and a suspended container does not refuse the connection -- the
+    // host holds it open for the whole cold start, measured at 51-62s. One
+    // such attempt consumed almost the entire budget, so the loop got one try
+    // rather than the dozen it looks like it takes.
+    const controller = new AbortController();
+    const probe = setTimeout(() => controller.abort(), ML_WAKE_PROBE_MS);
     try {
-      const res = await mlFetch("/health");
+      const res = await mlFetch("/health", { signal: controller.signal });
       if (res.ok) return true;
     } catch {
-      // not up yet
+      // not up yet; the container keeps booting whether or not we wait on it
+    } finally {
+      clearTimeout(probe);
     }
-    setStep(stepIndex, "running", `Waking the ML service… (attempt ${attempt})`);
+    const left = Math.max(0, Math.round((deadline - Date.now()) / 1000));
+    setStep(stepIndex, "running", `Waking the ML service… (attempt ${attempt}, ${left}s left)`);
     await sleep(5000);
   }
   return false;
 }
 
-const ML_WAKE_TIMEOUT_MS = Number(process.env.ML_HEALTH_TIMEOUT_MS ?? 90_000);
+// How long to keep trying to wake the ML service, and how long any single
+// health probe may take.
+//
+// Deliberately NOT ML_HEALTH_TIMEOUT_MS: that one is a per-request timeout in
+// services/predictive-maintenance-fixed.ts, and reusing it here gave one name
+// two meanings. Raising it to cover a cold start silently lengthened every
+// health check; lowering it to tighten those silently shortened the wake
+// budget to the point of uselessness.
+//
+// The default is generous because the failure it prevents is expensive: a seed
+// that loads every table and then has nothing to show in the risk queue.
+const ML_WAKE_TIMEOUT_MS = Number(process.env.ML_WAKE_TIMEOUT_MS ?? 300_000);
+const ML_WAKE_PROBE_MS = Number(process.env.ML_WAKE_PROBE_MS ?? 20_000);
 
 /** The message for a service that never answered, written once. */
 const ML_ASLEEP =
