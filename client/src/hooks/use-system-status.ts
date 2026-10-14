@@ -37,7 +37,11 @@ export function useSeedStatus(enabled: boolean) {
   return useQuery<SeedJobStatus>({
     queryKey: ["/api/admin/seed/status"],
     queryFn: async () => {
-      const res = await fetch("/api/admin/seed/status", { credentials: "include" });
+      // Polled on a timer: a cached body here is a frozen progress bar.
+      const res = await fetch("/api/admin/seed/status", {
+        credentials: "include",
+        cache: "no-store",
+      });
       if (!res.ok) throw new Error("Failed to fetch seed status");
       return res.json();
     },

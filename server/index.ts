@@ -19,6 +19,9 @@ import { toMlSnapshot } from "./services/multi-horizon-scoring";
 import { summariseBody } from "./services/request-log";
 
 const app = express();
+// No ETag on API responses: with no-store it is redundant, and it is the
+// mechanism that produced the 304s above.
+app.set("etag", false);
 const httpServer = createServer(app);
 
 declare module "http" {
@@ -50,6 +53,25 @@ export function log(message: string, source = "express") {
   });
   console.log(`${formattedTime} [${source}] ${message}`);
 }
+
+// API responses are never cacheable.
+//
+// Express sends an ETag with every JSON response, so a browser revalidates
+// with If-None-Match and the server answers 304 Not Modified whenever the body
+// is byte-identical. For a status endpoint polled on a timer that is exactly
+// wrong: the seed progress screen polled /api/admin/seed/status every 1.5s,
+// got a run of 304s, and went on rendering the cached payload -- a progress
+// bar frozen on step 4 while the run behind it had moved on and then died.
+//
+// Two call sites had already worked around it with `cache: "no-store"` on the
+// fetch, which fixes those two and leaves every other one exposed. This is the
+// same statement made once, where no new endpoint can forget it. no-store also
+// stops any proxy in front of the API holding a copy.
+app.use("/api", (_req, res, next) => {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate");
+  res.set("Pragma", "no-cache");
+  next();
+});
 
 app.use((req, res, next) => {
   const start = Date.now();
