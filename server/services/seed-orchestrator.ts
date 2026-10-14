@@ -153,6 +153,65 @@ export async function startSeedJob(): Promise<{ started: boolean; message: strin
   return { started: true, message: "Seed pipeline started" };
 }
 
+/**
+ * What a scoring pass means, as a value rather than a chain of ifs.
+ *
+ * The chain this replaces had a hole: a service that failed its health check
+ * comes back as { predictions: [], attempted: 0 }, and `attempted > 0 &&
+ * predictions.length === 0` is false when attempted is 0, as is
+ * `predictions.length < attempted`. So it fell through to the success branch
+ * and reported "0 predictions generated" as completed, with a green check and
+ * no warning -- the exact failure the branch above it was written to stop, and
+ * the reason a seed finished with an empty risk queue and said nothing.
+ *
+ * serviceAvailable existed to distinguish that case and was simply never read.
+ * Pulling the decision out of the pipeline makes every combination something a
+ * test can enumerate, which is the only reason this one was ever going to be
+ * found.
+ */
+export function classifyScoringOutcome(outcome: {
+  predictions: unknown[];
+  attempted: number;
+  serviceAvailable: boolean;
+  firstError?: string;
+}): { status: StepStatus; detail: string; warning?: string } {
+  const scored = outcome.predictions.length;
+  const retry = ' Use "Score Fleet" on the ML dashboard to retry.';
+
+  if (!outcome.serviceAvailable) {
+    return {
+      status: "failed",
+      detail: "Skipped — the ML service stopped responding",
+      warning:
+        "No assets were scored: the ML service stopped responding, so the " +
+        "risk queue is empty." + retry,
+    };
+  }
+
+  // Zero is never a success, whatever attempted says. Tying this to attempted
+  // is what let a zero through.
+  if (scored === 0) {
+    const why = outcome.firstError ?? "no reason reported";
+    return {
+      status: "failed",
+      detail: `Scored 0 of ${outcome.attempted} — ${why}`.slice(0, 300),
+      warning: `No assets were scored (${why}), so the risk queue is empty.` + retry,
+    };
+  }
+
+  if (scored < outcome.attempted) {
+    return {
+      status: "completed",
+      detail: `${scored} of ${outcome.attempted} predictions generated`,
+      warning:
+        `${outcome.attempted - scored} of ${outcome.attempted} assets could not be scored` +
+        (outcome.firstError ? ` (${outcome.firstError})` : "") + ".",
+    };
+  }
+
+  return { status: "completed", detail: `${scored} predictions generated` };
+}
+
 async function runSeedPipeline() {
   const cursorDate = new Date(SEED_CURSOR);
 
@@ -262,25 +321,24 @@ async function runSeedPipeline() {
       addWarning(`No assets were scored: ${ML_ASLEEP} Use "Score Fleet" on the ML dashboard to retry.`);
     } else {
       setStep(8, "running", "Scoring fleet…");
-      const { predictions, attempted, firstError } =
-        await predictiveMaintenanceService.predictAllEquipmentWithOutcome();
+      let outcome = await predictiveMaintenanceService.predictAllEquipmentWithOutcome();
 
-      if (attempted > 0 && predictions.length === 0) {
-        const why = firstError ?? "no reason reported";
-        setStep(8, "failed", `Scored 0 of ${attempted} — ${why}`.slice(0, 300));
-        addWarning(
-          `No assets were scored (${why}), so the risk queue is empty. ` +
-          `Use "Score Fleet" on the ML dashboard to retry.`
-        );
-      } else if (predictions.length < attempted) {
-        setStep(8, "completed", `${predictions.length} of ${attempted} predictions generated`);
-        addWarning(
-          `${attempted - predictions.length} of ${attempted} assets could not be scored` +
-          (firstError ? ` (${firstError})` : "") + "."
-        );
-      } else {
-        setStep(8, "completed", `${predictions.length} predictions generated`);
+      // Training runs a subprocess in the same 512MB instance and can take the
+      // container down with it -- a run that reports "exit code 1" may leave
+      // the service restarting, so the health check a moment later fails even
+      // though the service was up when training began. One re-wake and retry,
+      // rather than declaring the risk queue empty over a restart we caused.
+      if (!outcome.serviceAvailable) {
+        setStep(8, "running", "ML service restarted after training; waiting…");
+        if (await waitForMlService(8, ML_WAKE_TIMEOUT_MS)) {
+          setStep(8, "running", "Scoring fleet…");
+          outcome = await predictiveMaintenanceService.predictAllEquipmentWithOutcome();
+        }
       }
+
+      const verdict = classifyScoringOutcome(outcome);
+      setStep(8, verdict.status, verdict.detail);
+      if (verdict.warning) addWarning(verdict.warning);
     }
 
     // ── Step 9: Drift reference ────────────────────────────────────────────
