@@ -22,6 +22,7 @@ import { evaluatePMSchedule, generatePMDescription, samplePMCost, MaintenanceTyp
 import { startSeedJob, getSeedStatus, getSystemStatus, resetSystem } from "./services/seed-orchestrator";
 import { mlFetch, describeMlFailure } from "./services/ml-client";
 import { getSimulationDate } from "./services/simulation-clock";
+import { scoreFleetMultiHorizon, toMlSnapshot } from "./services/multi-horizon-scoring";
 import { IMPUTATION_DEFAULTS, isColdStart, coldStartMultiHorizon } from "./services/imputation";
 
 declare module "express-session" {
@@ -938,40 +939,9 @@ export async function registerRoutes(
         try {
           const snapshotDate = await getSimulationDate();
           const snapshot = await enhancedFeatureService.generateSnapshot(input.equipmentId, snapshotDate);
-          const payload = {
-            equipment_id:                input.equipmentId,
-            asset_age_years:             snapshot.assetAgeYears,
-            category:                    snapshot.category,
-            total_hours_lifetime:        snapshot.totalHoursLifetime,
-            hours_used_30d:              snapshot.hoursUsed30d,
-            hours_used_90d:              snapshot.hoursUsed90d,
-            rental_days_30d:             Math.round(snapshot.rentalDays30d),
-            rental_days_90d:             Math.round(snapshot.rentalDays90d),
-            avg_rental_duration:         snapshot.avgRentalDuration,
-            maintenance_events_90d:      snapshot.maintenanceEvents90d,
-            maintenance_cost_180d:       snapshot.maintenanceCost180d,
-            avg_downtime_per_event:      snapshot.avgDowntimePerEvent,
-            days_since_last_maintenance: Math.max(0, snapshot.daysSinceLastMaintenance ?? IMPUTATION_DEFAULTS.days_since_last_maintenance),
-            mean_time_between_failures:  snapshot.meanTimeBetweenFailures ?? IMPUTATION_DEFAULTS.mean_time_between_failures,
-            vendor_reliability_score:    snapshot.vendorReliabilityScore,
-            jobsite_risk_score:          snapshot.jobSiteRiskScore,
-            usage_intensity:             Math.min(snapshot.usageIntensity, 12),
-            usage_trend:                 Math.min(Math.max(snapshot.usageTrend, 0.5), 3.0),
-            utilization_vs_expected:     snapshot.utilizationVsExpected,
-            wear_rate:                   snapshot.wearRate,
-            aging_factor:                Math.min(snapshot.agingFactor, 1.0),
-            maint_overdue:               snapshot.maintOverdue,
-            cost_per_event:              snapshot.costPerEvent,
-            maint_burden:                snapshot.maintBurden,
-            mechanical_wear_score:       Math.min(snapshot.mechanicalWearScore, 10),
-            abuse_score:                 Math.min(snapshot.abuseScore, 10),
-            neglect_score:               Math.min(Math.max(0, snapshot.neglectScore), 10),
-            maint_frequency_trend:       snapshot.maintFrequencyTrend ?? 1.0,
-            cost_trend:                  snapshot.costTrend ?? 1.0,
-            hours_velocity:              snapshot.hoursVelocity ?? 1.0,
-            neglect_acceleration:        snapshot.neglectAcceleration ?? 1.0,
-            sensor_degradation_rate:     snapshot.sensorDegradationRate ?? 0,
-          };
+          // Same clamped payload the batch path builds; one definition in
+          // services/multi-horizon-scoring.ts so the bounds cannot drift apart.
+          const payload = toMlSnapshot(input.equipmentId, snapshot);
 
           const fastapiRes = await mlFetch('/predict/multi-horizon', {
             method: 'POST',
@@ -1049,128 +1019,32 @@ export async function registerRoutes(
     try {
       const { equipmentIds } = api.riskScore.batch.input.parse(req.body);
 
-      const [stateRows] = await db.execute(sql`SELECT cursor_date FROM simulation_state WHERE id = 1`) as any;
-      const snapshotDate = stateRows[0]?.cursor_date ? new Date(stateRows[0].cursor_date) : new Date();
-      console.log(`[MH-BATCH] Using snapshot date: ${snapshotDate.toISOString().split('T')[0]}`);
+      // The work lives in services/multi-horizon-scoring.ts so the seed can
+      // run it too. While it was inline here, the only way to populate
+      // equipment_failure_predictions was for someone to press a button --
+      // and that table backs the Fleet Command Center, so a freshly seeded
+      // system opened on "No predictions yet".
+      const outcome = await scoreFleetMultiHorizon(equipmentIds);
 
-      const snapshots = await Promise.all(equipmentIds.map(async (id: number) => {
-        try {
-          return { equipmentId: id, snapshot: await enhancedFeatureService.generateSnapshot(id, snapshotDate) };
-        } catch (err) {
-          console.error(`[MH-BATCH] Failed snapshot for EQ-${id}:`, err);
-          return null;
-        }
-      }));
-
-      const validSnapshots = snapshots.filter(Boolean) as { equipmentId: number; snapshot: any }[];
-      const manualResults: any[] = [];
-      const snapshotsToScore: any[] = [];
-      const indicesToScore: number[] = [];
-
-      for (let i = 0; i < validSnapshots.length; i++) {
-        const { equipmentId: eqId, snapshot } = validSnapshots[i];
-
-        if (isColdStart(snapshot.assetAgeYears, snapshot.totalHoursLifetime)) {
-          // ML-10: rule-scored, tagged so it is never mistaken for model output
-          const cs = coldStartMultiHorizon(eqId);
-          manualResults.push({
-            equipmentId: eqId,
-            modelVersion: cs.model_version,
-            riskTrend: cs.risk_trend,
-            predictions: cs.predictions,
-            recommendation: cs.recommendation,
-          });
-        } else {
-          snapshotsToScore.push({
-            equipment_id:                eqId,
-            asset_age_years:             snapshot.assetAgeYears,
-            category:                    snapshot.category,
-            total_hours_lifetime:        snapshot.totalHoursLifetime,
-            hours_used_30d:              snapshot.hoursUsed30d,
-            hours_used_90d:              snapshot.hoursUsed90d,
-            rental_days_30d:             Math.round(snapshot.rentalDays30d),
-            rental_days_90d:             Math.round(snapshot.rentalDays90d),
-            avg_rental_duration:         snapshot.avgRentalDuration,
-            maintenance_events_90d:      snapshot.maintenanceEvents90d,
-            maintenance_cost_180d:       snapshot.maintenanceCost180d,
-            avg_downtime_per_event:      snapshot.avgDowntimePerEvent,
-            days_since_last_maintenance: Math.max(0, snapshot.daysSinceLastMaintenance ?? IMPUTATION_DEFAULTS.days_since_last_maintenance),
-            mean_time_between_failures:  snapshot.meanTimeBetweenFailures ?? IMPUTATION_DEFAULTS.mean_time_between_failures,
-            vendor_reliability_score:    snapshot.vendorReliabilityScore,
-            jobsite_risk_score:          snapshot.jobSiteRiskScore,
-            usage_intensity:             Math.min(snapshot.usageIntensity, 12),
-            usage_trend:                 Math.min(Math.max(snapshot.usageTrend, 0.5), 3.0),
-            utilization_vs_expected:     snapshot.utilizationVsExpected,
-            wear_rate:                   snapshot.wearRate,
-            aging_factor:                Math.min(snapshot.agingFactor, 1.0),
-            maint_overdue:               snapshot.maintOverdue,
-            cost_per_event:              snapshot.costPerEvent,
-            maint_burden:                snapshot.maintBurden,
-            mechanical_wear_score:       Math.min(snapshot.mechanicalWearScore, 10),
-            abuse_score:                 Math.min(snapshot.abuseScore, 10),
-            neglect_score:               Math.min(Math.max(0, snapshot.neglectScore), 10),
-            wear_rate_velocity:          snapshot.wearRateVelocity ?? 0,
-            maint_frequency_trend:       snapshot.maintFrequencyTrend ?? 1.0,
-            cost_trend:                  snapshot.costTrend ?? 1.0,
-            hours_velocity:              snapshot.hoursVelocity ?? 1.0,
-            neglect_acceleration:        snapshot.neglectAcceleration ?? 1.0,
-            sensor_degradation_rate:     snapshot.sensorDegradationRate ?? 0,
-          });
-          indicesToScore.push(i);
-        }
+      if (!outcome.serviceAvailable) {
+        return res.status(503).json({
+          message:
+            'The ML service is not responding. On free hosting it suspends when idle — ' +
+            'give it a minute and try again.',
+          detail: outcome.firstError,
+        });
       }
-
-      const fastapiRes = await mlFetch('/predict/multi-horizon/batch', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ snapshots: snapshotsToScore }),
-      });
-
-      // Summarised, not the raw body: a sleeping container answers with a
-      // full HTML error page, which this used to forward into the UI.
-      if (!fastapiRes.ok) {
-        throw new Error(
-          `ML batch scoring failed - ${await describeMlFailure(fastapiRes, "/predict/multi-horizon/batch")}`
-        );
-      }
-
-      const batchOutput = await fastapiRes.json();
-      const fastapiResults = batchOutput.predictions.map((pred: any, idx: number) => ({
-        equipmentId:    validSnapshots[indicesToScore[idx]].equipmentId,
-        modelVersion:   pred.model_version,
-        riskTrend:      pred.risk_trend,
-        predictions:    pred.predictions,
-        recommendation: pred.recommendation,
-      }));
-
-      const results = [...fastapiResults, ...manualResults];
-
-      for (const result of results) {
-        const p = result.predictions;
-        await db.insert(equipmentFailurePredictions).values({
-          equipmentId:    result.equipmentId,
-          modelVersion:   result.modelVersion,
-          riskTrend:      result.riskTrend,
-          prob10d:        p['10d'].failure_probability.toString(),
-          riskLevel10d:   p['10d'].risk_level,
-          prob30d:        p['30d'].failure_probability.toString(),
-          riskLevel30d:   p['30d'].risk_level,
-          prob60d:        p['60d'].failure_probability.toString(),
-          riskLevel60d:   p['60d'].risk_level,
-          topDrivers10d:  JSON.stringify(Object.keys(p['10d'].top_risk_drivers || {})),
-          topDrivers30d:  JSON.stringify(Object.keys(p['30d'].top_risk_drivers || {})),
-          topDrivers60d:  JSON.stringify(Object.keys(p['60d'].top_risk_drivers || {})),
-          shapAttribution10d: JSON.stringify(p['10d'].shap_attribution || {}),
-          shapAttribution30d: JSON.stringify(p['30d'].shap_attribution || {}),
-          shapAttribution60d: JSON.stringify(p['60d'].shap_attribution || {}),
-          recommendation: result.recommendation,
+      if (outcome.results.length === 0 && outcome.attempted > 0) {
+        return res.status(502).json({
+          message: `Scored 0 of ${outcome.attempted} assets. ${outcome.firstError ?? 'No reason reported.'}`,
         });
       }
 
-      res.json(results);
-    } catch (error) {
+      // The shape callers already expect: the results array, nothing more.
+      res.json(outcome.results);
+    } catch (error: any) {
       console.error('Multi-horizon batch error:', error);
-      res.status(500).json({ message: 'Failed to calculate multi-horizon predictions' });
+      res.status(500).json({ message: error?.message ?? 'Failed to calculate multi-horizon predictions' });
     }
   });
 

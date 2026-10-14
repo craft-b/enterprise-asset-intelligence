@@ -15,6 +15,7 @@ import { IMPUTATION_DEFAULTS } from "./services/imputation";
 import { evaluatePMSchedule, generatePMDescription, samplePMCost, MaintenanceTypeKey } from "./services/pm-scheduler";
 import { mlFetch } from "./services/ml-client";
 import { registerChampionIfMissing } from "./services/champion-metrics";
+import { toMlSnapshot } from "./services/multi-horizon-scoring";
 import { summariseBody } from "./services/request-log";
 
 const app = express();
@@ -161,41 +162,8 @@ async function runDriftRescore() {
       try {
         const snapshot = await enhancedFeatureService.generateSnapshot(equipId, snapshotDate);
 
-        const payload = {
-          equipment_id:                equipId,
-          asset_age_years:             snapshot.assetAgeYears,
-          category:                    snapshot.category,
-          total_hours_lifetime:        snapshot.totalHoursLifetime,
-          hours_used_30d:              snapshot.hoursUsed30d,
-          hours_used_90d:              snapshot.hoursUsed90d,
-          rental_days_30d:             Math.round(snapshot.rentalDays30d),
-          rental_days_90d:             Math.round(snapshot.rentalDays90d),
-          avg_rental_duration:         snapshot.avgRentalDuration,
-          maintenance_events_90d:      snapshot.maintenanceEvents90d,
-          maintenance_cost_180d:       snapshot.maintenanceCost180d,
-          avg_downtime_per_event:      snapshot.avgDowntimePerEvent,
-          days_since_last_maintenance: Math.max(0, snapshot.daysSinceLastMaintenance ?? IMPUTATION_DEFAULTS.days_since_last_maintenance),
-          mean_time_between_failures:  snapshot.meanTimeBetweenFailures ?? IMPUTATION_DEFAULTS.mean_time_between_failures,
-          vendor_reliability_score:    snapshot.vendorReliabilityScore,
-          jobsite_risk_score:          snapshot.jobSiteRiskScore,
-          usage_intensity:             Math.min(snapshot.usageIntensity, 12),
-          usage_trend:                 Math.min(Math.max(snapshot.usageTrend, 0.5), 3.0),
-          utilization_vs_expected:     snapshot.utilizationVsExpected,
-          wear_rate:                   snapshot.wearRate,
-          aging_factor:                Math.min(snapshot.agingFactor, 1.0),
-          maint_overdue:               snapshot.maintOverdue,
-          cost_per_event:              snapshot.costPerEvent,
-          maint_burden:                snapshot.maintBurden,
-          mechanical_wear_score:       Math.min(snapshot.mechanicalWearScore, 10),
-          abuse_score:                 Math.min(snapshot.abuseScore, 10),
-          neglect_score:               Math.min(Math.max(0, snapshot.neglectScore), 10),
-          wear_rate_velocity:          snapshot.wearRateVelocity ?? 0,
-          maint_frequency_trend:       snapshot.maintFrequencyTrend ?? 1.0,
-          cost_trend:                  snapshot.costTrend ?? 1.0,
-          hours_velocity:              snapshot.hoursVelocity ?? 1.0,
-          neglect_acceleration:        snapshot.neglectAcceleration ?? 1.0,
-          sensor_degradation_rate:     snapshot.sensorDegradationRate ?? 0,
-        };
+        // One definition, in services/multi-horizon-scoring.ts.
+        const payload = toMlSnapshot(equipId, snapshot);
 
         const fastapiRes = await mlFetch("/predict/multi-horizon", {
           method: "POST",

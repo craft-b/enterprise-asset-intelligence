@@ -26,6 +26,7 @@ import { featureEngineeringService } from "./feature-engineering";
 import { predictiveMaintenanceService } from "./predictive-maintenance-fixed";
 import { mlFetch, describeMlFailure } from "./ml-client";
 import { registerChampionMetrics } from "./champion-metrics";
+import { scoreFleetMultiHorizon } from "./multi-horizon-scoring";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SEED CURSOR DATE — the "today" date used for all seeded data
@@ -337,7 +338,37 @@ async function runSeedPipeline() {
       }
 
       const verdict = classifyScoringOutcome(outcome);
-      setStep(8, verdict.status, verdict.detail);
+
+      // The multi-horizon table is a second, richer store: a forecast per
+      // horizon with its own SHAP attribution. It backs the Fleet Command
+      // Center, the asset and equipment detail views and the feedback-loop
+      // analytics, and the seed never wrote it -- so a freshly seeded system
+      // opened on a command centre reading "No predictions yet" while the
+      // summary table it does fill sat populated behind a page that does not
+      // read it.
+      let horizonDetail = "";
+      if (verdict.status === "completed") {
+        setStep(8, "running", "Scoring 10/30/60-day horizons…");
+        const mh = await scoreFleetMultiHorizon(equipmentIds);
+        const mhVerdict = classifyScoringOutcome({
+          predictions: mh.results,
+          attempted: mh.attempted,
+          serviceAvailable: mh.serviceAvailable,
+          firstError: mh.firstError,
+        });
+        if (mhVerdict.status === "completed") {
+          horizonDetail = ` · ${mh.results.length} multi-horizon`;
+        } else {
+          horizonDetail = " · multi-horizon skipped";
+          addWarning(
+            `The 10/30/60-day forecasts were not generated (${mh.firstError ?? "no reason reported"}), ` +
+            `so the Fleet Command Center will be empty. Use "Run Predictions" on ` +
+            `Predictive Maintenance to retry.`
+          );
+        }
+      }
+
+      setStep(8, verdict.status, verdict.detail + horizonDetail);
       if (verdict.warning) addWarning(verdict.warning);
     }
 
