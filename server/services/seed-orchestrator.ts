@@ -484,12 +484,21 @@ async function seedEquipment(cursorDate: Date) {
       const nextDue   = new Date(cursorDate.getTime() + 60 * 24 * 3600 * 1000)
         .toISOString().split("T")[0];
 
+      // created_at is set to the event's own date, not the moment of seeding.
+      //
+      // The risk queue discounts a unit's displayed probability when
+      // maintenance was logged in the last 24 hours -- the point being that
+      // logging a repair during a session visibly lowers risk. Seeded history
+      // defaulted created_at to now, so a January inspection looked like it
+      // had just been entered, and six units were shown 25% below what the
+      // model actually predicted. The Command Center read 1 HIGH where the
+      // model said 3.
       await db.execute(sql`
         INSERT INTO maintenance_events
-          (equipment_id, maintenance_date, maintenance_type, event_source, cost, description, next_due_date)
+          (equipment_id, maintenance_date, maintenance_type, event_source, cost, description, next_due_date, created_at)
         VALUES
           (${eqId}, ${lastMaint}, 'INSPECTION', 'SCHEDULED_PM', 150.00,
-           ${'Pre-seed inspection — ' + e.category}, ${nextDue})
+           ${'Pre-seed inspection — ' + e.category}, ${nextDue}, ${lastMaint + " 09:00:00"})
       `);
     } catch {
       // Already exists — skip
@@ -659,13 +668,15 @@ async function seedFailureEvents(
       const cost       = (800 + Math.random() * 1200).toFixed(2);
 
       try {
+        // Dated when it happened, recorded when it happened. See the note on
+        // the inspection insert above.
         await db.execute(sql`
           INSERT INTO maintenance_events
-            (equipment_id, maintenance_date, maintenance_type, cost, description, next_due_date, event_source)
+            (equipment_id, maintenance_date, maintenance_type, cost, description, next_due_date, event_source, created_at)
           VALUES (
             ${row.id}, ${failStr}, 'MAJOR_SERVICE', ${cost},
             ${"Seeded failure event — age-based hazard (training data)"},
-            ${nextDueStr}, 'REACTIVE_REPAIR'
+            ${nextDueStr}, 'REACTIVE_REPAIR', ${failStr + " 09:00:00"}
           )
         `);
         inserted++;
