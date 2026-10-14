@@ -1,17 +1,18 @@
 // client/src/pages/setup-claims.test.ts
 //
-// The Start Fresh card described a capability the system does not have:
-// "Connect real sensor data sources". Nothing accepts a sensor reading — the
-// only writes to sensor_data_logs come from the simulator, and
-// services/data-logger.ts is called by nothing.
+// The Start Fresh card once described a capability the system did not have:
+// "Connect real sensor data sources", at a time when nothing accepted a
+// sensor reading from outside.
 //
 // That matters more here than it would in most projects. This one argues that
 // its metrics are reported honestly, with the simulated data, the oracle
 // ceiling and the SHAP circularity all disclosed. A UI overstating what the
 // product does is the one place that argument cannot survive.
 //
-// So this test ties the claim to the endpoint: if ingestion is ever built, it
-// fails and asks for the copy back.
+// Ingestion was subsequently built -- services/sensor-ingest.ts, behind a CSV
+// upload -- so the claim is now true and this test holds the pairing from the
+// other side: the copy is allowed precisely because the endpoint exists, and
+// should go again if it ever does not.
 
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";

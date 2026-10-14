@@ -174,8 +174,9 @@ export default function SetupPage() {
             </div>
             <CardTitle>Loading Demo Data</CardTitle>
             <CardDescription>
-              Seeding equipment, sensors, maintenance history and training the ML model. This takes
-              about 60–90 seconds.
+              Seeding equipment, sensors, maintenance history, then scoring the fleet.
+              Usually two to five minutes: the ML service suspends when idle on free
+              hosting, and two of the steps wait for it to start.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
