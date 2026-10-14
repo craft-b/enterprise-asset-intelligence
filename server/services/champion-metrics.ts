@@ -100,10 +100,27 @@ export function flattenHorizonMetadata(horizon: number, meta: Record<string, any
 
   // Confusion matrix. Upper-case in the metadata, lower-case suffixes in the
   // table, where the route reassembles them into a confusion object.
-  push(rows, horizon, "temporal", "confusion_tn", meta.confusion_matrix?.TN);
-  push(rows, horizon, "temporal", "confusion_fp", meta.confusion_matrix?.FP);
-  push(rows, horizon, "temporal", "confusion_fn", meta.confusion_matrix?.FN);
-  push(rows, horizon, "temporal", "confusion_tp", meta.confusion_matrix?.TP);
+  const cm = meta.confusion_matrix ?? {};
+  push(rows, horizon, "temporal", "confusion_tn", cm.TN);
+  push(rows, horizon, "temporal", "confusion_fp", cm.FP);
+  push(rows, horizon, "temporal", "confusion_fn", cm.FN);
+  push(rows, horizon, "temporal", "confusion_tp", cm.TP);
+
+  // The positive rate OF THE TEST SPLIT, derived from the confusion matrix.
+  //
+  // Not meta.positive_rate: that is the rate across the whole dataset (0.5004
+  // at v1.17), while the test split's is 0.29. The dashboard uses this as the
+  // PR-AUC baseline and as the "never fails" accuracy comparison, so the
+  // wrong one would overstate how hard the problem is and flatter the model.
+  // Taking meta.positive_rate would have been close enough to look right and
+  // wrong enough to matter.
+  const testTotal = [cm.TN, cm.FP, cm.FN, cm.TP].reduce(
+    (sum: number, v: unknown) => sum + (Number.isFinite(Number(v)) ? Number(v) : 0), 0
+  );
+  if (testTotal > 0) {
+    push(rows, horizon, "temporal", "positive_rate_test",
+      (Number(cm.FN ?? 0) + Number(cm.TP ?? 0)) / testTotal);
+  }
 
   // Per-class rates. "failure" is the positive class.
   push(rows, horizon, "temporal", "precision_failure", meta.per_class?.failure?.precision);

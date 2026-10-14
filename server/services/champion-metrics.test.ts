@@ -224,3 +224,31 @@ describe("the metric names the dashboard actually reads", () => {
     ).toEqual([]);
   });
 });
+
+describe("the positive rate the dashboard actually reads", () => {
+  const rows = rowsFor(META_30D);
+
+  it("derives the test split's rate from the confusion matrix", () => {
+    // (FN + TP) / all = (143 + 485) / 2166
+    expect(value(rows, "positive_rate_test")).toBeCloseTo(628 / 2166, 6);
+  });
+
+  it("does not pass off the whole-dataset rate as the test split's", () => {
+    // meta.positive_rate is 0.5004 across the full dataset; the test split is
+    // 0.29. The dashboard uses this as the PR-AUC baseline and the "never
+    // fails" accuracy comparison, so the wrong one flatters the model.
+    expect(value(rows, "positive_rate_test")).not.toBeCloseTo(0.5004, 3);
+    expect(value(rows, "positive_rate_test")!).toBeLessThan(0.35);
+  });
+
+  it("agrees with the reported class support", () => {
+    // per_class.failure.support is the same quantity by another route.
+    const fromSupport = META_30D.per_class.failure.support / META_30D.samples_test;
+    expect(value(rows, "positive_rate_test")).toBeCloseTo(fromSupport, 6);
+  });
+
+  it("omits it rather than dividing by zero", () => {
+    const out = rowsFor({ roc_auc: 0.8, confusion_matrix: { TN: 0, FP: 0, FN: 0, TP: 0 } });
+    expect(out.some(r => r.metric === "positive_rate_test")).toBe(false);
+  });
+});
