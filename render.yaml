@@ -116,7 +116,7 @@ services:
       - key: ML_WAKE_TIMEOUT_MS
         value: "300000"
       - key: ML_WAKE_PROBE_MS
-        value: "20000"
+        value: "120000"
 
       - key: MODEL_VERSION
         value: v1

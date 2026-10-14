@@ -225,15 +225,20 @@ describe("the ML wake budget", () => {
     expect(line![0]).toMatch(/ML_WAKE_TIMEOUT_MS/);
   });
 
-  it("allows many attempts, not one", () => {
-    // The cold start measured 51-62s and the host holds the connection for all
-    // of it, so the budget must be several multiples of a probe.
+  it("lets a single probe outlast a cold start", () => {
+    // The original version of this test asked for the budget to be several
+    // multiples of a probe, which sounds prudent and produced a 20s probe
+    // against a cold start measured at 51s, 62s and then 72s. A suspended
+    // instance holds the connection open while it boots -- that held request
+    // is the wake -- so a probe shorter than the boot can never succeed, and
+    // the budget buys nothing but more failures.
     const budget = Number(ORCH.match(/ML_WAKE_TIMEOUT_MS\s*\?\?\s*([\d_]+)/)![1].replace(/_/g, ""));
     const probe = Number(ORCH.match(/ML_WAKE_PROBE_MS\s*\?\?\s*([\d_]+)/)![1].replace(/_/g, ""));
 
-    expect(budget).toBeGreaterThanOrEqual(180_000);
-    expect(probe).toBeGreaterThan(0);
-    expect(budget / probe).toBeGreaterThanOrEqual(5);
+    // Comfortably past the slowest wake observed, with room for it to worsen.
+    expect(probe).toBeGreaterThanOrEqual(90_000);
+    // And room for more than one attempt if the first finds a dead container.
+    expect(budget).toBeGreaterThanOrEqual(probe * 2);
   });
 
   it("bounds each probe, so one hung request cannot eat the budget", () => {

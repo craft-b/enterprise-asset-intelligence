@@ -731,7 +731,22 @@ async function waitForMlService(stepIndex: number, timeoutMs: number): Promise<b
 // The default is generous because the failure it prevents is expensive: a seed
 // that loads every table and then has nothing to show in the risk queue.
 const ML_WAKE_TIMEOUT_MS = Number(process.env.ML_WAKE_TIMEOUT_MS ?? 300_000);
-const ML_WAKE_PROBE_MS = Number(process.env.ML_WAKE_PROBE_MS ?? 20_000);
+
+/**
+ * Ceiling on one health probe. It has to outlast a cold start.
+ *
+ * A suspended instance does not refuse the connection: the host holds it open
+ * while the container boots and then answers 200. That held request IS the
+ * wake. Measured on this deployment at 51s, 62s and 72s on successive cold
+ * starts, trending upward.
+ *
+ * This was 20s, chosen so a single probe could not consume the whole budget.
+ * The arithmetic was right and the premise was wrong -- against a host that
+ * holds the connection, every probe aborted at 20s and the wake never
+ * completed. Three steps in a row then reported the service unreachable after
+ * five minutes of trying, having never once let a request finish.
+ */
+const ML_WAKE_PROBE_MS = Number(process.env.ML_WAKE_PROBE_MS ?? 120_000);
 
 /** The message for a service that never answered, written once. */
 const ML_ASLEEP =
