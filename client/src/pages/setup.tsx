@@ -49,9 +49,20 @@ export default function SetupPage() {
     }
   }, [systemStatus, mode, didReset]);
 
+  // True once the server has reported the job running at least once. Used to
+  // tell "not started yet" apart from "was running, and now the server has no
+  // record of it".
+  const [sawRunning, setSawRunning] = useState(false);
+
+  // Set when the run disappears mid-flight, which the server cannot report as
+  // a failure because the state that would have said so is gone with it.
+  const [interrupted, setInterrupted] = useState(false);
+
   // Detect completion/failure
   useEffect(() => {
     if (!seedJob) return;
+    if (seedJob.state === "running") setSawRunning(true);
+
     if (seedJob.state === "completed") {
       setMode("done");
       setSeedingStarted(false);
@@ -59,8 +70,17 @@ export default function SetupPage() {
     } else if (seedJob.state === "failed") {
       setMode("done");
       setSeedingStarted(false);
+    } else if (sawRunning && seedJob.state === "idle") {
+      // Progress is held in memory on the API, so a restart takes it with the
+      // job: a deploy, or the host suspending a free instance mid-run. The
+      // server then honestly reports "idle", which this screen used to ignore
+      // -- leaving the progress bar frozen on whichever step it last heard
+      // about, for as long as anyone was willing to watch it.
+      setInterrupted(true);
+      setMode("done");
+      setSeedingStarted(false);
     }
-  }, [seedJob, queryClient]);
+  }, [seedJob, queryClient, sawRunning]);
 
   const startSeedMutation = useMutation({
     mutationFn: async () => {
@@ -206,7 +226,7 @@ export default function SetupPage() {
   }
 
   if (mode === "done") {
-    const success = seedJob?.state === "completed";
+    const success = seedJob?.state === "completed" && !interrupted;
     // Steps that were skipped rather than failed. The ML steps need a service
     // that suspends when idle, so this is the ordinary outcome on free
     // hosting, and the run is still worth keeping.
@@ -228,18 +248,24 @@ export default function SetupPage() {
               )}
             </div>
             <CardTitle>
-              {!success
-                ? "Seeding Failed"
-                : warnings.length > 0
-                  ? "Demo Data Loaded, with gaps"
-                  : "Demo Data Loaded"}
+              {interrupted
+                ? "Setup was interrupted"
+                : !success
+                  ? "Seeding Failed"
+                  : warnings.length > 0
+                    ? "Demo Data Loaded, with gaps"
+                    : "Demo Data Loaded"}
             </CardTitle>
             <CardDescription>
               {/* Claiming "a trained ML model" was false whenever training was
                   skipped, which on free hosting is every run. */}
-              {success
-                ? "10 equipment units, 90 days of sensor data, maintenance history and failure events are loaded."
-                : seedJob?.error ?? "An error occurred during setup."}
+              {interrupted
+                ? "The API restarted before setup finished — a deployment, or the free " +
+                  "instance suspending mid-run. Whatever had been written is still there, " +
+                  "but the run did not complete. Reset and load again."
+                : success
+                  ? "10 equipment units, 90 days of sensor data, maintenance history and failure events are loaded."
+                  : seedJob?.error ?? "An error occurred during setup."}
             </CardDescription>
           </CardHeader>
 
