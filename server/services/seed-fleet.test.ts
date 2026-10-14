@@ -243,3 +243,43 @@ describe("the ML wake budget", () => {
     expect(fn).toMatch(/ML_WAKE_PROBE_MS/);
   });
 });
+
+describe("the sensor seed's query count", () => {
+  // Step 4 wrote 90 days x 10 assets one row at a time, each preceded by a
+  // category lookup and followed by a mileage update: ~2,700 sequential round
+  // trips to a hosted database. The category lookup alone ran 900 times for
+  // ten values that never change. The step has no sub-progress, so minutes of
+  // that looked like a hang, and the obvious reading was that the seed had
+  // stalled.
+  const SRC = readFileSync(join(__dirname, "seed-orchestrator.ts"), "utf-8");
+  const fn = SRC.match(/async function seedSensorData[\s\S]*?\n}/)![0];
+
+  it("found the function", () => {
+    expect(fn).toMatch(/sensor_data_logs/);
+  });
+
+  it("does not look up the category inside the loop", () => {
+    // One query for all of them, before the loop.
+    expect(fn).not.toMatch(/SELECT category FROM equipment WHERE id/);
+    expect(fn).toMatch(/categoryById/);
+  });
+
+  it("inserts in batches rather than row at a time", () => {
+    expect(fn).toMatch(/VALUES \$\{sql\.join\(/);
+  });
+
+  it("updates mileage once per asset, not once per reading", () => {
+    // The accumulator is the tell: hours are summed in memory first.
+    expect(fn).toMatch(/hoursByEquipment/);
+    const updates = fn.match(/UPDATE equipment SET current_mileage/g) ?? [];
+    expect(updates).toHaveLength(1);
+  });
+
+  it("no longer swallows insert errors as duplicates", () => {
+    // INSERT IGNORE already drops a duplicate key, so the catch could only
+    // ever hide a real failure -- which is how a step reports success having
+    // written nothing.
+    expect(fn).not.toMatch(/catch\s*\{\s*\/\/ IGNORE duplicate/);
+    expect(fn).toMatch(/INSERT IGNORE INTO sensor_data_logs/);
+  });
+});

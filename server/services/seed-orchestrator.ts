@@ -510,7 +510,26 @@ async function seedSensorData(
     Compressor: [10, 20], Generator: [12, 22], Hauler: [7, 11], Loader: [7, 11],
   };
 
-  let count = 0;
+  // One query for every category, instead of one per asset per day.
+  //
+  // This used to run 2,700 sequential round trips against a hosted database:
+  // 90 days x 10 assets x (a category lookup, an insert, a mileage update).
+  // The category lookup alone fired 900 times for ten values that never
+  // change. On a free instance talking to TiDB that was minutes of wall clock
+  // in a step whose progress bar does not move, so it read as a hang.
+  const [catRows] = (await db.execute(
+    sql`SELECT id, category FROM equipment
+        WHERE id IN (${sql.join(equipmentIds.map(i => sql`${i}`), sql`, `)})`
+  )) as any;
+  const categoryById = new Map<number, string>(
+    (catRows as any[]).map(r => [Number(r.id), String(r.category ?? "Excavator")])
+  );
+
+  // Build every row first, then write in batches. Hours accumulate in memory
+  // and land as one UPDATE per asset rather than one per reading.
+  const rows: any[] = [];
+  const hoursByEquipment = new Map<number, number>();
+
   for (let d = days; d >= 1; d--) {
     const date = new Date(cursorDate.getTime() - d * 24 * 3600 * 1000);
     const dateStr = date.toISOString().split("T")[0];
@@ -519,51 +538,70 @@ async function seedSensorData(
       const isIdle     = Math.random() < 0.15;
       const isStressed = Math.random() < 0.08;
 
-      // Get category for this equipment
-      const [catRow] = await db.execute(sql`SELECT category FROM equipment WHERE id = ${eqId}`) as any;
-      const category = catRow[0]?.category ?? "Excavator";
+      const category = categoryById.get(eqId) ?? "Excavator";
       const [min, max] = dailyHoursByCategory[category] ?? [5, 9];
       const operatingHours = isIdle ? 0 : parseFloat((min + Math.random() * (max - min)).toFixed(2));
 
-      try {
-        await db.execute(sql`
-          INSERT IGNORE INTO sensor_data_logs
+      rows.push({
+        eqId, dateStr,
+        engineRpm:      isIdle ? 0 : Math.round(1200 + Math.random() * 800 + (isStressed ? 600 : 0)),
+        engineTemp:     isIdle ? 20 : Math.round(80 + Math.random() * 15 + (isStressed ? 25 : 0)),
+        oilPressure:    isIdle ? 0 : Math.round(35 + Math.random() * 15 - (isStressed ? 8 : 0)),
+        coolantTemp:    isIdle ? 20 : Math.round(85 + Math.random() * 10 + (isStressed ? 15 : 0)),
+        fuel:           isIdle ? 0 : parseFloat((8 + Math.random() * 12).toFixed(2)),
+        hydPressure:    isIdle ? 0 : Math.round(2000 + Math.random() * 500),
+        hydTemp:        isIdle ? 20 : Math.round(45 + Math.random() * 20),
+        hydFlow:        isIdle ? 0 : Math.round(1600 + Math.random() * 400),
+        vibX:           parseFloat((0.1 + Math.random() * 0.8 + (isStressed ? 1.2 : 0)).toFixed(3)),
+        vibY:           parseFloat((0.1 + Math.random() * 0.8 + (isStressed ? 1.0 : 0)).toFixed(3)),
+        vibZ:           parseFloat((0.1 + Math.random() * 0.6 + (isStressed ? 0.8 : 0)).toFixed(3)),
+        operatingHours,
+        load:           isIdle ? 0 : Math.round(30 + Math.random() * 60 + (isStressed ? 20 : 0)),
+        idleTime:       parseFloat((Math.random() * 2).toFixed(2)),
+        ambient:        Math.round(10 + Math.random() * 25),
+        warnings:       isStressed ? Math.floor(Math.random() * 3) : 0,
+      });
+
+      if (operatingHours > 0) {
+        hoursByEquipment.set(eqId, (hoursByEquipment.get(eqId) ?? 0) + operatingHours);
+      }
+    }
+  }
+
+  // Matches the batch size services/sensor-ingest.ts already uses against this
+  // database.
+  const CHUNK = 300;
+  let count = 0;
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    const chunk = rows.slice(i, i + CHUNK);
+    const values = chunk.map(r => sql`(
+      ${r.eqId}, ${r.dateStr}, ${r.engineRpm}, ${r.engineTemp}, ${r.oilPressure},
+      ${r.coolantTemp}, ${r.fuel}, ${r.hydPressure}, ${r.hydTemp}, ${r.hydFlow},
+      ${r.vibX}, ${r.vibY}, ${r.vibZ}, ${r.operatingHours}, ${r.load},
+      ${r.idleTime}, ${r.ambient}, ${r.warnings}
+    )`);
+
+    // INSERT IGNORE already drops a duplicate (equipment_id, timestamp), so
+    // nothing here needs a try/catch. The one it had swallowed every error as
+    // "duplicate timestamp", which is how a step can report success having
+    // written nothing.
+    await db.execute(
+      sql`INSERT IGNORE INTO sensor_data_logs
             (equipment_id, timestamp, engine_rpm, engine_temp, oil_pressure, coolant_temp,
              fuel_consumption, hydraulic_pressure, hydraulic_temp, hydraulic_flow_rate,
              vibration_x, vibration_y, vibration_z, operating_hours, load_percentage,
              idle_time, ambient_temp, warning_count)
-          VALUES (
-            ${eqId}, ${dateStr},
-            ${isIdle ? 0 : Math.round(1200 + Math.random() * 800 + (isStressed ? 600 : 0))},
-            ${isIdle ? 20 : Math.round(80 + Math.random() * 15 + (isStressed ? 25 : 0))},
-            ${isIdle ? 0 : Math.round(35 + Math.random() * 15 - (isStressed ? 8 : 0))},
-            ${isIdle ? 20 : Math.round(85 + Math.random() * 10 + (isStressed ? 15 : 0))},
-            ${isIdle ? 0 : parseFloat((8 + Math.random() * 12).toFixed(2))},
-            ${isIdle ? 0 : Math.round(2000 + Math.random() * 500)},
-            ${isIdle ? 20 : Math.round(45 + Math.random() * 20)},
-            ${isIdle ? 0 : Math.round(1600 + Math.random() * 400)},
-            ${parseFloat((0.1 + Math.random() * 0.8 + (isStressed ? 1.2 : 0)).toFixed(3))},
-            ${parseFloat((0.1 + Math.random() * 0.8 + (isStressed ? 1.0 : 0)).toFixed(3))},
-            ${parseFloat((0.1 + Math.random() * 0.6 + (isStressed ? 0.8 : 0)).toFixed(3))},
-            ${operatingHours},
-            ${isIdle ? 0 : Math.round(30 + Math.random() * 60 + (isStressed ? 20 : 0))},
-            ${parseFloat((Math.random() * 2).toFixed(2))},
-            ${Math.round(10 + Math.random() * 25)},
-            ${isStressed ? Math.floor(Math.random() * 3) : 0}
-          )
-        `);
-        count++;
-
-        if (operatingHours > 0) {
-          await db.execute(sql`
-            UPDATE equipment SET current_mileage = current_mileage + ${operatingHours} WHERE id = ${eqId}
-          `);
-        }
-      } catch {
-        // IGNORE duplicate timestamp
-      }
-    }
+          VALUES ${sql.join(values, sql`, `)}`
+    );
+    count += chunk.length;
   }
+
+  for (const [eqId, hours] of Array.from(hoursByEquipment.entries())) {
+    await db.execute(
+      sql`UPDATE equipment SET current_mileage = current_mileage + ${hours.toFixed(2)} WHERE id = ${eqId}`
+    );
+  }
+
   return count;
 }
 
