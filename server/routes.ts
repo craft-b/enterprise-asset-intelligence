@@ -2072,6 +2072,44 @@ export async function registerRoutes(
     }
   });
 
+  // ── ML SERVICE REACHABILITY ──────────────────────────────────────────────
+  //
+  // The ML service sleeps independently of this API, so getting past the
+  // startup gate says nothing about whether predictions, drift or scoring will
+  // answer. Without somewhere to ask, a visitor who lands on an ML page during
+  // that second cold start sees "Failed to fetch drift status" and reasonably
+  // concludes the thing is broken.
+  //
+  // Cheap on purpose: /health is exempt from the service token, touches no
+  // database, and is the same endpoint the host polls. The short timeout is
+  // the point -- the answer wanted here is "is it up right now", not "wait for
+  // it", because waiting is the caller's decision to make.
+  app.get("/api/ml/health", requireAuth, async (req, res) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4_000);
+    try {
+      const mlRes = await mlFetch("/health", { signal: controller.signal });
+      if (!mlRes.ok) {
+        return res.json({ reachable: false, reason: `returned ${mlRes.status}` });
+      }
+      const body = await mlRes.json().catch(() => ({}));
+      res.json({
+        reachable: true,
+        modelVersion: (body as any)?.model_version ?? null,
+        modelLoaded: (body as any)?.model_loaded ?? null,
+      });
+    } catch (err: any) {
+      // An abort or a refused connection both mean "not up yet", which is a
+      // normal state on free hosting rather than an error to surface as 500.
+      res.json({
+        reachable: false,
+        reason: err?.name === "AbortError" ? "no answer within 4s" : "unreachable",
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  });
+
   // ── DRIFT MONITORING ─────────────────────────────────────────────────────
   app.get("/api/ml/drift/latest", requireAuth, async (req, res) => {
     try {

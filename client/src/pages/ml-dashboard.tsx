@@ -31,6 +31,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { useSystemStatus } from "@/hooks/use-system-status";
 import { useAuth } from "@/hooks/use-auth";
+import { MlServiceNotice } from "@/components/ml-service-notice";
 import {
   Activity,
   TrendingUp,
@@ -844,6 +845,10 @@ export default function MLPerformanceDashboard() {
         </div>
         <ScoreFleetButton />
       </div>
+
+      {/* The drift and governance cards below come from the ML service; the
+          metrics above come from the database and are fine either way. */}
+      <MlServiceNotice />
 
       {/* Model provenance strip — version, training date, data source up front */}
       <Alert className="border-border bg-card">

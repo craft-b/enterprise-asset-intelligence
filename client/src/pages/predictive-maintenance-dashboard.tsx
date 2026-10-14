@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useAuth } from "@/hooks/use-auth";
+import { MlServiceNotice } from "@/components/ml-service-notice";
 import {
   useFleetRisk,
   useRunPredictions,
@@ -571,6 +572,8 @@ export default function PredictiveMaintenanceDashboard() {
           </div>
         )}
       </div>
+
+      <MlServiceNotice />
 
       {highRiskCount > 0 && (
         <Alert className="border-red-200 bg-red-50">

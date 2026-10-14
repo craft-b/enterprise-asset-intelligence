@@ -17,8 +17,15 @@ import { Loader2, Moon, AlertTriangle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { waitForApi, type WakeupState } from "@/lib/api-wakeup";
 
-/** Roughly how long a suspended free instance takes, for the progress hint. */
-const TYPICAL_COLD_START_SECONDS = 45;
+/**
+ * How long a suspended free instance actually takes.
+ *
+ * Measured against the deployed services rather than estimated: 51s and 62s
+ * on two cold starts, and the host's own dashboard warns of "50 seconds or
+ * more". The previous value of 45 was optimistic enough that the bar filled
+ * and then kept waiting, which looks worse than a slower honest number.
+ */
+const TYPICAL_COLD_START_SECONDS = 60;
 
 export function ApiGate({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<WakeupState>({
@@ -85,8 +92,11 @@ export function ApiGate({ children }: { children: React.ReactNode }) {
         <>
           This demo runs on free hosting that suspends the API when it's idle, so
           the first request after a quiet period has to start the container.
-          It usually takes about {TYPICAL_COLD_START_SECONDS} seconds. Everything
-          is immediate afterwards.
+          {state.elapsedSeconds > TYPICAL_COLD_START_SECONDS
+            ? " This one is taking longer than the usual minute — still waiting," +
+              " not stuck."
+            : ` It usually takes about ${TYPICAL_COLD_START_SECONDS} seconds.`}{" "}
+          Everything is immediate afterwards.
         </>
       }
       action={
