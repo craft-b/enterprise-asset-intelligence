@@ -18,6 +18,7 @@
 import { db } from "../db";
 import { sql, eq } from "drizzle-orm";
 import { equipment } from "../../shared/schema";
+import { isDuplicateKey } from "../seeds/seed-errors";
 import { seedJobSites } from "../seeds/job-sites";
 import { seedVendors } from "../seeds/vendors";
 import { seedRentals } from "../seeds/rentals";
@@ -500,8 +501,10 @@ async function seedEquipment(cursorDate: Date) {
           (${eqId}, ${lastMaint}, 'INSPECTION', 'SCHEDULED_PM', 150.00,
            ${'Pre-seed inspection — ' + e.category}, ${nextDue}, ${lastMaint + " 09:00:00"})
       `);
-    } catch {
-      // Already exists — skip
+    } catch (err) {
+      // Only a duplicate is expected here; anything else is a real failure and
+      // was being reported as a completed step with fewer rows than it claimed.
+      if (!isDuplicateKey(err)) throw err;
     }
   }
 }
@@ -680,8 +683,11 @@ async function seedFailureEvents(
           )
         `);
         inserted++;
-      } catch {
-        // Duplicate date — skip
+      } catch (err) {
+        // Two failures landing on the same date for one asset is expected and
+        // harmless. Anything else is not, and silently dropping it here is how
+        // a fleet ends up with less failure history than the labels assume.
+        if (!isDuplicateKey(err)) throw err;
       }
     }
   }

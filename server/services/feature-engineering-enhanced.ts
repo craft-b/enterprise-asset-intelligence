@@ -439,21 +439,21 @@ class EnhancedFeatureEngineeringService {
     from: Date,
     to: Date
   ): Promise<number> {
-    try {
-      const result = await db.execute(sql`
-        SELECT COUNT(*) as reading_count
-        FROM sensor_data_logs
-        WHERE equipment_id = ${equipmentId}
-          AND timestamp BETWEEN ${from} AND ${to}
-          AND engine_temperature IS NOT NULL
-      `);
-      const rows = Array.isArray(result) && Array.isArray(result[0]) ? result[0] : result;
-      const count = Number((rows as any[])[0]?.reading_count ?? 0);
-      // Each reading represents 1 hour of operation (hourly sensor logs)
-      return count;
-    } catch {
-      return 0;
-    }
+    // Column names are the live ones. This read engine_temperature, which has
+    // not existed since the schema moved to Drizzle under ARCH-1; the query
+    // threw ER_BAD_FIELD_ERROR on every call and the catch below returned 0,
+    // so sensor hours silently never counted and the caller fell through to
+    // the equipment record every time.
+    const result = await db.execute(sql`
+      SELECT COUNT(*) as reading_count
+      FROM sensor_data_logs
+      WHERE equipment_id = ${equipmentId}
+        AND timestamp BETWEEN ${from} AND ${to}
+        AND engine_temp IS NOT NULL
+    `);
+    const rows = Array.isArray(result) && Array.isArray(result[0]) ? result[0] : result;
+    // Each reading represents 1 hour of operation (hourly sensor logs)
+    return Number((rows as any[])[0]?.reading_count ?? 0);
   }
 
   private async getSensorStats(
@@ -461,23 +461,32 @@ class EnhancedFeatureEngineeringService {
     from: Date,
     to: Date
   ): Promise<Partial<EnhancedFeatureSnapshot>> {
-    try {
-      const result = await db.execute(sql`
-        SELECT
-          AVG(vibration_level)      as avg_vibration,
-          MAX(vibration_level)      as max_vibration,
-          AVG(engine_temperature)   as avg_engine_temp,
-          AVG(oil_pressure)         as avg_oil_pressure,
-          AVG(hydraulic_pressure)   as avg_hydraulic_pressure,
-          SUM(CASE WHEN error_code IS NOT NULL AND error_code != '' THEN 1 ELSE 0 END) as error_code_count,
-          SUM(CASE WHEN warning_flag = 1 THEN 1 ELSE 0 END) as warning_count
-        FROM sensor_data_logs
-        WHERE equipment_id = ${equipmentId}
-          AND timestamp BETWEEN ${from} AND ${to}
-      `);
+    // vibration_level, engine_temperature, error_code and warning_flag are all
+    // from the pre-ARCH-1 schema and none of them exist. Every call raised
+    // ER_BAD_FIELD_ERROR and the catch returned {}, so every sensor statistic
+    // was undefined and sensor_degradation_rate was 0 for every asset in every
+    // snapshot ever taken -- 50 of 50 on the deployed instance.
+    //
+    // The table stores vibration on three axes, so the single-figure
+    // equivalent is the magnitude of the vector, averaged per reading rather
+    // than averaging the axes separately (which would under-report a machine
+    // shaking hard in one direction).
+    const result = await db.execute(sql`
+      SELECT
+        AVG(SQRT(POW(vibration_x,2) + POW(vibration_y,2) + POW(vibration_z,2))) as avg_vibration,
+        MAX(SQRT(POW(vibration_x,2) + POW(vibration_y,2) + POW(vibration_z,2))) as max_vibration,
+        AVG(engine_temp)          as avg_engine_temp,
+        AVG(oil_pressure)         as avg_oil_pressure,
+        AVG(hydraulic_pressure)   as avg_hydraulic_pressure,
+        SUM(CASE WHEN error_codes IS NOT NULL AND error_codes != '' THEN 1 ELSE 0 END) as error_code_count,
+        SUM(CASE WHEN warning_count > 0 THEN 1 ELSE 0 END) as warning_count
+      FROM sensor_data_logs
+      WHERE equipment_id = ${equipmentId}
+        AND timestamp BETWEEN ${from} AND ${to}
+    `);
 
-      const rows = Array.isArray(result) && Array.isArray(result[0]) ? result[0] : result;
-      const row  = (rows as any[])[0] || {};
+    const rows = Array.isArray(result) && Array.isArray(result[0]) ? result[0] : result;
+    const row  = (rows as any[])[0] || {};
 
       return {
         avgVibration:         row.avg_vibration        != null ? Number(row.avg_vibration)         : undefined,
@@ -487,10 +496,7 @@ class EnhancedFeatureEngineeringService {
         avgHydraulicPressure: row.avg_hydraulic_pressure != null ? Number(row.avg_hydraulic_pressure) : undefined,
         errorCodeCount:       row.error_code_count      != null ? Number(row.error_code_count)      : 0,
         warningCount:         row.warning_count         != null ? Number(row.warning_count)         : 0,
-      };
-    } catch {
-      return {};
-    }
+    };
   }
 }
 
