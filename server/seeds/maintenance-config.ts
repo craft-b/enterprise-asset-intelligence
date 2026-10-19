@@ -24,13 +24,32 @@ function isDuplicateKey(error: unknown): boolean {
   return false;
 }
 
+/**
+ * Interval used for a category with no row of its own.
+ *
+ * Exported because two services needed it and had picked different numbers --
+ * feature engineering assumed 90 days and risk scoring 180, so the same asset
+ * was "overdue" to one and current to the other, with nothing reconciling them.
+ */
+export const DEFAULT_MAINTENANCE_INTERVAL_DAYS = 120;
+
 export async function seedMaintenanceConfig() {
+  // Every category in the demo fleet needs a row here. Six of the ten assets
+  // -- both cranes, the grader, hauler, compressor and compactor -- had none
+  // and silently fell back to a default, so a tower crane was scheduled on the
+  // same interval as a walk-behind roller. Dozer was configured for a category
+  // the fleet does not contain.
   const configs = [
-    { equipmentCategory: "Excavator", recommendedIntervalDays: 180 },
+    { equipmentCategory: "Crane", recommendedIntervalDays: 90 },
+    { equipmentCategory: "Grader", recommendedIntervalDays: 180 },
     { equipmentCategory: "Lift", recommendedIntervalDays: 90 },
-    { equipmentCategory: "Dozer", recommendedIntervalDays: 180 },
+    { equipmentCategory: "Excavator", recommendedIntervalDays: 180 },
+    { equipmentCategory: "Hauler", recommendedIntervalDays: 150 },
+    { equipmentCategory: "Compressor", recommendedIntervalDays: 120 },
     { equipmentCategory: "Loader", recommendedIntervalDays: 150 },
+    { equipmentCategory: "Compactor", recommendedIntervalDays: 150 },
     { equipmentCategory: "Generator", recommendedIntervalDays: 120 },
+    { equipmentCategory: "Dozer", recommendedIntervalDays: 180 },
   ];
 
   for (const config of configs) {

@@ -6,6 +6,7 @@
 import { db } from "../db";
 import { equipment, rentals, maintenanceEvents, maintenanceConfig } from "../../shared/schema";
 import { eq, sql, and, gte, lte, desc } from "drizzle-orm";
+import { DEFAULT_MAINTENANCE_INTERVAL_DAYS } from "../seeds/maintenance-config";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TYPES
@@ -317,7 +318,7 @@ class EnhancedFeatureEngineeringService {
     // `inspectionIntervalDays`, which doesn't exist on maintenance_config — the
     // `as any` cast hid it, so intervalDays was always the 90-day fallback and
     // maintenance_config never influenced maint_overdue / neglect_acceleration.
-    const intervalDays = configRecord[0]?.recommendedIntervalDays ?? 90;
+    const intervalDays = configRecord[0]?.recommendedIntervalDays ?? DEFAULT_MAINTENANCE_INTERVAL_DAYS;
     const maintOverdue = daysSinceLastMaintenance !== null && daysSinceLastMaintenance > intervalDays ? 1 : 0;
 
     const costPerEvent = maintenanceEvents90d > 0 ? maintenanceCost180d / maintenanceEvents90d : 0;

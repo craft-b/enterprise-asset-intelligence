@@ -1,6 +1,7 @@
 import { db } from "../db";
 import { equipment, rentals, equipmentRiskScores, maintenanceEvents, maintenanceConfig } from "@shared/schema";
 import { eq, and, gte, sql, desc } from "drizzle-orm";
+import { DEFAULT_MAINTENANCE_INTERVAL_DAYS } from "../seeds/maintenance-config";
 
 interface RiskFeatures {
   daysRentedLast30: number;
@@ -114,7 +115,7 @@ export class RiskScoringService {
       ? Math.floor((Date.now() - new Date(latestMaintenance.maintenanceDate).getTime()) / (1000 * 60 * 60 * 24))
       : 9999;
 
-    const recommendedInterval = config?.recommendedIntervalDays || 180;
+    const recommendedInterval = config?.recommendedIntervalDays || DEFAULT_MAINTENANCE_INTERVAL_DAYS;
     
     // Apply reset factor based on maintenance type
     const resetFactor = latestMaintenance?.maintenanceType 

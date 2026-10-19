@@ -324,3 +324,48 @@ describe("seeded maintenance is dated honestly", () => {
     }
   });
 });
+
+describe("every fleet category has a maintenance interval", () => {
+  // maintenance_config is keyed by category, not by asset, so a category with
+  // no row silently falls back to a default. Six of the ten assets -- both
+  // cranes, the grader, hauler, compressor and compactor -- had no row, so a
+  // tower crane was scheduled on the same interval as a walk-behind roller,
+  // and maint_overdue and neglect_acceleration were computed from a number
+  // nobody chose. "Dozer" was configured for a category the fleet does not
+  // contain.
+  const CONFIG = readFileSync(join(__dirname, "..", "seeds", "maintenance-config.ts"), "utf-8");
+
+  const configured = new Set(
+    Array.from(CONFIG.matchAll(/equipmentCategory:\s*"([^"]+)"/g)).map(m => m[1])
+  );
+
+  it("parsed both lists", () => {
+    expect(configured.size).toBeGreaterThan(5);
+    expect(fleet.length).toBe(10);
+  });
+
+  it("covers every category the fleet actually contains", () => {
+    const missing = fleet
+      .map(a => a.category)
+      .filter(c => !configured.has(c));
+    expect(
+      Array.from(new Set(missing)),
+      "these categories have no maintenance_config row and will fall back to " +
+      "the default interval, which is nobody's considered answer for them"
+    ).toEqual([]);
+  });
+
+  it("shares one default between the services that need it", () => {
+    // Feature engineering assumed 90 days and risk scoring 180, so one asset
+    // could be overdue to one service and current to the other.
+    expect(CONFIG).toMatch(/export const DEFAULT_MAINTENANCE_INTERVAL_DAYS/);
+    for (const rel of [
+      join("..", "services", "feature-engineering-enhanced.ts"),
+      join("..", "services", "risk-scoring.ts"),
+    ]) {
+      const src = readFileSync(join(__dirname, rel), "utf-8");
+      expect(src, `${rel} should use the shared default`)
+        .toMatch(/DEFAULT_MAINTENANCE_INTERVAL_DAYS/);
+    }
+  });
+});

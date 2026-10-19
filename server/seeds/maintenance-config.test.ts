@@ -14,10 +14,22 @@ vi.mock("../db", () => ({
   pool: {},
 }));
 
+import { readFileSync } from "fs";
+import { join } from "path";
 import { seedMaintenanceConfig } from "./maintenance-config";
 
-/** How many categories the seed tries to insert. */
-const CATEGORY_COUNT = 5;
+/**
+ * How many categories the seed tries to insert, read from the seed itself.
+ *
+ * This was the literal 5, which broke the moment the list grew to cover the
+ * categories the fleet actually contains. The number was never the point --
+ * these tests are about a duplicate being benign and everything else not
+ * being, and both hold whatever the list's length is.
+ */
+const CATEGORY_COUNT = (
+  readFileSync(join(__dirname, "maintenance-config.ts"), "utf-8")
+    .match(/equipmentCategory:\s*"/g) ?? []
+).length;
 
 /** A db.insert(...) chain whose .values() settles as given. */
 function chain(values: () => Promise<unknown>) {
