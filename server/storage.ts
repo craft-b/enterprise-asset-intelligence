@@ -1,6 +1,7 @@
 import { users, equipment, rentals, jobSites, vendors, invoices, type User, type InsertUser, type Equipment, type InsertEquipment, type Rental, type InsertRental, type JobSite, type InsertJobSite, type Vendor, type InsertVendor, type Invoice, type InsertInvoice, EquipmentRiskScore, equipmentRiskScores, InsertRiskScore, InsertMaintenanceEvent, MaintenanceConfig, MaintenanceEvent, InsertModelTrainingMetrics, ModelTrainingMetrics, equipmentSwaps } from "@shared/schema";
 import { db } from "./db";
-import { eq, ilike, and, or, SQL, sql, desc } from "drizzle-orm";
+import { eq, ilike, and, or, inArray, SQL, sql, desc } from "drizzle-orm";
+import { alias } from "drizzle-orm/mysql-core";
 import { maintenanceEvents, maintenanceConfig, modelTrainingMetrics } from "@shared/schema";
 
 function generateJobId(): string {
@@ -257,29 +258,62 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getRental(id: number): Promise<(Rental & { equipment: Equipment, jobSite: JobSite, vendor: Vendor | null, invoices: Invoice[] }) | undefined> {
-    const rental = await db.query.rentals.findFirst({
-      where: eq(rentals.id, id),
-      with: {
-        equipment: true,
-        jobSite: true,
-        vendor: true,
-        invoices: true,
-      }
-    });
-    return rental as any;
+    const [row] = await db
+      .select({ rental: rentals, equipment, jobSite: jobSites, vendor: vendors })
+      .from(rentals)
+      .leftJoin(equipment, eq(rentals.equipmentId, equipment.id))
+      .leftJoin(jobSites, eq(rentals.jobSiteId, jobSites.id))
+      .leftJoin(vendors, eq(rentals.vendorId, vendors.id))
+      .where(eq(rentals.id, id))
+      .limit(1);
+
+    if (!row) return undefined;
+    const rentalInvoices = await db.select().from(invoices).where(eq(invoices.rentalId, id));
+    return {
+      ...row.rental,
+      equipment: row.equipment,
+      jobSite: row.jobSite,
+      vendor: row.vendor,
+      invoices: rentalInvoices,
+    } as any;
   }
 
   async listRentals(): Promise<(Rental & { equipment: Equipment, jobSite: JobSite, vendor: Vendor | null, invoices: Invoice[] })[]> {
-    const results = await db.query.rentals.findMany({
-      with: {
-        equipment: true,
-        jobSite: true,
-        vendor: true,
-        invoices: true,
-      },
-      orderBy: (rentals, { desc }) => [desc(rentals.receiveDate)],
-    });
-    return results as any;
+    // Explicit joins, not db.query.rentals.findMany({ with: ... }).
+    //
+    // Drizzle's relational query API compiles `with` into LEFT JOIN LATERAL,
+    // which TiDB does not implement -- every call raised ER_PARSE_ERROR, and
+    // the route had no try/catch, so GET /api/rentals answered 500 and the
+    // rentals page could never load. Same for getRental and listSwapsByRental.
+    //
+    // Invoices are fetched separately rather than joined: a rental with three
+    // invoices would otherwise come back as three rental rows.
+    const rows = await db
+      .select({ rental: rentals, equipment, jobSite: jobSites, vendor: vendors })
+      .from(rentals)
+      .leftJoin(equipment, eq(rentals.equipmentId, equipment.id))
+      .leftJoin(jobSites, eq(rentals.jobSiteId, jobSites.id))
+      .leftJoin(vendors, eq(rentals.vendorId, vendors.id))
+      .orderBy(desc(rentals.receiveDate));
+
+    if (rows.length === 0) return [];
+
+    const ids = rows.map(r => r.rental.id);
+    const allInvoices = await db.select().from(invoices).where(inArray(invoices.rentalId, ids));
+    const byRental = new Map<number, Invoice[]>();
+    for (const inv of allInvoices) {
+      const list = byRental.get(inv.rentalId) ?? [];
+      list.push(inv);
+      byRental.set(inv.rentalId, list);
+    }
+
+    return rows.map(r => ({
+      ...r.rental,
+      equipment: r.equipment,
+      jobSite: r.jobSite,
+      vendor: r.vendor,
+      invoices: byRental.get(r.rental.id) ?? [],
+    })) as any;
   }
 
   async createRental(rental: InsertRental): Promise<Rental> {
@@ -437,14 +471,25 @@ export class DatabaseStorage implements IStorage {
   }
 
   async listSwapsByRental(rentalId: number): Promise<any[]> {
-    return await db.query.equipmentSwaps.findMany({
-      where: eq(equipmentSwaps.rentalId, rentalId),
-      with: {
-        originalEquipment: true,
-        replacementEquipment: true,
-      },
-      orderBy: [desc(equipmentSwaps.createdAt)],
-    });
+    // Two aliases of the same table, because a swap names both the unit that
+    // left and the one that replaced it. Relational `with` would be neater and
+    // does not run on TiDB; see the note on listRentals.
+    const original = alias(equipment, "original_equipment");
+    const replacement = alias(equipment, "replacement_equipment");
+
+    const rows = await db
+      .select({ swap: equipmentSwaps, originalEquipment: original, replacementEquipment: replacement })
+      .from(equipmentSwaps)
+      .leftJoin(original, eq(equipmentSwaps.originalEquipmentId, original.id))
+      .leftJoin(replacement, eq(equipmentSwaps.replacementEquipmentId, replacement.id))
+      .where(eq(equipmentSwaps.rentalId, rentalId))
+      .orderBy(desc(equipmentSwaps.createdAt));
+
+    return rows.map(r => ({
+      ...r.swap,
+      originalEquipment: r.originalEquipment,
+      replacementEquipment: r.replacementEquipment,
+    }));
   }
 }
 

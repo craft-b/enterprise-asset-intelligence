@@ -265,6 +265,9 @@ async function runPMSimulation() {
     }).from(equipment);
 
     let totalCreated = 0;
+    // Snapshot failures are skipped per asset; counted so a run that skipped
+    // everything cannot report success.
+    let snapshotFailures = 0;
 
     for (let d = 0; d < PM_ADVANCE_DAYS; d++) {
       cursorDate = new Date(cursorDate.getTime() + 24 * 3600 * 1000);
@@ -288,7 +291,11 @@ async function runPMSimulation() {
         let snapshot: any;
         try {
           snapshot = await enhancedFeatureService.generateSnapshot(equip.id, cursorDate);
-        } catch {
+        } catch (err) {
+          // Counted, not just skipped: if every asset fails this job used to
+          // finish reporting success having rescored nothing.
+          snapshotFailures++;
+          if (snapshotFailures === 1) log(`[CRON] snapshot failed for equipment ${equip.id}: ${(err as any)?.message ?? err}`, "cron");
           continue;
         }
 
@@ -345,7 +352,11 @@ async function runPMSimulation() {
       UPDATE simulation_state SET cursor_date = ${newCursorStr}, total_days_run = ${newTotal} WHERE id = 1
     `);
 
-    log(`[PM-CRON] Complete — cursor → ${newCursorStr}, ${totalCreated} PM event(s) created`, "cron");
+    const skipped = snapshotFailures > 0 ? `, ${snapshotFailures} snapshot(s) failed` : "";
+    log(`[PM-CRON] Complete — cursor → ${newCursorStr}, ${totalCreated} PM event(s) created${skipped}`, "cron");
+    if (snapshotFailures >= allEquipment.length && allEquipment.length > 0) {
+      log(`[PM-CRON] WARNING: every asset failed snapshot generation — nothing was rescored`, "cron");
+    }
   } catch (err: any) {
     log(`[PM-CRON] FATAL: ${err.message}`, "cron");
   }
@@ -401,11 +412,26 @@ function scheduleNightlyRescore() {
   // opt-in rather than on by default.
   await seedDemoUsers();
 
-  app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+  // Anything under /api that no route claimed is a 404, in JSON.
+  //
+  // Without this it fell through to the static handler and was answered with
+  // the SPA shell and a 200 -- so a request to a misspelled or missing
+  // endpoint came back as a page, and the caller got a JSON parse error
+  // somewhere far away from the cause. Registered after the routes and before
+  // the static handler, so it only ever sees genuinely unmatched paths.
+  app.use("/api", (req: Request, res: Response) => {
+    res.status(404).json({ message: `No such endpoint: ${req.method} /api${req.path}` });
+  });
+
+  app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";
-    res.status(status).json({ message });
-    throw err;
+    // Logged, not rethrown. Rethrowing from an error handler after the
+    // response has been sent escapes Express entirely and takes the process
+    // with it -- one bad request restarting the server, losing every
+    // in-memory job including a running seed.
+    console.error(`[ERROR] ${req.method} ${req.originalUrl} -> ${status}:`, err);
+    if (!res.headersSent) res.status(status).json({ message });
   });
 
   if (process.env.NODE_ENV === "production") {

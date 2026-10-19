@@ -21,6 +21,7 @@ import { enhancedFeatureService } from "./services/feature-engineering-enhanced"
 import { evaluatePMSchedule, generatePMDescription, samplePMCost, MaintenanceTypeKey } from "./services/pm-scheduler";
 import { startSeedJob, getSeedStatus, getSystemStatus, resetSystem } from "./services/seed-orchestrator";
 import { mlFetch, describeMlFailure } from "./services/ml-client";
+import { timingSafeEqual } from "crypto";
 import { getSimulationDate } from "./services/simulation-clock";
 import { scoreFleetMultiHorizon, toMlSnapshot } from "./services/multi-horizon-scoring";
 import { IMPUTATION_DEFAULTS, isColdStart, coldStartMultiHorizon } from "./services/imputation";
@@ -36,6 +37,17 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+
+  // Every :id in this file is a database key, and every handler reads it with
+  // parseInt. A non-numeric segment produced NaN, which then reached SQL as
+  // `WHERE id = NaN` and surfaced as a 500 rather than the 400 it is. One
+  // guard here covers all 21 of them.
+  app.param("id", (req, res, next, value) => {
+    if (!/^\d+$/.test(String(value))) {
+      return res.status(400).json({ message: `Invalid id: ${value}` });
+    }
+    next();
+  });
 
   // Railway (and most cloud platforms) sit behind a reverse proxy.
   // Without this, Express won't see HTTPS and won't set secure cookies.
@@ -584,24 +596,46 @@ export async function registerRoutes(
     }
   });
 
+  // Both of these ran unguarded while the route below them had a try/catch.
+  // listRentals was throwing on every call (TiDB rejects the LATERAL joins
+  // Drizzle's relational queries emit), and with nothing to catch it the
+  // client saw a bare 500 rather than anything it could report.
   app.get(api.rentals.list.path, requireAuth, async (req, res) => {
-    res.json(await storage.listRentals());
+    try {
+      res.json(await storage.listRentals());
+    } catch (error: any) {
+      console.error("[RENTALS] list failed:", error);
+      res.status(500).json({ message: error?.message ?? "Failed to list rentals" });
+    }
   });
 
   app.post(api.rentals.create.path, requireAdmin, async (req, res) => {
-    const input = api.rentals.create.input.parse(req.body);
-    const equip = await storage.getEquipment(input.equipmentId);
-    if (!equip || equip.status !== "AVAILABLE") {
-      return res.status(400).json({ message: "Equipment unavailable" });
+    try {
+      const input = api.rentals.create.input.parse(req.body);
+      const equip = await storage.getEquipment(input.equipmentId);
+      if (!equip || equip.status !== "AVAILABLE") {
+        return res.status(400).json({ message: "Equipment unavailable" });
+      }
+      // Auto-generate PO number if not provided
+      if (!input.poNumber) {
+        const simDate = await getSimulationDate();
+        (input as any).poNumber = await generatePoNumber(simDate.getFullYear());
+      }
+      const rental = await storage.createRental(input);
+      await storage.updateEquipment(input.equipmentId, { status: "RENTED" });
+      res.status(201).json(rental);
+    } catch (error: any) {
+      // A schema rejection is the caller's problem and belongs in the 400 the
+      // client already knows how to display; anything else is ours.
+      const isValidation = error?.name === "ZodError";
+      console.error("[RENTALS] create failed:", error);
+      res.status(isValidation ? 400 : 500).json({
+        message: isValidation
+          ? "Rental details are not valid: " +
+            (error.errors ?? []).map((e: any) => `${e.path.join(".")} ${e.message}`).join("; ")
+          : error?.message ?? "Failed to create rental",
+      });
     }
-    // Auto-generate PO number if not provided
-    if (!input.poNumber) {
-      const simDate = await getSimulationDate();
-      (input as any).poNumber = await generatePoNumber(simDate.getFullYear());
-    }
-    const rental = await storage.createRental(input);
-    await storage.updateEquipment(input.equipmentId, { status: "RENTED" });
-    res.status(201).json(rental);
   });
 
   app.put('/api/rentals/:id', requireAdmin, async (req, res) => {
@@ -2245,8 +2279,15 @@ export async function registerRoutes(
   function requireAgentKey(req: any, res: any, next: any) {
     const key = process.env.AGENT_API_KEY;
     if (!key) return res.status(503).json({ error: "Agent API not enabled — set AGENT_API_KEY env var" });
-    const header = req.headers.authorization ?? "";
-    if (header !== `Bearer ${key}`) return res.status(401).json({ error: "Invalid or missing agent API key" });
+
+    // Constant-time, like the Python side's hmac.compare_digest. A plain !==
+    // returns as soon as two bytes differ, which leaks the length and the
+    // matching prefix to anyone willing to time the responses.
+    const provided = Buffer.from(String(req.headers.authorization ?? ""));
+    const expected = Buffer.from(`Bearer ${key}`);
+    const ok =
+      provided.length === expected.length && timingSafeEqual(provided, expected);
+    if (!ok) return res.status(401).json({ error: "Invalid or missing agent API key" });
     next();
   }
 
