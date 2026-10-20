@@ -76,10 +76,16 @@ import { scoreFleetMultiHorizon } from "./multi-horizon-scoring";
  */
 const SEED_HISTORY_DAYS = 180;
 
-/** Spacing of backfilled snapshot dates. Closer together is more rows but not
- *  much more information: consecutive snapshots of one asset barely differ,
- *  and the data-quality gate counts near-duplicates against you. */
-const SNAPSHOT_INTERVAL_DAYS = 7;
+/**
+ * Spacing of backfilled snapshot dates.
+ *
+ * Closer together is more rows but not much more information: consecutive
+ * snapshots of one asset barely differ, and the data-quality gate counts
+ * near-duplicates against you. Five days rather than seven because cutting
+ * the failure rate cuts the positive count with it, and a 10-day horizon with
+ * a handful of positives has metrics too noisy to quote.
+ */
+const SNAPSHOT_INTERVAL_DAYS = 5;
 
 /** A snapshot needs its longest horizon (60d) plus a day to be observable. */
 const LABELABLE_LAG_DAYS = 61;
@@ -758,11 +764,26 @@ async function seedFailureEvents(
   for (const row of rows) {
     const ageYears = cursorYear - (Number(row.year_manufactured) || 2020);
 
-    // Determine failure count for this equipment
+    // How often a machine of this age actually breaks down, over the whole
+    // seeded history.
+    //
+    // These used to be 3-5, 1-3 and 0-1, which put 18 reactive repairs across
+    // ten machines in six months -- a failure every five weeks for the oldest
+    // crane. No rental yard operates like that, and it set the 30-day label
+    // base rate to 33.5%. A calibrated model centres its output on the rate it
+    // was trained on, so the scores clustered around a third and the 0.30 LOW
+    // threshold sat under nearly all of them: the queue could not produce a
+    // low-risk row no matter how the fleet was shaped.
+    //
+    // Scaled from the measured point rather than from a model of it: 18
+    // failures gave 33.5%, so roughly six should give about 11%. An
+    // attempt to simulate this predicted the rate would FALL when history was
+    // extended; it rose. The simulation was wrong about something, so it is
+    // not what these numbers rest on.
     let targetFailures: number;
-    if      (ageYears >= 10) targetFailures = 3 + Math.floor(Math.random() * 3); // 3-5
-    else if (ageYears >=  6) targetFailures = 1 + Math.floor(Math.random() * 3); // 1-3
-    else if (ageYears >=  2) targetFailures = Math.floor(Math.random() * 2);     // 0-1
+    if      (ageYears >= 10) targetFailures = 1 + Math.floor(Math.random() * 2); // 1-2
+    else if (ageYears >=  6) targetFailures = Math.floor(Math.random() * 2);     // 0-1
+    else if (ageYears >=  2) targetFailures = Math.random() < 0.25 ? 1 : 0;      // 1 in 4
     else                     targetFailures = 0;
 
     // Spread failures evenly across the window to avoid temporal clustering.
