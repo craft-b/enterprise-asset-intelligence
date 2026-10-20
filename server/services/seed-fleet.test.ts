@@ -279,10 +279,19 @@ describe("the ML wake budget", () => {
   });
 
   it("bounds each probe, so one hung request cannot eat the budget", () => {
+    // The loop itself now lives in services/ml-wake.ts, shared with the
+    // request path, so this asserts where the bound actually is rather than
+    // where it used to be. The seed still chooses its own probe length: it can
+    // afford to wait out a full cold start and a button press cannot.
+    const WAKE = readFileSync(join(__dirname, "ml-wake.ts"), "utf-8");
+    expect(WAKE).toMatch(/AbortController/);
+    expect(WAKE).toMatch(/signal:\s*controller\.signal/);
+    // Belt and braces: the signal only binds a client that honours it.
+    expect(WAKE).toMatch(/Promise\.race/);
+
     const fn = ORCH.match(/async function waitForMlService[\s\S]*?\n}/)![0];
-    expect(fn).toMatch(/AbortController/);
-    expect(fn).toMatch(/signal:\s*controller\.signal/);
     expect(fn).toMatch(/ML_WAKE_PROBE_MS/);
+    expect(fn).toMatch(/waitForMl\(/);
   });
 });
 

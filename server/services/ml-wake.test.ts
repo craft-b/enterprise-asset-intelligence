@@ -1,0 +1,99 @@
+// server/services/ml-wake.test.ts
+//
+// The seed waited for the ML service to wake; the buttons did not. Pressing
+// "Run Predictions" against a suspended service failed with "give it a minute
+// and try again", which turns a condition the system knows how to handle into
+// the user's problem and their job to time correctly.
+//
+// The budget is the whole design here. A request cannot hold open for the
+// 40-75 seconds a cold start takes — proxies give up — so the request path
+// waits briefly and hands the rest to the client's retry. A probe that outran
+// its budget would defeat that, which is the bug these tests exist to stop:
+// the seed's own wake loop once had a 20s budget and a 120s probe, so it got
+// one attempt where it looked like it took a dozen.
+
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+const mlFetch = vi.fn();
+vi.mock("./ml-client", () => ({ mlFetch: (...args: unknown[]) => mlFetch(...args) }));
+
+const { waitForMl, nudgeMlAwake, REQUEST_WAKE_BUDGET_MS, REQUEST_WAKE_PROBE_MS, RETRY_AFTER_SECONDS } =
+  await import("./ml-wake");
+
+beforeEach(() => { mlFetch.mockReset(); });
+
+describe("waiting for the ML service", () => {
+  it("returns as soon as it answers", async () => {
+    mlFetch.mockResolvedValue({ ok: true });
+    const started = Date.now();
+    await expect(waitForMl(5_000)).resolves.toBe(true);
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(mlFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives up when the budget runs out", async () => {
+    mlFetch.mockResolvedValue({ ok: false });
+    await expect(waitForMl(200, 50)).resolves.toBe(false);
+  });
+
+  it("keeps trying rather than failing on the first miss", async () => {
+    // A suspended container refuses nothing — it just does not answer yet.
+    mlFetch
+      .mockRejectedValueOnce(new Error("socket hang up"))
+      .mockResolvedValue({ ok: true });
+    await expect(waitForMl(20_000, 1_000)).resolves.toBe(true);
+    expect(mlFetch.mock.calls.length).toBeGreaterThanOrEqual(2);
+  }, 10_000);
+
+  it("does not let one probe outlive the whole budget", async () => {
+    // The failure this guards: a 120s probe inside a 20s budget is not a
+    // bound, and the caller asked for one. The mock ignores the abort signal
+    // on purpose — if the bound depended on the HTTP client honouring it,
+    // this is where that assumption would go unnoticed.
+    mlFetch.mockImplementation(() => new Promise(() => {})); // never settles
+    const started = Date.now();
+    await expect(waitForMl(300, 120_000)).resolves.toBe(false);
+    expect(Date.now() - started).toBeLessThan(3_000);
+  });
+
+  it("probes more than once inside the request budget", async () => {
+    // One probe per budget is what the seed's wake did by accident, so a
+    // service coming up midway was missed entirely.
+    mlFetch.mockResolvedValue({ ok: false });
+    await waitForMl(REQUEST_WAKE_BUDGET_MS, REQUEST_WAKE_PROBE_MS);
+    expect(mlFetch.mock.calls.length).toBeGreaterThan(1);
+  }, 30_000);
+
+  it("survives a probe that throws synchronously", async () => {
+    mlFetch.mockImplementation(() => { throw new Error("DNS"); });
+    await expect(waitForMl(200, 50)).resolves.toBe(false);
+  });
+});
+
+describe("the request-path budget", () => {
+  it("is short enough to stay inside a proxy timeout", () => {
+    // Held-open requests are what this design exists to avoid.
+    expect(REQUEST_WAKE_BUDGET_MS).toBeLessThanOrEqual(30_000);
+  });
+
+  it("is long enough that a warm service simply works", () => {
+    expect(REQUEST_WAKE_BUDGET_MS).toBeGreaterThanOrEqual(5_000);
+  });
+
+  it("asks the client back after a wait that makes progress", () => {
+    // Five retries at this interval has to cover the slowest cold start
+    // measured, 72.5 seconds.
+    expect(RETRY_AFTER_SECONDS * 5).toBeGreaterThan(72.5);
+  });
+});
+
+describe("nudging it awake", () => {
+  it("returns immediately and swallows the rejection", async () => {
+    // Fire-and-forget: an unhandled rejection takes this process down, which
+    // is a bug already fixed once in this codebase.
+    mlFetch.mockRejectedValue(new Error("still booting"));
+    expect(() => nudgeMlAwake()).not.toThrow();
+    await new Promise(r => setTimeout(r, 10));
+    expect(mlFetch).toHaveBeenCalled();
+  });
+});

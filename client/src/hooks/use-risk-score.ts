@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@shared/routes";
 import { apiError } from "@/lib/api-error";
+import { retryWhileWaking, wakeRetryDelay } from "@/lib/wake-retry";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -41,6 +42,9 @@ export function useMultiHorizonRiskScores() {
       if (!res.ok) throw await apiError(res, "Failed to calculate multi-horizon risk scores");
       return res.json() as Promise<MultiHorizonResult[]>;
     },
+    // A suspended ML service is a wait, not a failure. See lib/wake-retry.ts.
+    retry: retryWhileWaking,
+    retryDelay: wakeRetryDelay,
     onSuccess: (data) => {
       setScores(data);
     },

@@ -21,6 +21,7 @@ import { enhancedFeatureService } from "./services/feature-engineering-enhanced"
 import { evaluatePMSchedule, generatePMDescription, samplePMCost, MaintenanceTypeKey } from "./services/pm-scheduler";
 import { startSeedJob, getSeedStatus, getLastSeedRun, getSystemStatus, resetSystem } from "./services/seed-orchestrator";
 import { mlFetch, describeMlFailure } from "./services/ml-client";
+import { waitForMl, nudgeMlAwake, REQUEST_WAKE_BUDGET_MS, REQUEST_WAKE_PROBE_MS, RETRY_AFTER_SECONDS } from "./services/ml-wake";
 import { timingSafeEqual } from "crypto";
 import { registerTestLogin } from "./test-login";
 import { getSimulationDate } from "./services/simulation-clock";
@@ -1116,6 +1117,14 @@ export async function registerRoutes(
     try {
       const { equipmentIds } = api.riskScore.batch.input.parse(req.body);
 
+      // Free-tier suspension is an ordinary condition, not a failure. Give the
+      // service a short bounded chance to come up before answering: a warm or
+      // nearly-warm one simply works, and nothing is held open long enough to
+      // trouble a proxy. A genuine cold start takes 40-75s, which is covered
+      // by the client retrying against the `waking` flag below rather than by
+      // this request waiting that long.
+      await waitForMl(REQUEST_WAKE_BUDGET_MS, REQUEST_WAKE_PROBE_MS);
+
       // The work lives in services/multi-horizon-scoring.ts so the seed can
       // run it too. While it was inline here, the only way to populate
       // equipment_failure_predictions was for someone to press a button --
@@ -1124,10 +1133,13 @@ export async function registerRoutes(
       const outcome = await scoreFleetMultiHorizon(equipmentIds);
 
       if (!outcome.serviceAvailable) {
+        nudgeMlAwake();
         return res.status(503).json({
           message:
-            'The ML service is not responding. On free hosting it suspends when idle — ' +
-            'give it a minute and try again.',
+            'The ML service is waking up — on free hosting it suspends when idle. ' +
+            'Retrying automatically.',
+          waking: true,
+          retryAfterSeconds: RETRY_AFTER_SECONDS,
           detail: outcome.firstError,
         });
       }
@@ -1325,6 +1337,14 @@ export async function registerRoutes(
 
   app.post('/api/predictive-maintenance/predict-all', requireAdmin, async (req, res) => {
     try {
+      // Free-tier suspension is an ordinary condition, not a failure. Give the
+      // service a short bounded chance to come up before answering: a warm or
+      // nearly-warm one simply works, and nothing is held open long enough to
+      // trouble a proxy. A genuine cold start takes 40-75s, which is covered
+      // by the client retrying against the `waking` flag below rather than by
+      // this request waiting that long.
+      await waitForMl(REQUEST_WAKE_BUDGET_MS, REQUEST_WAKE_PROBE_MS);
+
       const outcome = await predictiveMaintenanceService.predictAllEquipmentWithOutcome();
       const { predictions, attempted, serviceAvailable, firstError } = outcome;
 
@@ -1332,10 +1352,14 @@ export async function registerRoutes(
       // which reads as success. The three reasons it can be zero need
       // different actions, so they get different answers.
       if (!serviceAvailable) {
+        // Leave it booting so the retry lands on a service that is already up.
+        nudgeMlAwake();
         return res.status(503).json({
           message:
-            'The ML service is not responding. On free hosting it suspends when idle — ' +
-            'give it a minute and try again.',
+            'The ML service is waking up — on free hosting it suspends when idle. ' +
+            'Retrying automatically.',
+          waking: true,
+          retryAfterSeconds: RETRY_AFTER_SECONDS,
           count: 0,
           predictions: [],
         });

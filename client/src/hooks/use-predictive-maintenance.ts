@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { apiError } from "@/lib/api-error";
+import { retryWhileWaking, wakeRetryDelay } from "@/lib/wake-retry";
 
 // Per-horizon binary metrics as trained/evaluated — each model is a binary
 // failure classifier for a 10/30/60-day window, so metrics are reported per
@@ -207,10 +208,12 @@ export function useRunPredictions() {
       // The server distinguishes "service asleep" from "scored 0 of 10" and
       // says what to do about each; discarding that for a fixed string left
       // an empty risk queue with no explanation.
-      const body = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(body?.message ?? "Failed to run predictions");
-      return body;
+      if (!res.ok) throw await apiError(res, "Failed to run predictions");
+      return res.json().catch(() => null);
     },
+    // A suspended ML service is a wait, not a failure. See lib/wake-retry.ts.
+    retry: retryWhileWaking,
+    retryDelay: wakeRetryDelay,
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['/api/predictive-maintenance/fleet-risk'] });
       queryClient.invalidateQueries({ queryKey: ['/api/predictive-maintenance/equipment-with-risk'] });
@@ -219,11 +222,13 @@ export function useRunPredictions() {
         description: data?.message ?? `Generated ${data?.count ?? 0} risk predictions`,
       });
     },
-    onError: (err) => {
-      toast({ 
-        title: "Prediction Failed", 
-        description: err.message, 
-        variant: "destructive" 
+    onError: (err: unknown) => {
+      // Only reached once the wake retries are exhausted; a service that is
+      // still booting is not reported as a failure.
+      toast({
+        title: "Prediction Failed",
+        description: err instanceof Error ? err.message : "Failed to run predictions",
+        variant: "destructive",
       });
     },
   });

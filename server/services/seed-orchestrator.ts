@@ -26,6 +26,7 @@ import { seedMaintenanceConfig } from "../seeds/maintenance-config";
 import { featureEngineeringService } from "./feature-engineering";
 import { predictiveMaintenanceService } from "./predictive-maintenance-fixed";
 import { mlFetch, describeMlFailure } from "./ml-client";
+import { waitForMl } from "./ml-wake";
 import { registerChampionMetrics } from "./champion-metrics";
 import { scoreFleetMultiHorizon } from "./multi-horizon-scoring";
 
@@ -937,31 +938,16 @@ async function seedFailureEvents(
  * the service token and touches nothing, so it is the cheapest way to find
  * out whether anyone is home.
  */
+/**
+ * The seed's wake, which can afford to be patient: it is a background job, so
+ * a seventy-second cold start in the middle of it is unremarkable. The request
+ * path uses the same loop with a much smaller budget — see services/ml-wake.ts
+ * for why those two numbers differ.
+ */
 async function waitForMlService(stepIndex: number, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  let attempt = 0;
-  while (Date.now() < deadline) {
-    attempt++;
-    // Each probe is bounded. Without this the call inherits fetch's lack of a
-    // timeout, and a suspended container does not refuse the connection -- the
-    // host holds it open for the whole cold start, measured at 51-62s. One
-    // such attempt consumed almost the entire budget, so the loop got one try
-    // rather than the dozen it looks like it takes.
-    const controller = new AbortController();
-    const probe = setTimeout(() => controller.abort(), ML_WAKE_PROBE_MS);
-    try {
-      const res = await mlFetch("/health", { signal: controller.signal });
-      if (res.ok) return true;
-    } catch {
-      // not up yet; the container keeps booting whether or not we wait on it
-    } finally {
-      clearTimeout(probe);
-    }
-    const left = Math.max(0, Math.round((deadline - Date.now()) / 1000));
-    setStep(stepIndex, "running", `Waking the ML service… (attempt ${attempt}, ${left}s left)`);
-    await sleep(5000);
-  }
-  return false;
+  return waitForMl(timeoutMs, ML_WAKE_PROBE_MS, (attempt, secondsLeft) => {
+    setStep(stepIndex, "running", `Waking the ML service… (attempt ${attempt}, ${secondsLeft}s left)`);
+  });
 }
 
 // How long to keep trying to wake the ML service, and how long any single

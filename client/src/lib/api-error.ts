@@ -21,21 +21,47 @@
 const MAX_MESSAGE = 400;
 
 /**
+ * An Error that also carries the machine-readable part of the response.
+ *
+ * Only two fields, and only the ones a caller acts on. The ML service suspends
+ * when idle and takes 40-75s to come back, which is longer than a request may
+ * reasonably be held open — so the server answers "waking" and the caller
+ * retries. That decision needs a flag, not a string match on a message that
+ * someone will reword.
+ */
+export interface ApiError extends Error {
+  status?: number;
+  waking?: boolean;
+  retryAfterSeconds?: number;
+}
+
+/**
  * Build an Error from a failed response, preferring what the server said.
  *
  * Never throws: it is called on the failure path, and a parse error here would
  * replace a useful message with a confusing one.
  */
-export async function apiError(res: Response, fallback: string): Promise<Error> {
-  const detail = await readMessage(res);
-  if (!detail) return new Error(fallback);
+export async function apiError(res: Response, fallback: string): Promise<ApiError> {
+  const body = await readBody(res);
   // The status is worth keeping alongside the text -- "503" plus "the ML
   // service is not responding" is a different situation from a 400 with the
   // same words.
-  return new Error(detail);
+  const err: ApiError = new Error(body?.message ?? fallback);
+  err.status = res.status;
+  if (body?.waking) {
+    err.waking = true;
+    err.retryAfterSeconds = body.retryAfterSeconds;
+  }
+  return err;
 }
 
-async function readMessage(res: Response): Promise<string | null> {
+type ParsedBody = {
+  message: string | null;
+  waking: boolean;
+  retryAfterSeconds?: number;
+};
+
+async function readBody(res: Response): Promise<ParsedBody | null> {
   try {
     const text = await res.text();
     if (!text) return null;
@@ -49,15 +75,18 @@ async function readMessage(res: Response): Promise<string | null> {
     }
 
     const body = JSON.parse(text);
-    const message =
+    const raw =
       typeof body?.message === "string" ? body.message
       : typeof body?.error === "string" ? body.error
       : null;
-    if (!message) return null;
 
-    return message.length > MAX_MESSAGE
-      ? `${message.slice(0, MAX_MESSAGE)}…`
-      : message;
+    return {
+      message: raw === null ? null
+        : raw.length > MAX_MESSAGE ? `${raw.slice(0, MAX_MESSAGE)}…` : raw,
+      waking: body?.waking === true,
+      retryAfterSeconds:
+        typeof body?.retryAfterSeconds === "number" ? body.retryAfterSeconds : undefined,
+    };
   } catch {
     // Unreadable body, already-consumed stream, malformed JSON: the caller's
     // fallback is the right answer.
