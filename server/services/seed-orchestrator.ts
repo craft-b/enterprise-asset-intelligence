@@ -208,6 +208,21 @@ let runRowId: number | undefined;
 async function beginRunRecord(): Promise<void> {
   runRowId = undefined;
   try {
+    // Close out any run still marked "running". Starting a new one proves the
+    // old one is over, and the only way it can still say "running" is that the
+    // process owning it died -- a deploy, or the host suspending a free
+    // instance mid-seed. Left alone the row says "running" forever, so the
+    // stored history stays wrong even though the endpoint now reads it
+    // correctly, and anything querying the table directly is misled.
+    await db
+      .update(seedRuns)
+      .set({
+        status: "failed",
+        error: "Interrupted — the API restarted before this run finished.",
+        finishedAt: new Date(),
+      } as any)
+      .where(eq(seedRuns.status, "running"));
+
     const result: any = await db.insert(seedRuns).values({
       status: "running",
       steps: JSON.stringify(jobState.steps),

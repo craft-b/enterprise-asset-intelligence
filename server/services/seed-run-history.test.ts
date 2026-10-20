@@ -108,6 +108,30 @@ describe("an interrupted run is not reported as a running one", () => {
   });
 });
 
+describe("the stored history does not keep a dead run alive", () => {
+  // Interpreting "running" at read time fixes the screen but leaves the row
+  // saying it forever, so anything querying the table directly is misled —
+  // including the watcher that was waiting for this very run to finish.
+  const begin = SRC.match(/async function beginRunRecord[\s\S]*?\n\}/)?.[0] ?? "";
+
+  it("closes out a previous run still marked running", () => {
+    // Starting a new run proves the old one is over.
+    expect(begin).toMatch(/eq\(seedRuns\.status, "running"\)/);
+  });
+
+  it("says why it was closed rather than just marking it failed", () => {
+    expect(begin).toMatch(/Interrupted/);
+  });
+
+  it("does it before creating the new row", () => {
+    const closeAt = begin.indexOf('eq(seedRuns.status, "running")');
+    const insertAt = begin.indexOf("db.insert(seedRuns)");
+    expect(closeAt).toBeGreaterThan(-1);
+    expect(insertAt).toBeGreaterThan(-1);
+    expect(closeAt).toBeLessThan(insertAt);
+  });
+});
+
 describe("the seed starts the ML service waking before it needs it", () => {
   const start = SRC.match(/export async function startSeedJob[\s\S]*?\n\}/)?.[0] ?? "";
 
