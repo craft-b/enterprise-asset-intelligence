@@ -15,6 +15,12 @@ import { IMPUTATION_DEFAULTS } from "./services/imputation";
 import { evaluatePMSchedule, generatePMDescription, samplePMCost, MaintenanceTypeKey } from "./services/pm-scheduler";
 import { mlFetch } from "./services/ml-client";
 import { registerChampionIfMissing } from "./services/champion-metrics";
+import { getSeedStatus } from "./services/seed-orchestrator";
+import {
+  planCatchUp,
+  PM_ADVANCE_DAYS,
+  PM_CATCHUP_MAX_SIM_DAYS,
+} from "./services/simulation-catchup";
 import { toMlSnapshot } from "./services/multi-horizon-scoring";
 import { summariseBody } from "./services/request-log";
 
@@ -245,10 +251,10 @@ async function runDriftRescore() {
 // Non-blocking — failures are logged, never crash server.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const PM_ADVANCE_DAYS = parseInt(process.env.PM_ADVANCE_DAYS || "7", 10);
 
-async function runPMSimulation() {
-  log(`[PM-CRON] Starting PM simulation — advancing ${PM_ADVANCE_DAYS} simulation day(s)`, "cron");
+
+async function runPMSimulation(days: number = PM_ADVANCE_DAYS, realTimeMark?: Date) {
+  log(`[PM-CRON] Starting PM simulation — advancing ${days} simulation day(s)`, "cron");
 
   try {
     const [stateRows] = await db.execute(
@@ -269,7 +275,7 @@ async function runPMSimulation() {
     // everything cannot report success.
     let snapshotFailures = 0;
 
-    for (let d = 0; d < PM_ADVANCE_DAYS; d++) {
+    for (let d = 0; d < days; d++) {
       cursorDate = new Date(cursorDate.getTime() + 24 * 3600 * 1000);
       const dateStr = cursorDate.toISOString().split("T")[0];
 
@@ -347,9 +353,13 @@ async function runPMSimulation() {
     }
 
     const newCursorStr = cursorDate.toISOString().split("T")[0];
-    const newTotal = (stateRows[0]?.total_days_run || 0) + PM_ADVANCE_DAYS;
+    const newTotal = (stateRows[0]?.total_days_run || 0) + days;
     await db.execute(sql`
-      UPDATE simulation_state SET cursor_date = ${newCursorStr}, total_days_run = ${newTotal} WHERE id = 1
+      UPDATE simulation_state
+         SET cursor_date = ${newCursorStr},
+             total_days_run = ${newTotal},
+             updated_at = ${realTimeMark ?? new Date()}
+       WHERE id = 1
     `);
 
     const skipped = snapshotFailures > 0 ? `, ${snapshotFailures} snapshot(s) failed` : "";
@@ -359,6 +369,57 @@ async function runPMSimulation() {
     }
   } catch (err: any) {
     log(`[PM-CRON] FATAL: ${err.message}`, "cron");
+  }
+}
+
+
+
+/**
+ * Advance the simulation by however much real time has passed since it last
+ * moved.
+ *
+ * scheduleDailyPM arms a timer for 06:00, which on a free instance is a clock
+ * that almost never rings: the container suspends after about fifteen minutes
+ * without traffic, and every restart reschedules the timer from scratch. The
+ * simulation had not moved since the day it was seeded.
+ *
+ * The amount owed is a function of elapsed real time, not of starting up --
+ * which matters because this host boots on any visit after an idle period, so
+ * a per-boot advance would run the clock far ahead of reality. Ten visits in
+ * one day owe exactly as much as one.
+ *
+ * Partial progress is honest about itself: when the cap bites, the stored
+ * timestamp moves forward only by the real time actually consumed, so the
+ * remainder is still owed next time rather than being forgotten.
+ */
+async function catchUpSimulation(): Promise<void> {
+  try {
+    if (getSeedStatus().status === "running") {
+      log("[PM-CATCHUP] Seed in progress — leaving the clock alone", "cron");
+      return;
+    }
+
+    const [rows] = (await db.execute(
+      sql`SELECT cursor_date, updated_at FROM simulation_state WHERE id = 1`
+    )) as any;
+    const state = (rows as any[])[0];
+    if (!state?.updated_at) return;  // never seeded; nothing to catch up
+
+    const plan = planCatchUp(new Date(state.updated_at), new Date());
+    if (plan.applying === 0) return;
+
+    log(
+      `[PM-CATCHUP] ${plan.realDays} real day(s) since the clock last moved — ` +
+      `applying ${plan.applying} of ${plan.owed} simulation day(s)`,
+      "cron"
+    );
+    await runPMSimulation(plan.applying, plan.mark);
+    if (plan.applying < plan.owed) {
+      log(`[PM-CATCHUP] ${plan.owed - plan.applying} simulation day(s) still owed; will continue next start`, "cron");
+    }
+  } catch (err: any) {
+    // A clock that cannot catch up is not a reason to refuse to serve.
+    log(`[PM-CATCHUP] Failed: ${err?.message ?? err}`, "cron");
   }
 }
 
@@ -454,6 +515,9 @@ function scheduleNightlyRescore() {
     // on. It no-ops when a model is already registered, so a deployment
     // seeded before this existed heals on its next restart without a reseed.
     void registerChampionIfMissing();
+    // Bring the simulation clock up to date. Not awaited: it is bounded work
+    // but still work, and nothing serving depends on it having finished.
+    void catchUpSimulation();
   });
 })().catch((err: unknown) => {
   // Boot-time misconfiguration (a missing SESSION_SECRET, an unreachable
