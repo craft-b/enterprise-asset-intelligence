@@ -26,7 +26,7 @@ import { seedMaintenanceConfig } from "../seeds/maintenance-config";
 import { featureEngineeringService } from "./feature-engineering";
 import { predictiveMaintenanceService } from "./predictive-maintenance-fixed";
 import { mlFetch, describeMlFailure } from "./ml-client";
-import { waitForMl } from "./ml-wake";
+import { waitForMl, nudgeMlAwake } from "./ml-wake";
 import { registerChampionMetrics } from "./champion-metrics";
 import { scoreFleetMultiHorizon } from "./multi-horizon-scoring";
 
@@ -330,6 +330,18 @@ export async function startSeedJob(): Promise<{ started: boolean; message: strin
   // no-op and the run leaves no trace at all.
   await beginRunRecord();
   persistRunRecord();
+
+  // Start the ML service waking NOW, not in fifteen minutes when step 8 needs
+  // it.
+  //
+  // The data steps take long enough that a service which was awake when
+  // someone pressed the button has suspended again by the time it is wanted —
+  // and then three separate steps each spend their whole wake budget on a
+  // container that has not been asked to start until that moment. Observed:
+  // steps 1-7 done by 20:21, then 300 seconds each at 20:26, 20:31 and 20:36,
+  // all three failing, against a service that answers in 62 seconds once
+  // something pokes it. This is the poke.
+  nudgeMlAwake();
 
   // Run async — don't await
   runSeedPipeline().catch(err => {

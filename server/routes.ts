@@ -2575,6 +2575,16 @@ export async function registerRoutes(
       const memory = getSeedStatus();
       const raw = memory.status === "idle" ? (await getLastSeedRun()) ?? memory : memory;
       const fromHistory = raw !== memory;
+
+      // A stored run still marked "running" has no process behind it -- this
+      // one is idle, which is how we got here -- so it was interrupted: a
+      // deploy, or the host suspending a free instance mid-seed.
+      //
+      // It is reported as "idle" because that is what the setup screen watches
+      // for. Reporting the stored "running" verbatim left the progress bar
+      // turning forever on a job that had died twenty minutes earlier, which
+      // is the exact failure the history was added to make visible.
+      const interrupted = fromHistory && raw.status === "running";
       // Progress counts settled steps, not successful ones. A skipped ML step
       // has advanced the pipeline, and counting only completions left the bar
       // stuck at 80% next to the words "All done".
@@ -2583,7 +2593,8 @@ export async function registerRoutes(
       ).length;
       const runningStep = raw.steps.find(s => s.status === "running");
       res.json({
-        state: raw.status,
+        state: interrupted ? "idle" : raw.status,
+        interrupted,
         currentStep: settledCount,
         totalSteps: raw.steps.length,
         stepLabel: runningStep?.name ?? (raw.status === "completed" ? "All done" : "Waiting…"),
