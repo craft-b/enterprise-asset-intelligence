@@ -7,7 +7,7 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
-import { db } from "./db";
+import { db, assertDatabaseConfigured } from "./db";
 import { equipment, equipmentFailurePredictions } from "@shared/schema";
 import { desc, sql } from "drizzle-orm";
 import { enhancedFeatureService } from "./services/feature-engineering-enhanced";
@@ -37,6 +37,11 @@ import { summariseBody } from "./services/request-log";
 process.on("unhandledRejection", (reason: unknown) => {
   console.error("[FATAL-GUARD] Unhandled promise rejection — request dropped, process kept alive:", reason);
 });
+
+// The connection itself is built on first use (see db.ts), so this is where a
+// missing DATABASE_URL has to be caught: at boot, loudly, rather than as a 500
+// from whichever request queried first.
+assertDatabaseConfigured();
 
 const app = express();
 // No ETag on API responses: with no-store it is redundant, and it is the

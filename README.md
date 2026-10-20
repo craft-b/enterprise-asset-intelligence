@@ -388,7 +388,7 @@ Authenticated with `Authorization: Bearer <AGENT_API_KEY>`. Designed for program
 cd ml-service
 pytest tests/ -v
 
-# Node/TypeScript — server + shared client logic (487 tests across 36 files)
+# Node/TypeScript — server + shared client logic (494 tests across 37 files)
 npm test
 
 # TypeScript type-check
