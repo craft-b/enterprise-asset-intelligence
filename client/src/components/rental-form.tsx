@@ -176,7 +176,7 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
       ...data,
       buyRent: "RENT",
       receiveDate: formatDate(data.receiveDate) || getTodayDate(),
-      returnDate: formatDate(data.returnDate) ?? undefined,
+      returnDate: formatDate(data.returnDate),
       operatorName: data.operatorName || null,
     };
 

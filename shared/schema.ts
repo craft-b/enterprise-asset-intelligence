@@ -556,7 +556,13 @@ export const insertRentalSchema = createInsertSchema(rentals)
   .omit({ id: true, createdAt: true })
   .extend({
     receiveDate: z.string(),
-    returnDate: z.string(),
+    // Nullable in the table, and necessarily so: an ACTIVE rental has not come
+    // back yet, and POST /api/rentals/:id/complete is what fills this in. The
+    // extend() here only exists to accept a "YYYY-MM-DD" string instead of a
+    // Date, so requiring it was accidental -- and it made the new-rental form
+    // unusable without a return date, with the rejection surfacing as a bare
+    // "returnDate Required" that no field on the form was pointing at.
+    returnDate: z.string().nullable().optional(),
     operatorName: z.string().nullable().optional(),
     deliveryMethod: z.enum(["CUSTOMER_PICKUP", "COMPANY_DELIVERY"]).default("CUSTOMER_PICKUP"),
   });

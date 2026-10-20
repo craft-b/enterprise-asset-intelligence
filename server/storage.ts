@@ -4,6 +4,19 @@ import { eq, ilike, and, or, inArray, SQL, sql, desc } from "drizzle-orm";
 import { alias } from "drizzle-orm/mysql-core";
 import { maintenanceEvents, maintenanceConfig, modelTrainingMetrics } from "@shared/schema";
 
+// A DATE column wants a calendar day, and `new Date("2026-01-05")` is not one:
+// it is midnight UTC, which mysql2 then formats in the server's local zone. On
+// a machine in New York that writes 2026-01-04 — the completed rental comes
+// back a day before it was returned. Render runs in UTC so the deployed app
+// never showed it, which is exactly what makes it worth pinning down: the value
+// depended on which machine wrote it. Pass the day through as a string and
+// MySQL parses the literal.
+function dateOnly(value: unknown): unknown {
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  if (typeof value === "string") return value.slice(0, 10);
+  return value;
+}
+
 function generateJobId(): string {
   const date = new Date();
   const year = date.getFullYear();
@@ -220,9 +233,8 @@ export class DatabaseStorage implements IStorage {
   async createEquipment(equip: InsertEquipment): Promise<Equipment> {
     const insertData: any = { ...equip };
 
-    // Convert purchaseDate string → Date (same as updateEquipment)
-    if (insertData.purchaseDate && typeof insertData.purchaseDate === 'string') {
-      insertData.purchaseDate = new Date(insertData.purchaseDate);
+    if (insertData.purchaseDate != null) {
+      insertData.purchaseDate = dateOnly(insertData.purchaseDate);
     }
 
     // Auto-generate equipmentId if not provided — use numeric-only max to
@@ -245,8 +257,8 @@ export class DatabaseStorage implements IStorage {
 
   async updateEquipment(id: number, equip: Partial<InsertEquipment>): Promise<Equipment> {
     const updateData: any = { ...equip };
-    if (updateData.purchaseDate && typeof updateData.purchaseDate === 'string') {
-      updateData.purchaseDate = new Date(updateData.purchaseDate);
+    if (updateData.purchaseDate != null) {
+      updateData.purchaseDate = dateOnly(updateData.purchaseDate);
     }
     await db.update(equipment).set(updateData).where(eq(equipment.id, id));
     const [updated] = await db.select().from(equipment).where(eq(equipment.id, id));
@@ -317,15 +329,10 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createRental(rental: InsertRental): Promise<Rental> {
-    // Convert date strings to Date objects for MySQL
     const insertData: any = { ...rental };
 
-    if (insertData.receiveDate && typeof insertData.receiveDate === 'string') {
-      insertData.receiveDate = insertData.receiveDate.substring(0, 10);
-    }
-    if (insertData.returnDate && typeof insertData.returnDate === 'string') {
-      insertData.returnDate = insertData.returnDate.substring(0, 10);
-    }
+    if (insertData.receiveDate != null) insertData.receiveDate = dateOnly(insertData.receiveDate);
+    if (insertData.returnDate != null) insertData.returnDate = dateOnly(insertData.returnDate);
 
     // Auto-populate receiveHours from equipment's current mileage if not provided
     if (!insertData.receiveHours && insertData.equipmentId) {
@@ -344,12 +351,8 @@ export class DatabaseStorage implements IStorage {
 
   async updateRental(id: number, rental: Partial<InsertRental>): Promise<Rental> {
     const updateData: any = { ...rental };
-    if (updateData.receiveDate && typeof updateData.receiveDate === 'string') {
-      updateData.receiveDate = new Date(updateData.receiveDate);
-    }
-    if (updateData.returnDate && typeof updateData.returnDate === 'string') {
-      updateData.returnDate = new Date(updateData.returnDate);
-    }
+    if (updateData.receiveDate != null) updateData.receiveDate = dateOnly(updateData.receiveDate);
+    if (updateData.returnDate != null) updateData.returnDate = dateOnly(updateData.returnDate);
     await db.update(rentals).set(updateData).where(eq(rentals.id, id));
     const [updated] = await db.select().from(rentals).where(eq(rentals.id, id));
     return updated!;

@@ -383,11 +383,12 @@ Authenticated with `Authorization: Bearer <AGENT_API_KEY>`. Designed for program
 ## Testing
 
 ```bash
-# Python — ml-service (115 tests: inference, training smoke test, data quality gate, model registry)
+# Python — ml-service (180 tests: inference, training smoke test, point-in-time
+# correctness, leakage canaries, data-quality gate, model registry)
 cd ml-service
 pytest tests/ -v
 
-# Node/TypeScript — server (unit tests for feature-engineering and risk-scoring core logic)
+# Node/TypeScript — server + shared client logic (476 tests across 35 files)
 npm test
 
 # TypeScript type-check
@@ -395,6 +396,32 @@ npx tsc --noEmit
 ```
 
 All three run in CI (`.github/workflows/ml-ci.yml`) on every push/PR touching `ml-service/`, `server/`, `client/`, or `shared/`.
+
+The Node suite runs in three tiers, and which ones run depends on what is
+configured — a clean checkout with no database still runs the first tier and
+passes:
+
+| Tier | Needs | Covers |
+|---|---|---|
+| Pure logic | nothing | Feature maths, risk banding, calibration, the simulation clock, error formatting, and source-level guards against bugs that have recurred (raw HTML in error bodies, cacheable `/api` responses, TiDB-incompatible SQL) |
+| Read paths | `DATABASE_URL` | Point-in-time snapshot correctness, and an HTTP smoke test that asks every read endpoint whether it actually answers with JSON |
+| Write paths | `TEST_DATABASE_URL` | Creating, updating, completing and deleting rentals over HTTP, with the equipment status changes each is supposed to cause |
+
+The write tier needs a database it is allowed to damage, so it uses a separate
+DSN and **refuses to run** — rather than skipping quietly — if that DSN does not
+name a database with `test` in it. Set it up once:
+
+```bash
+# create the database on your server, then:
+DATABASE_URL="$TEST_DATABASE_URL" npm run db:push
+```
+
+The HTTP tiers authenticate through `POST /api/test-login`, which issues a
+session for an existing user id without a password. It is registered only when
+`TEST_LOGIN_SECRET` is set and at least 24 characters, refuses outright under
+`NODE_ENV=production`, compares the secret in constant time, and can only adopt
+a user that already exists — it never creates one, and takes the role from the
+database row rather than the request.
 
 ---
 

@@ -754,7 +754,7 @@ export async function registerRoutes(
       }
       const cursor = await getSimulationDate();
       const invoiceDate = cursor.toISOString().split('T')[0];
-      const invoice = await storage.createInvoice({ rentalId, invoiceDate: new Date(invoiceDate), periodFrom, periodTo, amount: String(amount), invoiceNumber });
+      const invoice = await storage.createInvoice({ rentalId, invoiceDate, periodFrom, periodTo, amount: String(amount), invoiceNumber } as any);
       res.status(201).json(invoice);
     } catch (e: any) {
       res.status(500).json({ message: 'Failed to create invoice', error: e.message });
