@@ -1,14 +1,16 @@
 // server/services/failure-density.test.ts
 //
-// The risk queue had no LOW row, and three attempts to fix it by reshaping
-// the fleet moved individual assets without moving the floor.
+// seedFailureEvents was injecting 18 reactive repairs across ten machines in
+// six months -- a breakdown every five weeks for the oldest crane. No rental
+// yard operates like that, and it is the least believable number in a demo
+// whose subject is predicting breakdowns.
 //
-// The floor was the label base rate. seedFailureEvents was injecting 18
-// reactive repairs across ten machines in six months -- a breakdown every
-// five weeks for the oldest crane -- which put the 30-day positive rate at
-// 33.5%. A calibrated model centres its output on the rate it was trained on,
-// so the scores clustered around a third and the 0.30 threshold sat
-// underneath nearly all of them.
+// It is not, as I first argued, the reason the risk queue has no LOW row.
+// That argument assumed the seeded labels set the model's calibration; they
+// set nothing. The demo scores with a champion trained offline, because the
+// data-quality gate refuses training below 500 labelled rows and this seed
+// produces a couple of hundred. Fewer breakdowns move the scores a little,
+// through features, not through the prior.
 //
 // These assertions are on the injection tiers rather than on a seeded
 // database, because the thing worth protecting is the intent: a demo fleet

@@ -57,12 +57,18 @@ import { scoreFleetMultiHorizon } from "./multi-horizon-scoring";
  * At 90 days of history that left a 22-day labelling window -- four weekly
  * dates, 40 labelled rows, and 11 positives: a 27.5% base rate.
  *
- * That base rate is the reason the risk queue had no LOW row. A calibrated
- * model centres its output near the rate it was trained on, so with 27.5% the
- * scores cluster around 0.28 and the 0.30 LOW threshold sits underneath
- * almost everything. Two rounds of fleet tuning moved individual assets by
- * 0.09 and did not move the floor at all, because the floor is calibration,
- * not features.
+ * I argued this base rate was why the risk queue had no LOW row, reasoning
+ * that a calibrated model centres its output on the rate it was trained on.
+ * That is true of a model trained here, and nothing is: the demo always scores
+ * with the v1.17 champion shipped in the ML image, trained offline on 10,828
+ * snapshots. The data-quality gate fails training below 500 labelled rows and
+ * this seed produces a couple of hundred, so the gate refuses it before memory
+ * is even a factor. The seeded labels train nothing; they exist so the
+ * pipeline has a training set to show.
+ *
+ * The window is still worth widening -- 22 days of labelled history is a
+ * threadbare thing to display next to a claim about temporal splits -- but
+ * not for the reason I gave.
  *
  * Six months of history widens the labelling window to about 17 weekly dates.
  * The same failures are spread over twice the span, so the positive rate
@@ -769,17 +775,21 @@ async function seedFailureEvents(
     //
     // These used to be 3-5, 1-3 and 0-1, which put 18 reactive repairs across
     // ten machines in six months -- a failure every five weeks for the oldest
-    // crane. No rental yard operates like that, and it set the 30-day label
-    // base rate to 33.5%. A calibrated model centres its output on the rate it
-    // was trained on, so the scores clustered around a third and the 0.30 LOW
-    // threshold sat under nearly all of them: the queue could not produce a
-    // low-risk row no matter how the fleet was shaped.
+    // crane. No rental yard operates like that. That is the whole reason:
+    // plausibility.
     //
-    // Scaled from the measured point rather than from a model of it: 18
-    // failures gave 33.5%, so roughly six should give about 11%. An
-    // attempt to simulate this predicted the rate would FALL when history was
-    // extended; it rose. The simulation was wrong about something, so it is
-    // not what these numbers rest on.
+    // It is NOT, as I first claimed, a fix for the missing LOW row. That
+    // argument assumed the seeded labels set the model's calibration, and they
+    // set nothing -- the demo scores with a champion trained offline on 10,828
+    // rows, because the data-quality gate refuses training below 500 labelled
+    // rows and this seed makes a couple of hundred. Fewer breakdowns do lower
+    // the scores a little, through features like maintenance_events_90d and
+    // days_since_last_maintenance, but through the features, not the prior.
+    //
+    // Sizing is scaled from the one real measurement -- 18 failures gave a
+    // 33.5% label rate, so roughly six gives about 11% -- because the
+    // simulation written to find these numbers predicted the rate would FALL
+    // when history was extended, and it rose.
     let targetFailures: number;
     if      (ageYears >= 10) targetFailures = 1 + Math.floor(Math.random() * 2); // 1-2
     else if (ageYears >=  6) targetFailures = Math.floor(Math.random() * 2);     // 0-1
