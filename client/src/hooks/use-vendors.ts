@@ -3,13 +3,14 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, buildUrl } from "@shared/routes";
 import { InsertVendor } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
+import { apiError } from "@/lib/api-error";
 
 export function useVendors() {
   return useQuery({
     queryKey: [api.vendors.list.path],
     queryFn: async () => {
       const res = await fetch(api.vendors.list.path, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to fetch vendors");
+      if (!res.ok) throw await apiError(res, "Failed to fetch vendors");
       return api.vendors.list.responses[200].parse(await res.json());
     },
   });
@@ -23,7 +24,7 @@ export function useVendor(id: number) {
       const res = await fetch(url, { credentials: "include" });
       
       if (res.status === 404) return null;
-      if (!res.ok) throw new Error("Failed to fetch vendor");
+      if (!res.ok) throw await apiError(res, "Failed to fetch vendor");
       
       return api.vendors.get.responses[200].parse(await res.json());
     },
@@ -49,7 +50,7 @@ export function useCreateVendor() {
           const error = api.vendors.create.responses[400].parse(await res.json());
           throw new Error(error.message);
         }
-        throw new Error("Failed to create vendor");
+        throw await apiError(res, "Failed to create vendor");
       }
       return api.vendors.create.responses[201].parse(await res.json());
     },
@@ -79,7 +80,7 @@ export function useUpdateVendor() {
 
       if (!res.ok) {
         if (res.status === 404) throw new Error("Vendor not found");
-        throw new Error("Failed to update vendor");
+        throw await apiError(res, "Failed to update vendor");
       }
       return api.vendors.update.responses[200].parse(await res.json());
     },
@@ -112,7 +113,7 @@ export function useDeleteVendor() {
           const error = await res.json();
           throw new Error(error.message);
         }
-        throw new Error("Failed to delete vendor");
+        throw await apiError(res, "Failed to delete vendor");
       }
       return res.json();
     },

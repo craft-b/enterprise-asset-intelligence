@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, buildUrl } from "@shared/routes";
 import { InsertEquipment } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
+import { apiError } from "@/lib/api-error";
 
 export function useEquipment(params?: { search?: string; status?: "AVAILABLE" | "RENTED" | "MAINTENANCE" }) {
   // Construct query key based on params to enable caching per filter state
@@ -15,7 +16,7 @@ export function useEquipment(params?: { search?: string; status?: "AVAILABLE" | 
       if (params?.status) url.searchParams.set("status", params.status);
 
       const res = await fetch(url.toString(), { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to fetch equipment");
+      if (!res.ok) throw await apiError(res, "Failed to fetch equipment");
       
       return api.equipment.list.responses[200].parse(await res.json());
     },
@@ -30,7 +31,7 @@ export function useEquipmentItem(id: number) {
       const res = await fetch(url, { credentials: "include" });
       
       if (res.status === 404) return null;
-      if (!res.ok) throw new Error("Failed to fetch equipment details");
+      if (!res.ok) throw await apiError(res, "Failed to fetch equipment details");
       
       return api.equipment.get.responses[200].parse(await res.json());
     },
@@ -60,7 +61,7 @@ export function useSensorTrends(id: number, days = 90) {
     queryKey: ["/api/equipment/:id/sensor-trends", id, days],
     queryFn: async () => {
       const res = await fetch(`/api/equipment/${id}/sensor-trends?days=${days}`, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to fetch sensor trends");
+      if (!res.ok) throw await apiError(res, "Failed to fetch sensor trends");
       return res.json();
     },
     enabled: !!id,
@@ -81,7 +82,7 @@ export function useFeatureBaseline(id: number) {
     queryKey: ["/api/equipment/:id/feature-baseline", id],
     queryFn: async () => {
       const res = await fetch(`/api/equipment/${id}/feature-baseline`, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to fetch feature baseline");
+      if (!res.ok) throw await apiError(res, "Failed to fetch feature baseline");
       return res.json();
     },
     enabled: !!id,
@@ -107,7 +108,7 @@ export function useCreateEquipment() {
           const error = api.equipment.create.responses[400].parse(await res.json());
           throw new Error(error.message);
         }
-        throw new Error("Failed to create equipment");
+        throw await apiError(res, "Failed to create equipment");
       }
       return api.equipment.create.responses[201].parse(await res.json());
     },
@@ -136,7 +137,7 @@ export function useDeleteEquipment() {
         const err = await res.json();
         throw new Error(err.message);
       }
-      if (!res.ok) throw new Error("Failed to delete equipment");
+      if (!res.ok) throw await apiError(res, "Failed to delete equipment");
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [api.equipment.list.path] });
@@ -165,7 +166,7 @@ export function useUpdateEquipment() {
       });
 
       if (!res.ok) {
-        throw new Error("Failed to update equipment");
+        throw await apiError(res, "Failed to update equipment");
       }
       return api.equipment.update.responses[200].parse(await res.json());
     },

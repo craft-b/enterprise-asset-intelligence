@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@shared/routes";
+import { apiError } from "@/lib/api-error";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -37,7 +38,7 @@ export function useMultiHorizonRiskScores() {
         body: JSON.stringify({ equipmentIds }),
         credentials: "include",
       });
-      if (!res.ok) throw new Error("Failed to calculate multi-horizon risk scores");
+      if (!res.ok) throw await apiError(res, "Failed to calculate multi-horizon risk scores");
       return res.json() as Promise<MultiHorizonResult[]>;
     },
     onSuccess: (data) => {
@@ -58,7 +59,7 @@ export function useLatestMultiHorizonPredictions() {
         credentials: "include",
         cache: "no-store",
       });
-      if (!res.ok) throw new Error("Failed to fetch latest predictions");
+      if (!res.ok) throw await apiError(res, "Failed to fetch latest predictions");
       return res.json();
     },
     staleTime: 2 * 60 * 1000, // 2 minutes
@@ -74,7 +75,7 @@ export function useRiskScoreHistory(equipmentId: number) {
       const res = await fetch(`/api/risk-score/equipment/${equipmentId}/history`, {
         credentials: "include",
       });
-      if (!res.ok) throw new Error("Failed to fetch risk score history");
+      if (!res.ok) throw await apiError(res, "Failed to fetch risk score history");
       return api.riskScore.history.responses[200].parse(await res.json());
     },
     enabled: !!equipmentId,

@@ -3,6 +3,7 @@ import { api, buildUrl } from "@shared/routes";
 import { InsertRental } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
 import { z } from "zod";
+import { apiError } from "@/lib/api-error";
 
 export function useNextPoNumber() {
   return useQuery({
@@ -22,7 +23,7 @@ export function useRentals() {
     queryKey: [api.rentals.list.path],
     queryFn: async () => {
       const res = await fetch(api.rentals.list.path, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to fetch rentals");
+      if (!res.ok) throw await apiError(res, "Failed to fetch rentals");
       return api.rentals.list.responses[200].parse(await res.json());
     },
   });
@@ -47,7 +48,7 @@ export function useCreateRental() {
           const error = api.rentals.create.responses[400].parse(await res.json());
           throw new Error(error.message);
         }
-        throw new Error("Failed to create rental");
+        throw await apiError(res, "Failed to create rental");
       }
       return api.rentals.create.responses[201].parse(await res.json());
     },
@@ -84,7 +85,7 @@ export function useUpdateRental() {
         if (res.status === 404) {
           throw new Error("Rental not found");
         }
-        throw new Error("Failed to update rental");
+        throw await apiError(res, "Failed to update rental");
       }
       return api.rentals.update.responses[200].parse(await res.json());
     },
@@ -114,7 +115,7 @@ export function useDeleteRental() {
         const err = await res.json();
         throw new Error(err.message);
       }
-      if (!res.ok) throw new Error("Failed to delete rental");
+      if (!res.ok) throw await apiError(res, "Failed to delete rental");
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [api.rentals.list.path] });
@@ -142,7 +143,7 @@ export function useCompleteRental() {
       });
 
       if (!res.ok) {
-        throw new Error("Failed to complete rental");
+        throw await apiError(res, "Failed to complete rental");
       }
       return api.rentals.complete.responses[200].parse(await res.json());
     },

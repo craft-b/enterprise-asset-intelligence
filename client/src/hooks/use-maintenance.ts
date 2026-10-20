@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, buildUrl } from "@shared/routes";
 import { useToast } from "@/hooks/use-toast";
+import { apiError } from "@/lib/api-error";
 
 export function useMaintenance(params: {
   equipmentId?: number;
@@ -20,7 +21,7 @@ export function useMaintenance(params: {
       if (sortBy)  qs.set('sortBy',  sortBy);
       if (sortDir) qs.set('sortDir', sortDir);
       const res = await fetch(`${api.maintenance.list.path}?${qs}`, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to fetch maintenance events");
+      if (!res.ok) throw await apiError(res, "Failed to fetch maintenance events");
       return api.maintenance.list.responses[200].parse(await res.json());
     },
   });
@@ -32,7 +33,7 @@ export function useMaintenanceHistory(equipmentId: number) {
     queryFn: async () => {
       const url = buildUrl(api.maintenance.getByEquipment.path, { id: equipmentId });
       const res = await fetch(url, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to fetch maintenance history");
+      if (!res.ok) throw await apiError(res, "Failed to fetch maintenance history");
       return api.maintenance.getByEquipment.responses[200].parse(await res.json());
     },
     enabled: !!equipmentId,

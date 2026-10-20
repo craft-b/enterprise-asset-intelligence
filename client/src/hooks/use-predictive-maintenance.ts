@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
+import { apiError } from "@/lib/api-error";
 
 // Per-horizon binary metrics as trained/evaluated — each model is a binary
 // failure classifier for a 10/30/60-day window, so metrics are reported per
@@ -141,7 +142,7 @@ export function useEquipmentProjection(equipmentId: number | null) {
       const res = await fetch(`/api/equipment/${equipmentId}/projection`, {
         credentials: "include",
       });
-      if (!res.ok) throw new Error("Failed to fetch projection");
+      if (!res.ok) throw await apiError(res, "Failed to fetch projection");
       return res.json();
     },
     enabled: !!equipmentId,
@@ -157,7 +158,7 @@ export function useEquipmentRisk(equipmentId: number) {
       const res = await fetch(`/api/equipment/${equipmentId}/risk`, { 
         credentials: "include" 
       });
-      if (!res.ok) throw new Error("Failed to fetch risk prediction");
+      if (!res.ok) throw await apiError(res, "Failed to fetch risk prediction");
       return res.json();
     },
     enabled: !!equipmentId,
@@ -172,7 +173,7 @@ export function useFleetRisk() {
       const res = await fetch('/api/predictive-maintenance/fleet-risk', { 
         credentials: "include" 
       });
-      if (!res.ok) throw new Error("Failed to fetch fleet risk");
+      if (!res.ok) throw await apiError(res, "Failed to fetch fleet risk");
       return res.json();
     },
   });
@@ -186,7 +187,7 @@ export function useEquipmentWithRisk() {
       const res = await fetch('/api/predictive-maintenance/equipment-with-risk', { 
         credentials: "include" 
       });
-      if (!res.ok) throw new Error("Failed to fetch equipment with risk");
+      if (!res.ok) throw await apiError(res, "Failed to fetch equipment with risk");
       return res.json();
     },
   });
@@ -243,7 +244,7 @@ export function useGenerateSnapshots() {
         }),
         credentials: "include",
       });
-      if (!res.ok) throw new Error("Failed to generate snapshots");
+      if (!res.ok) throw await apiError(res, "Failed to generate snapshots");
       return res.json();
     },
     onSuccess: (data) => {
@@ -272,7 +273,7 @@ export function useLabelSnapshots() {
         method: "POST",
         credentials: "include",
       });
-      if (!res.ok) throw new Error("Failed to label snapshots");
+      if (!res.ok) throw await apiError(res, "Failed to label snapshots");
       return res.json();
     },
     onSuccess: (data) => {
@@ -347,7 +348,7 @@ export function useSimulationState() {
     queryKey: ["/api/simulate/state"],
     queryFn: async () => {
       const res = await fetch("/api/simulate/state", { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to fetch simulation state");
+      if (!res.ok) throw await apiError(res, "Failed to fetch simulation state");
       return res.json();
     },
     refetchInterval: false,
@@ -423,7 +424,7 @@ export function useDriftStatus() {
     queryKey: ["/api/ml/drift/latest"],
     queryFn: async () => {
       const res = await fetch("/api/ml/drift/latest", { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to fetch drift status");
+      if (!res.ok) throw await apiError(res, "Failed to fetch drift status");
       return res.json();
     },
     staleTime: 2 * 60 * 1000,
@@ -480,7 +481,7 @@ export function usePredictionDrift() {
     queryKey: ["/api/ml/drift/prediction"],
     queryFn: async () => {
       const res = await fetch("/api/ml/drift/prediction", { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to fetch prediction drift");
+      if (!res.ok) throw await apiError(res, "Failed to fetch prediction drift");
       return res.json();
     },
     staleTime: 2 * 60 * 1000,
@@ -510,7 +511,7 @@ export function useBiasDrift() {
     queryKey: ["/api/ml/drift/bias"],
     queryFn: async () => {
       const res = await fetch("/api/ml/drift/bias", { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to fetch bias drift");
+      if (!res.ok) throw await apiError(res, "Failed to fetch bias drift");
       return res.json();
     },
     staleTime: 2 * 60 * 1000,
@@ -557,7 +558,7 @@ export function useModelRegistry() {
     queryKey: ["/api/ml/models/registry"],
     queryFn: async () => {
       const res = await fetch("/api/ml/models/registry", { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to fetch model registry");
+      if (!res.ok) throw await apiError(res, "Failed to fetch model registry");
       return res.json() as Promise<RegistryState>;
     },
     staleTime: 10_000,
@@ -569,7 +570,7 @@ export function useChampionChallengerCompare() {
     queryKey: ["/api/ml/models/compare"],
     queryFn: async () => {
       const res = await fetch("/api/ml/models/compare", { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to fetch comparison");
+      if (!res.ok) throw await apiError(res, "Failed to fetch comparison");
       return res.json() as Promise<ChampionChallengerStatus>;
     },
     staleTime: 10_000,
@@ -628,7 +629,7 @@ export function useDataQualityReport() {
     queryKey: ["/api/ml/data-quality/report"],
     queryFn: async () => {
       const res = await fetch("/api/ml/data-quality/report", { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to fetch data quality report");
+      if (!res.ok) throw await apiError(res, "Failed to fetch data quality report");
       return res.json() as Promise<DataQualityReport>;
     },
     staleTime: 60_000,
@@ -641,7 +642,7 @@ export function useTrainingStatus(enabled: boolean) {
     queryKey: ["/api/ml/train/status"],
     queryFn: async () => {
       const res = await fetch("/api/ml/train/status", { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to fetch training status");
+      if (!res.ok) throw await apiError(res, "Failed to fetch training status");
       return res.json() as Promise<{
         running: boolean;
         log: string[];

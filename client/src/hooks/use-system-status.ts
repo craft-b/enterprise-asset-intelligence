@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { apiError } from "@/lib/api-error";
 
 export type SystemStatus = {
   seeded: boolean;
@@ -26,7 +27,7 @@ export function useSystemStatus() {
     queryKey: ["/api/admin/system-status"],
     queryFn: async () => {
       const res = await fetch("/api/admin/system-status", { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to fetch system status");
+      if (!res.ok) throw await apiError(res, "Failed to fetch system status");
       return res.json();
     },
     staleTime: 30_000,
@@ -42,7 +43,7 @@ export function useSeedStatus(enabled: boolean) {
         credentials: "include",
         cache: "no-store",
       });
-      if (!res.ok) throw new Error("Failed to fetch seed status");
+      if (!res.ok) throw await apiError(res, "Failed to fetch seed status");
       return res.json();
     },
     refetchInterval: enabled ? 1500 : false,
