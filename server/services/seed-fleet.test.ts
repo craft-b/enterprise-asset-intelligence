@@ -26,8 +26,9 @@ const SOURCE = readFileSync(join(__dirname, "seed-orchestrator.ts"), "utf-8");
 
 interface Asset {
   code: string;
-  serial: string;
-  year: number;
+  serialPrefix: string;
+  /** Years old at the cursor, which is how the seed now defines the fleet. */
+  ageYears: number;
   hours: number;
   category: string;
 }
@@ -36,22 +37,33 @@ interface Asset {
 function parseFleet(): Asset[] {
   const assets: Asset[] = [];
   const row =
-    /equipmentId:\s*"(EQ-\d+)"[\s\S]*?category:\s*"([^"]+)"[\s\S]*?serial:\s*"([^"]+)"[\s\S]*?year:\s*(\d{4}),\s*hours:\s*(\d+)/g;
+    /equipmentId:\s*"(EQ-\d+)"[\s\S]*?category:\s*"([^"]+)"[\s\S]*?serialPrefix:\s*"([^"]+)"[\s\S]*?ageYears:\s*(\d+),\s*hours:\s*(\d+)/g;
   for (const m of SOURCE.matchAll(row)) {
-    assets.push({ code: m[1], category: m[2], serial: m[3], year: Number(m[4]), hours: Number(m[5]) });
+    assets.push({
+      code: m[1], category: m[2], serialPrefix: m[3],
+      ageYears: Number(m[4]), hours: Number(m[5]),
+    });
   }
   return assets;
 }
 
-/** The cursor the seed treats as "today". */
+/**
+ * The cursor the seed treats as "today".
+ *
+ * Mirrors seedCursor() in the orchestrator: the pinned date when
+ * SEED_CURSOR_DATE is set, otherwise the real one. It used to read a hardcoded
+ * constant out of the source, which stopped existing when the seed was
+ * anchored to the current date -- a demo seeded in October was producing a
+ * world dated the previous April.
+ */
 function cursorDate(): Date {
-  const m = SOURCE.match(/const SEED_CURSOR\s*=\s*"(\d{4}-\d{2}-\d{2})"/);
-  if (!m) throw new Error("SEED_CURSOR not found");
-  return new Date(m[1]);
+  const pinned = process.env.SEED_CURSOR_DATE?.trim();
+  if (pinned) return new Date(pinned);
+  return new Date();
 }
 
 /** Integer age, matching how seedFailureEvents tiers assets. */
-const tierAge = (year: number, cursor: Date) => cursor.getFullYear() - year;
+const tierAge = (a: Asset) => a.ageYears;
 
 /**
  * Roughly what the 90-day sensor seed adds, by category.
@@ -74,10 +86,11 @@ const minAdded = (category: string) => MIN_HOURS_ADDED[category] ?? 5 * 76;
  * that actually decides the risk band -- it is the top driver on every row.
  */
 function projectedWearRate(a: Asset): number {
-  const purchase = new Date(`${a.year}-06-15`);
-  const ageYears = (cursor.getTime() - purchase.getTime()) / (365.25 * 24 * 3600 * 1000);
-  if (ageYears <= 0) return Infinity;
-  return (a.hours + minAdded(a.category)) / (ageYears * 8760);
+  // The seed sets purchase to June of (cursor year - ageYears), so the real
+  // age straddles that by up to half a year either way. Close enough for a
+  // duty-cycle bound, and it no longer drifts as the calendar moves.
+  if (a.ageYears <= 0) return Infinity;
+  return (a.hours + minAdded(a.category)) / (a.ageYears * 8760);
 }
 
 const fleet = parseFleet();
@@ -88,7 +101,7 @@ describe("the demo fleet", () => {
     // Guards everything below: a regex that matched nothing would pass it all.
     expect(fleet).toHaveLength(10);
     expect(fleet.map(a => a.code)).toContain("EQ-001");
-    expect(fleet.every(a => a.year > 2000 && a.hours >= 0)).toBe(true);
+    expect(fleet.every(a => a.ageYears > 0 && a.hours >= 0)).toBe(true);
   });
 
   it("has a cursor to measure ages against", () => {
@@ -98,9 +111,9 @@ describe("the demo fleet", () => {
   it("does not stack the fleet into the HIGH tier", () => {
     // Six years is where injected failures begin in earnest. More than four
     // such assets and the risk queue is mostly red before anything is scored.
-    const old = fleet.filter(a => tierAge(a.year, cursor) >= 6);
+    const old = fleet.filter(a => tierAge(a) >= 6);
     expect(
-      old.map(a => `${a.code} (${tierAge(a.year, cursor)}y)`),
+      old.map(a => `${a.code} (${tierAge(a)}y)`),
       "assets aged 6+ score HIGH; keep this to four or fewer or the demo " +
       "shows a fleet where everything is failing"
     ).toHaveLength(3);
@@ -108,7 +121,7 @@ describe("the demo fleet", () => {
 
   it("keeps genuinely old assets, so HIGH means something", () => {
     // The opposite failure: a uniformly new fleet has no risk to show.
-    const veryOld = fleet.filter(a => tierAge(a.year, cursor) >= 10);
+    const veryOld = fleet.filter(a => tierAge(a) >= 10);
     expect(veryOld.length).toBeGreaterThanOrEqual(2);
   });
 
@@ -133,7 +146,7 @@ describe("the demo fleet", () => {
   it("works the old assets harder than the lightly-used ones", () => {
     // Without this the ordering can inverert: the first rebalance gave the
     // newest units the highest duty cycle in the fleet.
-    const worked = fleet.filter(a => tierAge(a.year, cursor) >= 10);
+    const worked = fleet.filter(a => tierAge(a) >= 10);
     const light = fleet.filter(a => projectedWearRate(a) <= 0.055);
     const lowestWorked = Math.min(...worked.map(projectedWearRate));
     const highestLight = Math.max(...light.map(projectedWearRate));
@@ -148,7 +161,7 @@ describe("the demo fleet", () => {
     // one age.
     const tiers = { old: 0, mid: 0, young: 0 };
     for (const a of fleet) {
-      const age = tierAge(a.year, cursor);
+      const age = tierAge(a);
       if (age >= 6) tiers.old++;
       else if (age >= 2) tiers.mid++;
       else tiers.young++;
@@ -186,25 +199,31 @@ describe("the demo fleet", () => {
   it("gives older assets more hours than new ones", () => {
     // Not a strict ordering -- a compressor outworks a crane -- but the oldest
     // asset outrunning the newest is the minimum for the fleet to read as real.
-    const byAge = [...fleet].sort((a, b) => tierAge(b.year, cursor) - tierAge(a.year, cursor));
+    const byAge = [...fleet].sort((a, b) => tierAge(b) - tierAge(a));
     expect(byAge[0].hours).toBeGreaterThan(byAge[byAge.length - 1].hours);
   });
 
-  it("carries serial numbers that agree with the model year", () => {
-    // The serials embed the year. Changing one without the other leaves a 2024
-    // machine stamped 2022, which is exactly the detail a reviewer from this
-    // industry notices.
-    for (const a of fleet) {
-      const stamped = a.serial.match(/-(\d{4})-/);
-      expect(stamped, `${a.code} serial has no year: ${a.serial}`).not.toBeNull();
-      expect(Number(stamped![1]), `${a.code} serial ${a.serial} vs year ${a.year}`)
-        .toBe(a.year);
-    }
+  it("builds the serial from the same year as the purchase date", () => {
+    // Serials embed the model year, and they used to be written out by hand
+    // beside it -- so changing one and not the other left a 2024 machine
+    // stamped 2022, which is the first thing a reviewer from this industry
+    // notices. Both are now derived from one computed year, so they cannot
+    // disagree; this holds that derivation in place.
+    const seedFn = SOURCE.match(/async function seedEquipment[\s\S]*?\n}/)![0];
+
+    expect(seedFn).toMatch(/const year = cursorDate\.getFullYear\(\) - e\.ageYears/);
+    expect(seedFn).toMatch(/const serial = `\$\{e\.serialPrefix\}-\$\{year\}-\$\{e\.serialSuffix\}`/);
+    expect(seedFn).toMatch(/const purchaseDate = `\$\{year\}-06-15`/);
+    // And nothing writes a literal four-digit year into a serial any more.
+    expect(seedFn).not.toMatch(/serial:\s*"[^"]*-\d{4}-/);
   });
 
-  it("has unique codes and serials", () => {
+  it("has unique codes and serial prefixes", () => {
+    // The prefix is what distinguishes one serial from another now that the
+    // year is computed; two assets sharing a prefix and suffix would be
+    // stamped identically in any year they share.
     expect(new Set(fleet.map(a => a.code)).size).toBe(fleet.length);
-    expect(new Set(fleet.map(a => a.serial)).size).toBe(fleet.length);
+    expect(new Set(fleet.map(a => a.serialPrefix)).size).toBe(fleet.length);
   });
 });
 
