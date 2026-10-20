@@ -166,10 +166,23 @@ class EnhancedFeatureEngineeringService {
 
     const assetAgeYears = (now.getTime() - purchaseDate.getTime()) / (365.25 * 24 * 3600 * 1000);
 
-    // ── Hours — prefer sensor accumulation, fall back to equipment record ──
-    const sensorHours = await this.getAccumulatedHoursFromSensors(equipmentId, purchaseDate, now);
+    // ── Hours — the equipment record is the hour meter ─────────────────────
+    //
+    // This preferred the sensor count, on the theory that readings are ground
+    // truth and the record is hearsay. But the sensor log is a rolling 90-day
+    // window, not a lifetime ledger: counting its rows gave EQ-001, a 2013
+    // crane with 10,363 hours on the meter, a lifetime total of 90 -- and the
+    // recommendation shown to the user read "13.3 year old unit with 90
+    // lifetime hours".
+    //
+    // wear_rate is lifetime hours over age in hours, so every asset's duty
+    // cycle came out around 0.001 instead of 0.09, roughly a hundredfold low,
+    // on the feature the fleet design was built around. The record is the
+    // meter: rental completion accumulates into current_mileage, which is what
+    // a yard reads off the machine.
     const recordHours = Number(equipAny.currentMileage ?? equipAny.totalHours ?? 0);
-    const totalHoursLifetime = sensorHours > 0 ? sensorHours : recordHours;
+    const sensorHours = await this.getAccumulatedHoursFromSensors(equipmentId, purchaseDate, now);
+    const totalHoursLifetime = recordHours > 0 ? recordHours : sensorHours;
 
     // ── Rental activity — FIXED: rentals90 now uses d90 not d30 ──────────
     const rentals30 = await db

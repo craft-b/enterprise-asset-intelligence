@@ -65,5 +65,17 @@ export async function seedRentals(
       // silently produced zero rentals while reporting success.
       if (!isDuplicateKey(error)) throw error;
     }
+
+    // An ACTIVE rental means the unit is out. Writing the rental row without
+    // this left two machines on hire while the fleet still listed them
+    // AVAILABLE -- and the new-rental form offers exactly the AVAILABLE ones,
+    // so both could be hired out a second time from the UI. POST /api/rentals
+    // has always done this; the seeder writes straight to the table and so
+    // skipped it.
+    if (status === "ACTIVE") {
+      await db.execute(sql`
+        UPDATE equipment SET status = 'RENTED' WHERE id = ${equipId}
+      `);
+    }
   }
 }
