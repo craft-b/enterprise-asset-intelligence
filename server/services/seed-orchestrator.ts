@@ -49,6 +49,42 @@ import { scoreFleetMultiHorizon } from "./multi-horizon-scoring";
  * regenerating the exact dataset a model was trained on.
  */
 /**
+ * How much history the seed lays down, and how the labelled training set
+ * falls out of it.
+ *
+ * A snapshot can only be labelled once its longest horizon has elapsed, so
+ * with a 60-day horizon only snapshots older than `cursor - 61d` are usable.
+ * At 90 days of history that left a 22-day labelling window -- four weekly
+ * dates, 40 labelled rows, and 11 positives: a 27.5% base rate.
+ *
+ * That base rate is the reason the risk queue had no LOW row. A calibrated
+ * model centres its output near the rate it was trained on, so with 27.5% the
+ * scores cluster around 0.28 and the 0.30 LOW threshold sits underneath
+ * almost everything. Two rounds of fleet tuning moved individual assets by
+ * 0.09 and did not move the floor at all, because the floor is calibration,
+ * not features.
+ *
+ * Six months of history widens the labelling window to about 17 weekly dates.
+ * The same failures are spread over twice the span, so the positive rate
+ * falls towards something a rental yard would recognise while the positive
+ * count goes up rather than down -- which reducing the injected failures
+ * would not have managed, with only 11 to begin with.
+ *
+ * The cost is the sensor seed and the snapshot pass, both linear in this
+ * number. 180 is also what the setup screen has always claimed ("6 months of
+ * sensor history") while seeding 90.
+ */
+const SEED_HISTORY_DAYS = 180;
+
+/** Spacing of backfilled snapshot dates. Closer together is more rows but not
+ *  much more information: consecutive snapshots of one asset barely differ,
+ *  and the data-quality gate counts near-duplicates against you. */
+const SNAPSHOT_INTERVAL_DAYS = 7;
+
+/** A snapshot needs its longest horizon (60d) plus a day to be observable. */
+const LABELABLE_LAG_DAYS = 61;
+
+/**
  * The demo yard.
  *
  * At module scope because the sensor seeder needs `duty` as well: hours
@@ -294,24 +330,26 @@ async function runSeedPipeline() {
 
     // ── Step 4: Historical sensor data + failure events ────────────────────
     setStep(4, "running");
-    const seedStart = new Date(cursorDate.getTime() - 90 * 24 * 3600 * 1000);
-    const sensorCount = await seedSensorData(equipmentIds, cursorDate, 90);
+    const seedStart = new Date(cursorDate.getTime() - SEED_HISTORY_DAYS * 24 * 3600 * 1000);
+    const sensorCount = await seedSensorData(equipmentIds, cursorDate, SEED_HISTORY_DAYS);
     const failureCount = await seedFailureEvents(equipmentIds, seedStart, cursorDate);
     setStep(4, "completed", `${sensorCount} sensor readings, ${failureCount} failure events`);
 
     // ── Step 5: Feature snapshots (backfill weekly + current) ──────────────
     setStep(5, "running");
-    // Backfill snapshots at weekly intervals from day 7 to day 29 after seedStart.
-    // Only snapshots older than (cursor - 60d) can be fully labeled (all three horizons).
-    // cursor - 60d = 2026-02-01; seedStart = 2026-01-01 → backfill 2026-01-08 to 2026-01-29.
-    const labelableCutoff = new Date(cursorDate.getTime() - 61 * 24 * 3600 * 1000);
+    // Backfill at SNAPSHOT_INTERVAL_DAYS from the start of history up to the
+    // last date whose 60-day horizon has already elapsed. Anything later
+    // cannot be labelled, so generating it would add rows the model has to
+    // discard.
+    const labelableCutoff = new Date(cursorDate.getTime() - LABELABLE_LAG_DAYS * 24 * 3600 * 1000);
+    const stepMs = SNAPSHOT_INTERVAL_DAYS * 24 * 3600 * 1000;
     let totalSnapshots = 0;
-    let backfillDate = new Date(seedStart.getTime() + 7 * 24 * 3600 * 1000);
+    let backfillDate = new Date(seedStart.getTime() + stepMs);
     while (backfillDate <= labelableCutoff) {
       const snaps = await featureEngineeringService.generateSnapshotsForAllEquipment(backfillDate);
       for (const snap of snaps) await featureEngineeringService.saveSnapshot(snap);
       totalSnapshots += snaps.length;
-      backfillDate = new Date(backfillDate.getTime() + 7 * 24 * 3600 * 1000);
+      backfillDate = new Date(backfillDate.getTime() + stepMs);
     }
     // Current-date snapshot (for live predictions — won't be labeled yet)
     const currentSnaps = await featureEngineeringService.generateSnapshotsForAllEquipment(cursorDate);
@@ -481,11 +519,11 @@ async function seedEquipment(cursorDate: Date) {
   // genuinely old assets, a middle group, and new units -- without touching
   // the hazard model to flatter the numbers.
   //
-  // Hours are starting values; the 90-day sensor seed adds roughly 535 (most
-  // categories), 690 (hauler/loader), 1,150 (compressor) or 1,300 (generator)
-  // on top. Nothing is left under a year old with fewer than 500 lifetime
-  // hours, which would trip the cold-start rule in services/imputation.ts and
-  // be scored by rule instead of by the model.
+  // Hours are the meter reading when the seeded history starts; the sensor
+  // seed adds to them over SEED_HISTORY_DAYS, scaled by each unit's duty.
+  // Nothing is left under a year old with fewer than 500 lifetime hours,
+  // which would trip the cold-start rule in services/imputation.ts and be
+  // scored by rule instead of by the model.
   //
   // Age alone does not produce a low-risk asset, and assuming it did cost a
   // round trip. The dominant feature is wear rate --

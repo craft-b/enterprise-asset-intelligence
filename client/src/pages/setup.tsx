@@ -264,7 +264,7 @@ export default function SetupPage() {
                   "instance suspending mid-run. Whatever had been written is still there, " +
                   "but the run did not complete. Reset and load again."
                 : success
-                  ? "10 equipment units, 90 days of sensor data, maintenance history and failure events are loaded."
+                  ? "10 equipment units, 6 months of sensor data, maintenance history and failure events are loaded."
                   : seedJob?.error ?? "An error occurred during setup."}
             </CardDescription>
           </CardHeader>
@@ -329,7 +329,7 @@ export default function SetupPage() {
               <ul className="text-xs text-slate-600 space-y-1">
                 {[
                   "10 heavy equipment units (crane, excavator, grader…)",
-                  "90 days of sensor readings per asset",
+                  "6 months of sensor readings per asset",
                   "Automated preventive maintenance history",
                   "Trained multi-horizon ML model (10d/30d/60d)",
                   "SHAP feature attribution + MLflow tracking",

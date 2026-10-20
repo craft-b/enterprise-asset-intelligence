@@ -86,9 +86,14 @@ const MIN_DAILY_HOURS: Record<string, number> = {
  * the test describing the uniform accrual the duty factor exists to end, and
  * every projection below would be wrong for exactly the assets that matter.
  */
+/** Read out of the seeder, so this cannot describe a window it no longer uses. */
+const HISTORY_DAYS = Number(
+  SOURCE.match(/const SEED_HISTORY_DAYS = (\d+)/)?.[1] ?? 0
+);
+
 const minAdded = (a: Asset) => {
   const perDay = (MIN_DAILY_HOURS[a.category] ?? 5) * (0.5 + 0.5 * a.duty);
-  const activeDays = 90 * (a.duty * 0.85);
+  const activeDays = HISTORY_DAYS * (a.duty * 0.85);
   return perDay * activeDays;
 };
 
@@ -441,5 +446,44 @@ describe("the fleet works its machines at different rates", () => {
     const worstLight = Math.max(...light.map(projectedWearRate));
     const bestHeavy  = Math.min(...heavy.map(projectedWearRate));
     expect(worstLight).toBeLessThan(bestHeavy);
+  });
+});
+
+describe("the labelled training set the history produces", () => {
+  const interval = Number(SOURCE.match(/const SNAPSHOT_INTERVAL_DAYS = (\d+)/)?.[1] ?? 0);
+  const lag = Number(SOURCE.match(/const LABELABLE_LAG_DAYS = (\d+)/)?.[1] ?? 0);
+
+  it("reads the three constants it reasons about", () => {
+    expect(HISTORY_DAYS).toBeGreaterThan(0);
+    expect(interval).toBeGreaterThan(0);
+    expect(lag).toBeGreaterThan(0);
+  });
+
+  it("leaves a labelling window at all", () => {
+    // A snapshot cannot be labelled until its longest horizon has elapsed, so
+    // history shorter than the lag produces a training set of zero rows and a
+    // seed that completes successfully having taught the model nothing.
+    expect(
+      HISTORY_DAYS - lag,
+      "history is shorter than the labelling lag: no snapshot can be labelled"
+    ).toBeGreaterThan(0);
+  });
+
+  it("produces enough labelled dates to dilute the failures", () => {
+    // Four dates and 40 rows gave a 27.5% base rate, which put the model's
+    // calibrated floor above the LOW threshold and left the queue with no
+    // low-risk row. The fix is span, not fewer failures -- there were only
+    // eleven positives to begin with.
+    const dates = Math.floor((HISTORY_DAYS - lag - interval) / interval) + 1;
+    expect(
+      dates * fleet.length,
+      `${dates} labelled snapshot dates is too few to move the base rate`
+    ).toBeGreaterThanOrEqual(120);
+  });
+
+  it("does not space snapshots so tightly they are near-duplicates", () => {
+    // The data-quality gate counts duplicate snapshots against the training
+    // set, and consecutive snapshots of one asset barely differ.
+    expect(interval).toBeGreaterThanOrEqual(5);
   });
 });

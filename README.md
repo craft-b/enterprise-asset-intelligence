@@ -388,7 +388,7 @@ Authenticated with `Authorization: Bearer <AGENT_API_KEY>`. Designed for program
 cd ml-service
 pytest tests/ -v
 
-# Node/TypeScript — server + shared client logic (511 tests across 39 files)
+# Node/TypeScript — server + shared client logic (515 tests across 39 files)
 npm test
 
 # TypeScript type-check
@@ -481,7 +481,7 @@ On first login, the app automatically redirects to `/setup`. Choose one of two p
 
 **Load Demo Data** — recommended for evaluation and interviews. Runs the full seed pipeline in the background (~60–90 seconds) and streams live progress. Seeds:
 - 10 heavy equipment units across four categories
-- 90 days of sensor readings per asset
+- 6 months of sensor readings per asset
 - Maintenance history with realistic failure events
 - Trained multi-horizon ML model (10d / 30d / 60d)
 - SHAP attribution, MLflow run, drift reference baseline
