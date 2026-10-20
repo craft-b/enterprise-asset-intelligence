@@ -388,7 +388,7 @@ Authenticated with `Authorization: Bearer <AGENT_API_KEY>`. Designed for program
 cd ml-service
 pytest tests/ -v
 
-# Node/TypeScript — server + shared client logic (533 tests across 41 files)
+# Node/TypeScript — server + shared client logic (534 tests across 41 files)
 npm test
 
 # TypeScript type-check
@@ -416,13 +416,20 @@ name a database with `test` in it. Set it up once:
 DATABASE_URL="$TEST_DATABASE_URL" npm run db:push
 ```
 
-> `drizzle-kit push` is interactive. If the schema has drifted it asks before
-> adding a unique constraint, and one of the options it offers is to **truncate
-> the table**. Run it in a terminal you can answer, and read what it is asking:
-> piped or scripted it receives no answer, applies nothing, and still **exits
-> 0** — a migration that looks like it succeeded and did not. There is no
-> migration history or rollback here either; `docs/DESIGN_SPEC.md` records that
-> as a known limitation rather than a decision.
+> **`drizzle-kit push` is interactive, and against TiDB it asks a misleading
+> question.** It offers to add unique constraints that are already present —
+> `users_username_unique`, `equipment_equipment_id_unique` and the rest all
+> exist and all reject duplicates with `ER_DUP_ENTRY`, verified by probing
+> them — and one of the options it offers alongside is to **truncate the
+> table**. Answering "yes" would destroy data to make room for a constraint
+> that is already there. Say no, or close the prompt.
+>
+> Run it only in a terminal you can answer. Piped or scripted it receives no
+> answer, applies nothing, and still **exits 0** — a migration that looks like
+> it succeeded and did nothing. Nothing in the deploy path runs it.
+>
+> There is no migration history or rollback here either; `docs/DESIGN_SPEC.md`
+> records that as a known limitation rather than a decision.
 
 The HTTP tiers authenticate through `POST /api/test-login`, which issues a
 session for an existing user id without a password. It is registered only when

@@ -230,6 +230,29 @@ describe.runIf(ENABLED)("write paths over HTTP", () => {
     expect(r.body.message.length).toBeGreaterThan(0);
   });
 
+  it("refuses a second piece of equipment with the same id", async () => {
+    // drizzle-kit push offers to ADD this constraint every time it runs
+    // against TiDB, and offers truncating the table as a way to make room for
+    // it. The constraint is already there and enforced; the prompt is a false
+    // positive. This asserts the thing the prompt casts doubt on, so nobody
+    // has to take drizzle-kit's word for it -- or act on it.
+    const r = await api("POST", "/api/equipment", {
+      equipmentId: "WT-001",            // already created above
+      name: "Duplicate Excavator",
+      category: "Excavator",
+      status: "AVAILABLE",
+      dailyRate: "500.00",
+    });
+    expect(r.status, `a duplicate equipment id was accepted: ${r.raw.slice(0, 160)}`)
+      .toBeGreaterThanOrEqual(400);
+    expect(r.status).toBeLessThan(600);
+
+    // And nothing was written: one WT-001, not two.
+    const all = await api("GET", "/api/equipment");
+    const matches = (all.body as any[]).filter(e => e.equipmentId === "WT-001");
+    expect(matches).toHaveLength(1);
+  });
+
   it("updates a rental", async () => {
     const r = await api("PUT", `/api/rentals/${made.rental}`, { notes: "updated by test" });
     expect(r.status, r.raw.slice(0, 200)).toBe(200);
