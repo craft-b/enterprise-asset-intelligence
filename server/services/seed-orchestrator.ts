@@ -48,6 +48,31 @@ import { scoreFleetMultiHorizon } from "./multi-horizon-scoring";
  * SEED_CURSOR_DATE pins it for a reproducible run -- comparing two seeds, or
  * regenerating the exact dataset a model was trained on.
  */
+/**
+ * The demo yard.
+ *
+ * At module scope because the sensor seeder needs `duty` as well: hours
+ * accrue there, not here, so a fleet that describes a lightly-used machine
+ * while the sensor seed works it like everything else describes nothing.
+ */
+const SEED_FLEET = [
+  { equipmentId: "EQ-001", name: "Liebherr Tower Crane",         category: "Crane",      make: "Liebherr",    model: "81K.1",    serialPrefix: "LH-81K", serialSuffix: "0042",     status: "AVAILABLE", daily: "850.00",  weekly: "5200.00",  monthly: "18000.00", ageYears: 13, hours: 9800, duty: 1.0 },
+  { equipmentId: "EQ-002", name: "Caterpillar Motor Grader",      category: "Grader",     make: "Caterpillar", model: "140M3",    serialPrefix: "CAT-140M3", serialSuffix: "0091",   status: "AVAILABLE", daily: "620.00",  weekly: "3800.00",  monthly: "13500.00", ageYears: 12, hours: 8200, duty: 1.0 },
+  { equipmentId: "EQ-003", name: "JLG Telescopic Boom Lift",      category: "Lift",       make: "JLG",         model: "1350SJ",   serialPrefix: "JLG-1350SJ", serialSuffix: "0067",  status: "AVAILABLE", daily: "480.00",  weekly: "2900.00",  monthly: "10200.00", ageYears: 4, hours: 2400, duty: 1.0 },
+  { equipmentId: "EQ-004", name: "Komatsu Hydraulic Excavator",   category: "Excavator",  make: "Komatsu",     model: "PC210",    serialPrefix: "KOM-PC210", serialSuffix: "0234",   status: "AVAILABLE", daily: "550.00",  weekly: "3300.00",  monthly: "11800.00", ageYears: 5, hours: 3100, duty: 1.0 },
+  { equipmentId: "EQ-005", name: "Manitowoc Crawler Crane",       category: "Crane",      make: "Manitowoc",   model: "222",      serialPrefix: "MAN-222", serialSuffix: "0088",     status: "AVAILABLE", daily: "920.00",  weekly: "5600.00",  monthly: "19500.00", ageYears: 10, hours: 6800, duty: 1.0 },
+  { equipmentId: "EQ-006", name: "Volvo Articulated Hauler",      category: "Hauler",     make: "Volvo",       model: "A40G",     serialPrefix: "VOL-A40G", serialSuffix: "0156",    status: "AVAILABLE", daily: "430.00",  weekly: "2600.00",  monthly: "9200.00",  ageYears: 3, hours: 410, duty: 1.0  },
+  { equipmentId: "EQ-007", name: "Atlas Copco Air Compressor",    category: "Compressor", make: "Atlas Copco", model: "XATS 400", serialPrefix: "AC-XATS400", serialSuffix: "0321",  status: "AVAILABLE", daily: "220.00",  weekly: "1350.00",  monthly: "4800.00",  ageYears: 4, hours: 1700, duty: 1.0 },
+  { equipmentId: "EQ-008", name: "Bobcat Skid Steer Loader",      category: "Loader",     make: "Bobcat",      model: "S650",     serialPrefix: "BOB-S650", serialSuffix: "0512",    status: "AVAILABLE", daily: "280.00",  weekly: "1700.00",  monthly: "6000.00",  ageYears: 2, hours: 400, duty: 0.3  },
+  { equipmentId: "EQ-009", name: "Wacker Neuson Vibratory Roller",category: "Compactor",  make: "Wacker Neuson",model: "RD27",    serialPrefix: "WN-RD27", serialSuffix: "0789",     status: "AVAILABLE", daily: "190.00",  weekly: "1150.00",  monthly: "4100.00",  ageYears: 3, hours: 560, duty: 1.0  },
+  { equipmentId: "EQ-010", name: "Generac Industrial Generator",  category: "Generator",  make: "Generac",     model: "XG10000E", serialPrefix: "GEN-XG10K", serialSuffix: "0633",  status: "AVAILABLE", daily: "160.00",  weekly: "980.00",   monthly: "3500.00",  ageYears: 2, hours: 200, duty: 0.3  },
+];
+
+/** duty by equipment code, for the sensor seeder. */
+const DUTY_BY_CODE = new Map<string, number>(
+  SEED_FLEET.map(e => [e.equipmentId, e.duty])
+);
+
 function seedCursor(): string {
   const pinned = process.env.SEED_CURSOR_DATE?.trim();
   if (pinned) {
@@ -471,22 +496,21 @@ async function seedEquipment(cursorDate: Date) {
   // months and 878 hours an asset scored 0.127, above the 13-year crane's
   // 0.092, and landed MEDIUM.
   //
-  // Measured anchor: wear 0.047 scored 0.295, which is LOW. EQ-006 and EQ-009
-  // are sized to land near that -- around three years old and ~1,100 hours --
-  // so the fleet has genuinely lightly-used assets rather than merely young
-  // ones.
-  const fleet = [
-    { equipmentId: "EQ-001", name: "Liebherr Tower Crane",         category: "Crane",      make: "Liebherr",    model: "81K.1",    serialPrefix: "LH-81K", serialSuffix: "0042",     status: "AVAILABLE", daily: "850.00",  weekly: "5200.00",  monthly: "18000.00", ageYears: 13, hours: 9800 },
-    { equipmentId: "EQ-002", name: "Caterpillar Motor Grader",      category: "Grader",     make: "Caterpillar", model: "140M3",    serialPrefix: "CAT-140M3", serialSuffix: "0091",   status: "AVAILABLE", daily: "620.00",  weekly: "3800.00",  monthly: "13500.00", ageYears: 12, hours: 8200 },
-    { equipmentId: "EQ-003", name: "JLG Telescopic Boom Lift",      category: "Lift",       make: "JLG",         model: "1350SJ",   serialPrefix: "JLG-1350SJ", serialSuffix: "0067",  status: "AVAILABLE", daily: "480.00",  weekly: "2900.00",  monthly: "10200.00", ageYears: 4, hours: 2400 },
-    { equipmentId: "EQ-004", name: "Komatsu Hydraulic Excavator",   category: "Excavator",  make: "Komatsu",     model: "PC210",    serialPrefix: "KOM-PC210", serialSuffix: "0234",   status: "AVAILABLE", daily: "550.00",  weekly: "3300.00",  monthly: "11800.00", ageYears: 5, hours: 3100 },
-    { equipmentId: "EQ-005", name: "Manitowoc Crawler Crane",       category: "Crane",      make: "Manitowoc",   model: "222",      serialPrefix: "MAN-222", serialSuffix: "0088",     status: "AVAILABLE", daily: "920.00",  weekly: "5600.00",  monthly: "19500.00", ageYears: 10, hours: 6800 },
-    { equipmentId: "EQ-006", name: "Volvo Articulated Hauler",      category: "Hauler",     make: "Volvo",       model: "A40G",     serialPrefix: "VOL-A40G", serialSuffix: "0156",    status: "AVAILABLE", daily: "430.00",  weekly: "2600.00",  monthly: "9200.00",  ageYears: 3, hours: 410  },
-    { equipmentId: "EQ-007", name: "Atlas Copco Air Compressor",    category: "Compressor", make: "Atlas Copco", model: "XATS 400", serialPrefix: "AC-XATS400", serialSuffix: "0321",  status: "AVAILABLE", daily: "220.00",  weekly: "1350.00",  monthly: "4800.00",  ageYears: 4, hours: 1700 },
-    { equipmentId: "EQ-008", name: "Bobcat Skid Steer Loader",      category: "Loader",     make: "Bobcat",      model: "S650",     serialPrefix: "BOB-S650", serialSuffix: "0512",    status: "AVAILABLE", daily: "280.00",  weekly: "1700.00",  monthly: "6000.00",  ageYears: 2, hours: 400  },
-    { equipmentId: "EQ-009", name: "Wacker Neuson Vibratory Roller",category: "Compactor",  make: "Wacker Neuson",model: "RD27",    serialPrefix: "WN-RD27", serialSuffix: "0789",     status: "AVAILABLE", daily: "190.00",  weekly: "1150.00",  monthly: "4100.00",  ageYears: 3, hours: 560  },
-    { equipmentId: "EQ-010", name: "Generac Industrial Generator",  category: "Generator",  make: "Generac",     model: "XG10000E", serialPrefix: "GEN-XG10K", serialSuffix: "0633",  status: "AVAILABLE", daily: "160.00",  weekly: "980.00",   monthly: "3500.00",  ageYears: 2, hours: 200  },
-  ];
+  // That anchor used to read "wear 0.047 scored 0.295, which is LOW", and it
+  // was measured when total_hours_lifetime was stuck at 90 for every asset, so
+  // it described nothing. With the feature reading the hour meter, the fleet
+  // scored 3 HIGH, 7 MEDIUM and no LOW at all: the lowest row was EQ-006 at
+  // 0.312, three years old with 1,069 hours.
+  //
+  // `duty` is what fixes that. The sensor seed used to give every machine the
+  // same ~15% idle days and the same hours when working, so a standby genset
+  // accumulated as fast as a tower crane and the whole yard converged on one
+  // duty cycle. A yard does not work that way: some units are on hire
+  // constantly and some sit until someone needs them. 1.0 is a machine in
+  // steady use; the two at 0.3 idle most days and work shorter ones when they
+  // do, which is what a lightly-used asset actually looks like and what gives
+  // the queue a believable tail.
+  const fleet = SEED_FLEET;
 
   for (const e of fleet) {
     // Ages are relative to the cursor, so the fleet keeps its shape as real
@@ -562,11 +586,17 @@ async function seedSensorData(
   // change. On a free instance talking to TiDB that was minutes of wall clock
   // in a step whose progress bar does not move, so it read as a hang.
   const [catRows] = (await db.execute(
-    sql`SELECT id, category FROM equipment
+    sql`SELECT id, category, equipment_id FROM equipment
         WHERE id IN (${sql.join(equipmentIds.map(i => sql`${i}`), sql`, `)})`
   )) as any;
   const categoryById = new Map<number, string>(
     (catRows as any[]).map(r => [Number(r.id), String(r.category ?? "Excavator")])
+  );
+  // How hard each machine is worked, from the fleet definition. Absent an
+  // entry, a machine is assumed to be in steady use -- the behaviour this
+  // seeder had for every asset.
+  const dutyById = new Map<number, number>(
+    (catRows as any[]).map(r => [Number(r.id), DUTY_BY_CODE.get(String(r.equipment_id)) ?? 1])
   );
 
   // Build every row first, then write in batches. Hours accumulate in memory
@@ -579,12 +609,20 @@ async function seedSensorData(
     const dateStr = date.toISOString().split("T")[0];
 
     for (const eqId of equipmentIds) {
-      const isIdle     = Math.random() < 0.15;
-      const isStressed = Math.random() < 0.08;
+      // A machine in steady use idles 15% of days. One at duty 0.3 idles about
+      // three days in four, and works a shorter day when it does run -- so a
+      // standby generator stops accumulating hours as fast as a tower crane,
+      // which is what made every asset in the yard converge on one duty cycle.
+      const duty       = dutyById.get(eqId) ?? 1;
+      const isIdle     = Math.random() < 1 - duty * 0.85;
+      const isStressed = Math.random() < 0.08 * duty;
 
       const category = categoryById.get(eqId) ?? "Excavator";
       const [min, max] = dailyHoursByCategory[category] ?? [5, 9];
-      const operatingHours = isIdle ? 0 : parseFloat((min + Math.random() * (max - min)).toFixed(2));
+      const dayLength  = 0.5 + 0.5 * duty;
+      const operatingHours = isIdle
+        ? 0
+        : parseFloat(((min + Math.random() * (max - min)) * dayLength).toFixed(2));
 
       rows.push({
         eqId, dateStr,

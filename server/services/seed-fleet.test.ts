@@ -31,17 +31,19 @@ interface Asset {
   ageYears: number;
   hours: number;
   category: string;
+  /** How hard the sensor seed works it: 1 is steady use, 0.3 mostly idle. */
+  duty: number;
 }
 
 /** The fleet literal, parsed out of the seeder. */
 function parseFleet(): Asset[] {
   const assets: Asset[] = [];
   const row =
-    /equipmentId:\s*"(EQ-\d+)"[\s\S]*?category:\s*"([^"]+)"[\s\S]*?serialPrefix:\s*"([^"]+)"[\s\S]*?ageYears:\s*(\d+),\s*hours:\s*(\d+)/g;
+    /equipmentId:\s*"(EQ-\d+)"[\s\S]*?category:\s*"([^"]+)"[\s\S]*?serialPrefix:\s*"([^"]+)"[\s\S]*?ageYears:\s*(\d+),\s*hours:\s*(\d+),\s*duty:\s*([\d.]+)/g;
   for (const m of SOURCE.matchAll(row)) {
     assets.push({
       code: m[1], category: m[2], serialPrefix: m[3],
-      ageYears: Number(m[4]), hours: Number(m[5]),
+      ageYears: Number(m[4]), hours: Number(m[5]), duty: Number(m[6]),
     });
   }
   return assets;
@@ -71,13 +73,24 @@ const tierAge = (a: Asset) => a.ageYears;
  * From dailyHoursByCategory in the seeder, times ~76 non-idle days. Only used
  * to check an asset clears the cold-start floor, so the low end is taken.
  */
-const MIN_HOURS_ADDED: Record<string, number> = {
-  Compressor: 10 * 76,
-  Generator: 12 * 76,
-  Hauler: 7 * 76,
-  Loader: 7 * 76,
+const MIN_DAILY_HOURS: Record<string, number> = {
+  Compressor: 10,
+  Generator: 12,
+  Hauler: 7,
+  Loader: 7,
 };
-const minAdded = (category: string) => MIN_HOURS_ADDED[category] ?? 5 * 76;
+
+/**
+ * Non-idle days in the 90-day window, and the length of one, both scale with
+ * duty -- mirroring seedSensorData. Leaving this at a flat 76 days would have
+ * the test describing the uniform accrual the duty factor exists to end, and
+ * every projection below would be wrong for exactly the assets that matter.
+ */
+const minAdded = (a: Asset) => {
+  const perDay = (MIN_DAILY_HOURS[a.category] ?? 5) * (0.5 + 0.5 * a.duty);
+  const activeDays = 90 * (a.duty * 0.85);
+  return perDay * activeDays;
+};
 
 /**
  * Duty cycle at the cursor: lifetime hours over age in hours.
@@ -90,7 +103,7 @@ function projectedWearRate(a: Asset): number {
   // age straddles that by up to half a year either way. Close enough for a
   // duty-cycle bound, and it no longer drifts as the calendar moves.
   if (a.ageYears <= 0) return Infinity;
-  return (a.hours + minAdded(a.category)) / (a.ageYears * 8760);
+  return (a.hours + minAdded(a)) / (a.ageYears * 8760);
 }
 
 const fleet = parseFleet();
@@ -180,7 +193,7 @@ describe("the demo fleet", () => {
       const purchase = new Date(`${a.year}-06-15`);
       const ageYears = (cursor.getTime() - purchase.getTime()) / (365.25 * 24 * 3600 * 1000);
       if (ageYears >= 1) continue;
-      const hoursAtCursor = a.hours + minAdded(a.category);
+      const hoursAtCursor = a.hours + minAdded(a);
       expect(
         hoursAtCursor,
         `${a.code} is ${ageYears.toFixed(2)}y old at the cursor, so it needs ` +
@@ -386,5 +399,47 @@ describe("every fleet category has a maintenance interval", () => {
       expect(src, `${rel} should use the shared default`)
         .toMatch(/DEFAULT_MAINTENANCE_INTERVAL_DAYS/);
     }
+  });
+});
+
+describe("the fleet works its machines at different rates", () => {
+  it("has at least two lightly-used units", () => {
+    // The yard used to work every machine identically -- same idle rate, same
+    // hours when running -- so a standby generator accumulated as fast as a
+    // tower crane and every asset converged on one duty cycle. The result was
+    // a queue with no LOW row in it.
+    const light = fleet.filter(a => a.duty <= 0.5);
+    expect(
+      light.map(a => `${a.code} (duty ${a.duty})`),
+      "every machine is worked at the same rate, which is what produced a " +
+      "fleet with no low-risk assets"
+    ).not.toHaveLength(0);
+    expect(light.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("makes the lightly-used ones the newer ones", () => {
+    // A 13-year-old machine that has barely run is a different story -- it
+    // reads as neglected, not healthy -- and is not what a low-risk row
+    // should look like.
+    const light = fleet.filter(a => a.duty <= 0.5);
+    const heavyAges = fleet.filter(a => a.duty > 0.5).map(a => a.ageYears);
+    for (const a of light) {
+      expect(a.ageYears, `${a.code} is lightly used but old`).toBeLessThanOrEqual(
+        Math.min(...heavyAges) + 1
+      );
+    }
+  });
+
+  it("leaves most of the fleet in steady use", () => {
+    // If everything were lightly used there would be no HIGH rows either.
+    expect(fleet.filter(a => a.duty > 0.5).length).toBeGreaterThanOrEqual(6);
+  });
+
+  it("gives the lightly-used units a visibly lower duty cycle", () => {
+    const light = fleet.filter(a => a.duty <= 0.5);
+    const heavy = fleet.filter(a => a.duty > 0.5);
+    const worstLight = Math.max(...light.map(projectedWearRate));
+    const bestHeavy  = Math.min(...heavy.map(projectedWearRate));
+    expect(worstLight).toBeLessThan(bestHeavy);
   });
 });

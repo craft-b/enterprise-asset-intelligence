@@ -534,6 +534,13 @@ class EnhancedFeatureEngineeringService {
       FROM sensor_data_logs
       WHERE equipment_id = ${equipmentId}
         AND timestamp BETWEEN ${from} AND ${to}
+        -- Running readings only. An idle machine logs 20C and no vibration,
+        -- so averaging idle days in measures how often it was parked, not how
+        -- it is wearing: a unit that sat still for most of the baseline window
+        -- and then worked would show its own return to service as a
+        -- temperature spike. It matters most for lightly-used assets, which
+        -- are the ones whose readings are mostly idle.
+        AND engine_rpm > 0
     `);
 
     const rows = Array.isArray(result) && Array.isArray(result[0]) ? result[0] : result;
