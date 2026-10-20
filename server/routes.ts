@@ -462,8 +462,29 @@ export async function registerRoutes(
   });
 
   // ── HEALTH ────────────────────────────────────────────────────────────────
+  // "healthy" answered the wrong question. After a push, the old instance
+  // keeps serving until the new one passes its health check, so a 200 here
+  // says nothing about which build you reached -- which left "did the deploy
+  // land?" to be guessed from timing. Render sets RENDER_GIT_COMMIT; reporting
+  // the first seven characters makes the answer checkable against git log.
+  const BUILD_COMMIT = (
+    process.env.RENDER_GIT_COMMIT ??
+    process.env.VERCEL_GIT_COMMIT_SHA ??
+    process.env.GIT_COMMIT ??
+    ""
+  ).slice(0, 7) || "unknown";
+  const BOOTED_AT = new Date().toISOString();
+
   app.get('/api/health', (req, res) => {
-    res.json({ status: 'healthy', timestamp: new Date().toISOString() });
+    res.json({
+      status: 'healthy',
+      timestamp: new Date().toISOString(),
+      commit: BUILD_COMMIT,
+      // How long this instance has been up: a few seconds means it just cold
+      // started, which is the other thing worth knowing on a free tier.
+      bootedAt: BOOTED_AT,
+      uptimeSeconds: Math.round(process.uptime()),
+    });
   });
 
   // Registered only outside production and only with a long secret set; see
