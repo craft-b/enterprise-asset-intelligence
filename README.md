@@ -575,18 +575,40 @@ Random CV leaks future data into training folds on temporal datasets. TimeSeries
 **Why recompute derived features at inference instead of storing them?**
 Storing derived columns (aging_factor, wear_rate, mechanical_wear_score) creates staleness risk — if the computation logic changes, stored values become inconsistent with what the model was trained on. Recomputing from raw inputs at inference keeps the feature pipeline as the single source of truth.
 
-**Why does the demo fleet have no LOW-risk assets?**
-Because none of it is low risk, and the band boundary says so honestly rather than being moved to look balanced.
+**How is the risk distribution shaped, and what was not done to shape it?**
 
-The LOW/MEDIUM cut sits at 0.30, and the 30-day model's test-split positive rate is 0.29. So LOW means *less likely to fail than a randomly chosen asset-period*. In a yard of aging rental equipment, nothing qualifies — a representative seeded run spans **0.31 to 0.71**, three HIGH and seven MEDIUM.
+A representative seeded run scores **1 LOW / 6 MEDIUM / 3 HIGH**, spanning 0.253 to 0.671.
 
-It is worth being precise about what cannot move this, because the obvious lever does not exist. The demo always scores with the v1.17 champion shipped in the ML service image, trained offline on 10,828 snapshots. A seed produces a couple of hundred labelled rows and the data-quality gate fails training below 500, so **the seeded labels never train anything** — they exist so the pipeline has a training set to display. Changing how often the seeded fleet breaks down therefore changes the demo's *features*, not the model's prior, and the scores move by hundredths rather than bands.
+For a long time it scored no LOW rows at all, and the reason is worth recording because the obvious
+explanation was wrong. The LOW/MEDIUM cut sits at 0.30 and the 30-day model's test-split positive
+rate is 0.29, so LOW means *less likely to fail than a randomly chosen asset-period* — and it is
+tempting to conclude that the seeded label base rate is what sets the floor. It is not. The demo
+always scores with the v1.17 champion shipped in the ML service image, trained offline on 10,828
+snapshots; a seed produces a couple of hundred labelled rows and the data-quality gate fails
+training below 500, so **the seeded labels never train anything**. They exist so the pipeline has a
+training set to display.
 
-What was tried: giving two units a third of the fleet's duty cycle, which cut their lifetime hours in half and their wear rate by 60%, moved them from 0.44 to 0.35 — and left the lowest-scoring asset exactly where it was, at 0.31. Three rounds of fleet reshaping moved individual assets by up to 0.09 and never moved the floor. The floor is what this model outputs for this feature space.
+What actually moved it was the demo fleet's breakdown rate. The seeder was injecting 18 reactive
+repairs across ten machines in six months — a failure every five weeks for the oldest crane, which
+no rental yard would recognise. Cutting that to six (a 30-day label rate of 10.0%, from 33.5%)
+cleared recent-repair history off the younger units, and that is a *feature*, not a prior:
+`maintenance_events_90d` is 1 for each of the three HIGH assets and 0 for every other. Reshaping the
+fleet directly — giving two units a third of the duty cycle, halving their lifetime hours — moved
+those units by about 0.09 and never moved the floor at all.
 
-The ordering inside that range is informative, which is the point. Probability tracks wear and age monotonically at the top — the three assets over ten years old sit at 0.67–0.71 with `mechanical_wear_score` saturated at 10.0 — while among the mid-band assets service recency separates them. EQ-002 has the most recent service in the fleet, five days, and still scores highest, because recent maintenance helps a sound machine and does not rescue a worn one. That is what a maintenance planner would expect, and it is the behaviour worth showing.
+The ordering is informative but not a simple wear ranking, and it would be dishonest to present it
+as one. The top of the queue is clean: the three assets over ten years old sit at 0.66–0.67 with
+`mechanical_wear_score` saturated at 10.0 and a reactive repair behind them. Lower down it is less
+tidy — EQ-006 carries more hours and a higher wear rate than EQ-009, with identical maintenance
+recency, and still scores lower (0.253 against 0.328). Category and the sensor terms are doing work
+there that a single-feature story does not capture.
 
-Two things were deliberately not done to produce a tidier distribution: the age-weighted hazard in the simulator was left alone, and the band thresholds were left alone. The HIGH cut of 0.60 is the operating point the published recall and precision-at-budget were measured at, so moving it would invalidate the numbers on the model page. Recalibrating operating points to a deployment's own base rate is a reasonable next step — it just has to be done by measuring that deployment, not by picking a cut that makes a screenshot look better.
+Two things were deliberately not done to produce a tidier distribution: the age-weighted hazard in
+the simulator was left alone, and the band thresholds were left alone. The HIGH cut of 0.60 is the
+operating point the published recall and precision-at-budget were measured at, so moving it would
+invalidate the numbers on the model page. Recalibrating operating points to a deployment's own base
+rate is a reasonable next step — it just has to be done by measuring that deployment, not by picking
+a cut that makes a screenshot look better.
 
 **Why a forward projection engine?**
 Point-in-time predictions answer "what is the risk today?" The projection engine answers "when will this asset cross the HIGH threshold?" — which is the operationally useful question for scheduling maintenance windows.
