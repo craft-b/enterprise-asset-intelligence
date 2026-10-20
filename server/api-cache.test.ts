@@ -18,21 +18,34 @@ import { readFileSync } from "fs";
 import { join } from "path";
 
 const INDEX = readFileSync(join(__dirname, "index.ts"), "utf-8");
+// The cache policy belongs with the API surface, not the server bootstrap:
+// mounting the routes anywhere else (the HTTP smoke test does) used to lose
+// it silently, along with the JSON 404.
+const ROUTES = readFileSync(join(__dirname, "routes.ts"), "utf-8");
 
 describe("API responses are not cacheable", () => {
   it("sets no-store for everything under /api", () => {
-    const mw = INDEX.match(/app\.use\("\/api",[\s\S]*?\n\}\);/)?.[0];
+    const mw = ROUTES.match(/app\.use\("\/api", \(_req, res, next\)[\s\S]*?\n  \}\);/)?.[0];
     expect(mw, "no /api cache middleware found").toBeDefined();
     expect(mw!).toMatch(/Cache-Control/);
     expect(mw!).toMatch(/no-store/);
   });
 
-  it("applies before the routes, not after", () => {
-    // Registered later and the handlers have already sent headers.
-    const mwAt = INDEX.indexOf('app.use("/api"');
-    const routesAt = INDEX.indexOf("registerRoutes(");
+  it("applies before any route can answer", () => {
+    // Registered after a handler and the headers are already sent.
+    const mwAt = ROUTES.indexOf('app.use("/api", (_req, res, next)');
+    const firstRouteAt = ROUTES.search(/app\.(get|post|put|patch|delete)\(/);
     expect(mwAt).toBeGreaterThan(-1);
-    expect(mwAt).toBeLessThan(routesAt);
+    expect(mwAt).toBeLessThan(firstRouteAt);
+  });
+
+  it("answers an unmatched /api path with JSON, after every route", () => {
+    // Falling through to the static handler answered a missing endpoint with
+    // the SPA shell and a 200.
+    const notFound = ROUTES.indexOf("No such endpoint");
+    expect(notFound).toBeGreaterThan(-1);
+    const lastRoute = ROUTES.lastIndexOf("app.get(");
+    expect(notFound).toBeGreaterThan(lastRoute);
   });
 
   it("turns off the ETag that produced the 304s", () => {

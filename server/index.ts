@@ -74,24 +74,6 @@ export function log(message: string, source = "express") {
   console.log(`${formattedTime} [${source}] ${message}`);
 }
 
-// API responses are never cacheable.
-//
-// Express sends an ETag with every JSON response, so a browser revalidates
-// with If-None-Match and the server answers 304 Not Modified whenever the body
-// is byte-identical. For a status endpoint polled on a timer that is exactly
-// wrong: the seed progress screen polled /api/admin/seed/status every 1.5s,
-// got a run of 304s, and went on rendering the cached payload -- a progress
-// bar frozen on step 4 while the run behind it had moved on and then died.
-//
-// Two call sites had already worked around it with `cache: "no-store"` on the
-// fetch, which fixes those two and leaves every other one exposed. This is the
-// same statement made once, where no new endpoint can forget it. no-store also
-// stops any proxy in front of the API holding a copy.
-app.use("/api", (_req, res, next) => {
-  res.set("Cache-Control", "no-store, no-cache, must-revalidate");
-  res.set("Pragma", "no-cache");
-  next();
-});
 
 app.use((req, res, next) => {
   const start = Date.now();
@@ -487,16 +469,6 @@ function scheduleNightlyRescore() {
   // opt-in rather than on by default.
   await seedDemoUsers();
 
-  // Anything under /api that no route claimed is a 404, in JSON.
-  //
-  // Without this it fell through to the static handler and was answered with
-  // the SPA shell and a 200 -- so a request to a misspelled or missing
-  // endpoint came back as a page, and the caller got a JSON parse error
-  // somewhere far away from the cause. Registered after the routes and before
-  // the static handler, so it only ever sees genuinely unmatched paths.
-  app.use("/api", (req: Request, res: Response) => {
-    res.status(404).json({ message: `No such endpoint: ${req.method} /api${req.path}` });
-  });
 
   app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;

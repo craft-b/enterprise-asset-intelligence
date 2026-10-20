@@ -22,6 +22,7 @@ import { evaluatePMSchedule, generatePMDescription, samplePMCost, MaintenanceTyp
 import { startSeedJob, getSeedStatus, getSystemStatus, resetSystem } from "./services/seed-orchestrator";
 import { mlFetch, describeMlFailure } from "./services/ml-client";
 import { timingSafeEqual } from "crypto";
+import { registerTestLogin } from "./test-login";
 import { getSimulationDate } from "./services/simulation-clock";
 import { scoreFleetMultiHorizon, toMlSnapshot } from "./services/multi-horizon-scoring";
 import { IMPUTATION_DEFAULTS, isColdStart, coldStartMultiHorizon } from "./services/imputation";
@@ -59,6 +60,25 @@ export async function registerRoutes(
   // parseInt. A non-numeric segment produced NaN, which then reached SQL as
   // `WHERE id = NaN` and surfaced as a 500 rather than the 400 it is. One
   // guard here covers all 21 of them.
+  // API responses are never cacheable.
+  //
+  // Express sends an ETag with every JSON response, so a browser revalidates
+  // with If-None-Match and the server answers 304 Not Modified whenever the body
+  // is byte-identical. For a status endpoint polled on a timer that is exactly
+  // wrong: the seed progress screen polled /api/admin/seed/status every 1.5s,
+  // got a run of 304s, and went on rendering the cached payload -- a progress
+  // bar frozen on step 4 while the run behind it had moved on and then died.
+  //
+  // Two call sites had already worked around it with `cache: "no-store"` on the
+  // fetch, which fixes those two and leaves every other one exposed. This is the
+  // same statement made once, where no new endpoint can forget it. no-store also
+  // stops any proxy in front of the API holding a copy.
+  app.use("/api", (_req, res, next) => {
+    res.set("Cache-Control", "no-store, no-cache, must-revalidate");
+    res.set("Pragma", "no-cache");
+    next();
+  });
+
   app.param("id", (req, res, next, value) => {
     if (!/^\d+$/.test(String(value))) {
       return res.status(400).json({ message: `Invalid id: ${value}` });
@@ -445,6 +465,11 @@ export async function registerRoutes(
   app.get('/api/health', (req, res) => {
     res.json({ status: 'healthy', timestamp: new Date().toISOString() });
   });
+
+  // Registered only outside production and only with a long secret set; see
+  // services' note in test-login.ts for why it is written to be impossible
+  // rather than merely disabled.
+  registerTestLogin(app);
 
   // ── AUTH ──────────────────────────────────────────────────────────────────
   app.post(api.auth.login.path, asyncRoute(async (req, res) => {
@@ -2511,6 +2536,17 @@ export async function registerRoutes(
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
+  });
+
+  // Anything under /api that no route claimed is a 404, in JSON.
+  //
+  // Without this it fell through to the static handler and was answered with
+  // the SPA shell and a 200 -- so a request to a misspelled or missing
+  // endpoint came back as a page, and the caller got a JSON parse error
+  // somewhere far away from the cause. Registered after the routes and before
+  // the static handler, so it only ever sees genuinely unmatched paths.
+  app.use("/api", (req: Request, res: Response) => {
+    res.status(404).json({ message: `No such endpoint: ${req.method} /api${req.path}` });
   });
 
   return httpServer;
