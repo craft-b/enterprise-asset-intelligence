@@ -1,6 +1,12 @@
 {
   "name": "enterprise-asset-intelligence",
   "version": "1.0.0",
+  "description": "Predictive maintenance platform for construction equipment rental fleets: multi-horizon failure probability with calibrated Random Forests, SHAP attribution, drift monitoring and cost-weighted intervention recommendations.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/craft-b/enterprise-asset-intelligence.git"
+  },
+  "homepage": "https://enterprise-asset-intelligence.vercel.app",
   "type": "module",
   "license": "MIT",
   "scripts": {
