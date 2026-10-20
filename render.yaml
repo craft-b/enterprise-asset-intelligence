@@ -121,6 +121,15 @@ services:
       - key: MODEL_VERSION
         value: v1
 
+      # Bearer token for /api/agent/*, which the README advertises and which
+      # answers 503 until this is set. Nothing issues this token: the server
+      # only compares an incoming Authorization header against it, so letting
+      # Render generate a random value is enough -- read it out of the
+      # dashboard when monitor.py needs to send it. Left unset, the agent
+      # endpoints are simply off: a safe default, but a dead link in the docs.
+      - key: AGENT_API_KEY
+        generateValue: true
+
       # Creates the admin/viewer accounts the login page advertises. On a
       # public demo those credentials have to work: a sign-in screen naming
       # credentials that do not exist loses the visitor, and asking them to
