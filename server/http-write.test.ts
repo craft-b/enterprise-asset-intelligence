@@ -42,7 +42,7 @@ let baseUrl = "";
 let server: http.Server | undefined;
 let cookie = "";
 let savedDsn: string | undefined;
-const made = { jobSite: 0, vendor: 0, equipment: 0, rental: 0 };
+const made = { jobSite: 0, vendor: 0, equipment: 0, replacement: 0, rental: 0 };
 
 /** A fixed calendar day, to be read back unchanged. */
 const RECEIVE_DATE = "2026-01-05";
@@ -237,6 +237,65 @@ describe.runIf(ENABLED)("write paths over HTTP", () => {
     expect(after.body.notes).toBe("updated by test");
   });
 
+  it("swaps the equipment on an active rental, moving both statuses", async () => {
+    // The replacement goes out, the original comes back, the rental points at
+    // the new unit, and the swap is recorded -- four rows that have to agree.
+    const second = await api("POST", "/api/equipment", {
+      equipmentId: "WT-002",
+      name: "Write Test Replacement",
+      category: "Excavator",
+      status: "AVAILABLE",
+      dailyRate: "500.00",
+    });
+    expect(second.status, second.raw.slice(0, 200)).toBe(201);
+    made.replacement = second.body.id;
+
+    const r = await api("POST", `/api/rentals/${made.rental}/swap`, {
+      replacementEquipmentId: made.replacement,
+      reason: "hydraulic leak",
+    });
+    expect(r.status, r.raw.slice(0, 300)).toBeLessThan(400);
+
+    const original = await api("GET", `/api/equipment/${made.equipment}`);
+    const replacement = await api("GET", `/api/equipment/${made.replacement}`);
+    expect(original.body.status).toBe("AVAILABLE");
+    expect(replacement.body.status).toBe("RENTED");
+
+    const rental = await api("GET", `/api/rentals/${made.rental}`);
+    expect(rental.body.equipmentId).toBe(made.replacement);
+
+    const swaps = await api("GET", `/api/rentals/${made.rental}/swaps`);
+    expect(swaps.body).toHaveLength(1);
+    expect(swaps.body[0].originalEquipment?.equipmentId).toBe("WT-001");
+    expect(swaps.body[0].replacementEquipment?.equipmentId).toBe("WT-002");
+    expect(String(swaps.body[0].swapDate).slice(0, 10)).toBe(CURSOR_DATE);
+  });
+
+  it("rejects a swap whose replacement id is not a number", async () => {
+    // "5" used to get past the "must be different" check, because 5 !== "5".
+    const r = await api("POST", `/api/rentals/${made.rental}/swap`, {
+      replacementEquipmentId: String(made.replacement),
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it("refuses to swap in the unit already on the rental", async () => {
+    const r = await api("POST", `/api/rentals/${made.rental}/swap`, {
+      replacementEquipmentId: made.replacement,
+    });
+    expect(r.status).toBe(400);
+    expect(String(r.body?.message)).toMatch(/different/i);
+  });
+
+  it("swaps back, so the rest of this file reads the original unit", async () => {
+    const r = await api("POST", `/api/rentals/${made.rental}/swap`, {
+      replacementEquipmentId: made.equipment,
+    });
+    expect(r.status, r.raw.slice(0, 300)).toBeLessThan(400);
+    const rental = await api("GET", `/api/rentals/${made.rental}`);
+    expect(rental.body.equipmentId).toBe(made.equipment);
+  });
+
   it("will not delete an active rental", async () => {
     const r = await api("DELETE", `/api/rentals/${made.rental}`);
     expect(r.status).toBe(409);
@@ -285,12 +344,14 @@ describe.runIf(ENABLED)("write paths over HTTP", () => {
     // its fixtures behind makes the next run's assertions ambiguous.
     for (const [path, id] of [
       ["/api/equipment", made.equipment],
+      ["/api/equipment", made.replacement],
       ["/api/vendors", made.vendor],
       ["/api/job-sites", made.jobSite],
     ] as const) {
       if (id) await api("DELETE", `${path}/${id}`);
     }
     const equip = await api("GET", "/api/equipment");
-    expect((equip.body as any[]).some(e => e.equipmentId === "WT-001")).toBe(false);
+    const left = (equip.body as any[]).filter(e => String(e.equipmentId).startsWith("WT-"));
+    expect(left, `left behind: ${left.map(e => e.equipmentId).join(", ")}`).toHaveLength(0);
   });
 });

@@ -88,7 +88,6 @@ export interface IStorage {
   getModelMetricsHistory(): Promise<any[]>;
 
   // Swaps
-  createSwap(swap: { rentalId: number; originalEquipmentId: number; replacementEquipmentId: number; swapDate: string; reason?: string | null; swappedBy?: string | null; notes?: string | null }): Promise<any>;
   listSwapsByRental(rentalId: number): Promise<any[]>;
 
 }
@@ -461,16 +460,6 @@ export class DatabaseStorage implements IStorage {
       .from(modelTrainingMetrics)
       .orderBy(desc(modelTrainingMetrics.trainedAt))
       .limit(limit);
-  }
-
-  async createSwap(data: any): Promise<any> {
-    const insertData: any = { ...data };
-    if (insertData.swapDate && typeof insertData.swapDate === 'string') {
-      insertData.swapDate = insertData.swapDate.substring(0, 10);
-    }
-    const result = await db.insert(equipmentSwaps).values(insertData);
-    const [newSwap] = await db.select().from(equipmentSwaps).where(eq(equipmentSwaps.id, result[0].insertId));
-    return newSwap!;
   }
 
   async listSwapsByRental(rentalId: number): Promise<any[]> {

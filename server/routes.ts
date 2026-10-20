@@ -2199,7 +2199,14 @@ export async function registerRoutes(
   app.post('/api/rentals/:id/swap', requireAdmin, async (req, res) => {
     try {
       const rentalId = parseInt(req.params.id);
-      const { replacementEquipmentId, reason, swappedBy, notes } = req.body;
+      // Every other write route parses against the registry schema; this one
+      // destructured req.body raw. The dialog coerces with Number() so the UI
+      // was fine, but any other caller sending "5" slipped past the "must be
+      // different from current equipment" check -- 5 !== "5" -- and got the
+      // string written into equipment_id for MySQL to coerce. The schema
+      // already said z.number(); nothing was enforcing it.
+      const { replacementEquipmentId, reason, swappedBy, notes } =
+        api.swaps.create.input.parse(req.body);
 
       const rental = await storage.getRental(rentalId);
       if (!rental) return res.status(404).json({ message: 'Rental not found' });
@@ -2207,32 +2214,42 @@ export async function registerRoutes(
 
       const replacement = await storage.getEquipment(replacementEquipmentId);
       if (!replacement) return res.status(404).json({ message: 'Replacement equipment not found' });
-      if (replacement.status !== 'AVAILABLE') return res.status(400).json({ message: 'Replacement equipment is not available' });
+      // Identity first: the unit already on this rental is RENTED, so the
+      // availability check would otherwise answer "not available" and send
+      // the dispatcher looking for a yard problem that isn't there.
       if (replacementEquipmentId === rental.equipmentId) return res.status(400).json({ message: 'Replacement must be different from current equipment' });
+      if (replacement.status !== 'AVAILABLE') return res.status(400).json({ message: 'Replacement equipment is not available' });
 
       const originalEquipmentId = rental.equipmentId;
       const simCursor = await getSimulationDate();
       const today = simCursor.toISOString().split('T')[0];
 
-      await Promise.all([
-        storage.updateEquipment(originalEquipmentId, { status: 'AVAILABLE' }),
-        storage.updateEquipment(replacementEquipmentId, { status: 'RENTED' }),
-        storage.updateRental(rentalId, { equipmentId: replacementEquipmentId }),
-      ]);
-
-      await storage.createSwap({
-        rentalId,
-        originalEquipmentId,
-        replacementEquipmentId,
-        swapDate: today,
-        reason: reason || null,
-        swappedBy: swappedBy || null,
-        notes: notes || null,
+      // These four rows only make sense together: a failure between them
+      // leaves both units RENTED, or the rental pointing at a unit the yard
+      // thinks is available. Promise.all made that more likely rather than
+      // less -- it issued them concurrently, so a reject did not stop the
+      // others. Sequential, inside a transaction, so a failure rolls back.
+      await db.transaction(async tx => {
+        await tx.update(equipment).set({ status: 'AVAILABLE' }).where(eq(equipment.id, originalEquipmentId));
+        await tx.update(equipment).set({ status: 'RENTED' }).where(eq(equipment.id, replacementEquipmentId));
+        await tx.update(rentals).set({ equipmentId: replacementEquipmentId }).where(eq(rentals.id, rentalId));
+        await tx.insert(equipmentSwaps).values({
+          rentalId,
+          originalEquipmentId,
+          replacementEquipmentId,
+          swapDate: today,
+          reason: reason || null,
+          swappedBy: swappedBy || null,
+          notes: notes || null,
+        } as any);
       });
 
       res.json({ message: 'Equipment swapped successfully' });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Swap error:', error);
+      if (error?.name === 'ZodError') {
+        return res.status(400).json({ message: 'Swap details are not valid: ' + (error.errors ?? []).map((e: any) => `${e.path.join('.')} ${e.message}`).join('; ') });
+      }
       res.status(500).json({ message: 'Failed to swap equipment' });
     }
   });
