@@ -3,7 +3,7 @@
 **[Live demo](https://enterprise-asset-intelligence.vercel.app)** — sign in with `admin` / `admin123`.
 
 > The page loads instantly, but the API behind it runs on a free tier that suspends an idle
-> container. If nobody has visited recently the first request waits ~45 seconds while it wakes;
+> container. If nobody has visited recently the first request waits around a minute while it wakes;
 > the app shows that as a progress screen rather than a blank window, and everything is immediate
 > afterwards. The ML service sleeps separately, so the first prediction can wait once more.
 > Prefer to skip the wait entirely? [Quickstart](#quickstart) runs the whole stack locally in a
@@ -206,6 +206,33 @@ log_mean_time_between_failures
 ```
 
 Seven skewed features are log-transformed at training and inference time. Derived columns (aging_factor, wear_rate, mechanical_wear_score, etc.) are recomputed fresh at inference rather than stored — avoids staleness from schema drift.
+
+> **⚠️ `sensor_degradation_rate` carried no information in v1.17.**
+>
+> The two queries that read `sensor_data_logs` used column names from a schema
+> that was replaced when Drizzle took ownership of DDL — `engine_temperature`
+> for `engine_temp`, `vibration_level` for `vibration_x/y/z`. Both raised
+> `ER_BAD_FIELD_ERROR` on every call, and a `catch` returned `0` and `{}`
+> instead, so the failure was silent.
+>
+> `sensor_degradation_rate` was therefore `0.0000` in every snapshot ever
+> taken, including every row v1.17 trained on. A random forest does not split
+> on a constant, so the feature is listed above, was passed at inference, and
+> contributed nothing. The other sensor statistics it computes — vibration,
+> engine temperature, oil and hydraulic pressure — were never model inputs;
+> they feed snapshot and display fields only.
+>
+> The queries are fixed and a test now checks every `sensor_data_logs` column
+> reference against the schema. The fix does not change v1.17's predictions,
+> because a model trained on a constant ignores it whatever you feed it later.
+> The feature becomes real on the next training run.
+>
+> Noted here rather than quietly corrected, for the same reason the oracle
+> ceiling and the SHAP circularity are: a model card that only mentions the
+> findings that flatter the model is not a model card. It is also a fair
+> illustration of why the paragraph above this one exists — stale derived
+> state is precisely what went wrong, and recomputing at inference did not
+> help when the read itself was broken.
 
 ---
 
@@ -466,14 +493,14 @@ Deployed across three free tiers, with no monthly bill:
 | Piece | Host | Notes |
 |---|---|---|
 | React SPA | Vercel | Static, so always instant — nothing to suspend |
-| Node API + SPA proxy | Render | Suspends when idle, ~45s to wake |
+| Node API + SPA proxy | Render | Suspends when idle; measured 51–73s to wake |
 | FastAPI ML service | Render | Suspends independently |
 | MySQL | TiDB Cloud Serverless | Always on; Render offers Postgres only |
 
 [`render.yaml`](render.yaml), [`vercel.json`](vercel.json) and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) reproduce it end to end.
 
 Splitting the SPA onto static hosting is what makes a free tier presentable. Served from the API
-container, a cold start would be a blank browser window for 45 seconds — indistinguishable from a
+container, a cold start would be a blank browser window for a minute or more — indistinguishable from a
 broken site. Static hosting has nothing to suspend, so the page paints immediately and
 [an explained gate](client/src/components/api-gate.tsx) holds the app back until the API answers.
 The wait becomes a stated, bounded one instead of an apparent outage.
@@ -483,20 +510,30 @@ is a cookie decision: this app authenticates with a session cookie, and a cookie
 `onrender.com` on a page served from `vercel.app` is a third-party cookie, which Safari blocks by
 default. Proxying keeps it first-party, and removes CORS from the picture entirely.
 
-Four things that deployment needed, and now has:
+Five things that deployment needed, and now has:
 
 - **Migrations run on start.** The Node image ships `migrations/` and applies them before the server listens, so a clean database gets the full schema (including `sessions`) on first deploy. A migration failure exits non-zero instead of running against a mismatched schema.
 - **One DSN for both services.** The Python side prefers `DATABASE_URL` over the `DB_*` vars and rewrites `mysql2`'s TLS parameter into `pymysql`'s spelling ([`ml-service/engine/db_url.py`](ml-service/engine/db_url.py)), so a managed host that mandates TLS works without per-service config drift.
 - **Model artifacts without a disk.** Free tiers have no persistent storage, so the registry starts empty on every cold start. The champion bundle (16MB, one `.tar.gz`) is committed under `ml-service/models/` and extracted into the image at build time, so the build needs no network and a cold start has a model immediately. That reverses the original design — artifacts were fetched from a GitHub release to keep them out of git (OPS-2) — because GitHub's CDN answers Render's addresses with 502, during the build and at runtime alike, while the same URL fetches in two seconds elsewhere. Superseded versions still stay out of git; only the current champion ships. A URL fetch remains as a fallback, the digest is pinned either way, and extraction refuses path-traversing members since loading a pickle executes code.
+- **A simulation clock that survives suspension.** The simulator advances seven days per real day, scheduled with a timer for 06:00. A free instance suspends after about fifteen minutes without traffic, so that timer is almost never alive when it should fire and every restart rearms it — the clock sat on its seed date while real time moved on, and the demo showed rentals from six months earlier. It now also catches up at boot, driven by elapsed real time rather than by starting, since this host starts the container on any visit after an idle period and a per-boot advance would race the clock ahead of reality. A pass is capped and carries its remainder, because each simulated day costs a feature snapshot per asset.
 - **A separately hosted frontend, without touching 80 call sites.** Those call sites use relative `/api` paths, which resolve against the static host once the SPA moves. Under the proxy they stay relative and Vercel forwards them; set `VITE_API_URL` instead and a single wrapper around `fetch` ([`api-base.ts`](client/src/lib/api-base.ts)) rewrites them to the API origin at runtime. Either way no component changed and a new one cannot forget. The direct path is served by [`cors.ts`](server/services/cors.ts), which answers only origins named in `ALLOWED_ORIGINS` and refuses a wildcard at boot — with credentials, browsers reject it anyway.
 
-Honest about the free tier: both Render services suspend after ~15 minutes idle and take 30–60s to
-wake, and 512MB serves the champion model (measured ~340MB resident) but will not train one — so
+Honest about the free tier: both Render services suspend after ~15 minutes idle. Three successive
+cold starts of the ML service measured 51s, 62s and 73s — the host's own dashboard warns of "50
+seconds or more", and the figure drifts upward, so anything in the code that waits on it is sized
+against the slowest seen rather than the average. and 512MB serves the champion model (measured ~340MB resident) but will not train one — so
 the deployed instance loads artifacts baked into its image rather than training on demand. The
 ~$33/mo configuration that removes the cold starts is documented in
 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Docker Compose (`docker-compose.yml`) runs all three
-services locally, and [Quickstart](#quickstart) seeds a full fleet with a trained model in under
-two minutes.
+services locally, and [Quickstart](#quickstart) seeds a full fleet in two to five minutes —
+two of its steps wait on the ML service's cold start.
+
+The seed does not train a model, anywhere. It produces 40 labeled snapshots and the trainer's
+data-quality gate refuses anything under 500 rows, so that step is skipped by design and the fleet
+is scored by the champion shipped in the image. The step reports itself as skipped rather than
+failed, and the metrics on the model page are that champion's own, registered from its bundle and
+dated to the run that produced it. Training on demand needs a dataset the demo seed is not trying
+to be.
 
 ---
 
