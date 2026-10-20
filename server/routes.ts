@@ -1,6 +1,6 @@
 // server/routes.ts
 
-import type { Express } from "express";
+import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { api } from "@shared/routes";
@@ -31,6 +31,23 @@ declare module "express-session" {
     userId: number;
     role: string;
   }
+}
+
+/**
+ * Wrap an async route handler so a rejection reaches Express.
+ *
+ * Express 4 does not await handlers, so a rejected promise is not an error it
+ * ever sees -- it is an unhandled rejection, and Node has terminated the
+ * process on those since v15. A malformed body on POST /api/auth/login threw
+ * in Zod and took the server down with it, from an unauthenticated endpoint.
+ *
+ * Forwarding to next(err) puts it back on the error middleware, which answers
+ * with a status and logs. Express 5 does this itself; until then, this.
+ */
+function asyncRoute(handler: (req: any, res: any, next: NextFunction) => Promise<unknown>) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    Promise.resolve(handler(req, res, next)).catch(next);
+  };
 }
 
 export async function registerRoutes(
@@ -430,7 +447,7 @@ export async function registerRoutes(
   });
 
   // ── AUTH ──────────────────────────────────────────────────────────────────
-  app.post(api.auth.login.path, async (req, res) => {
+  app.post(api.auth.login.path, asyncRoute(async (req, res) => {
     const { username, password } = api.auth.login.input.parse(req.body);
     const user = await storage.getUserByUsername(username);
     if (!user || !bcrypt.compareSync(password, user.password)) {
@@ -439,18 +456,18 @@ export async function registerRoutes(
     req.session.userId = user.id;
     req.session.role = user.role;
     res.json(toPublicUser(user));
-  });
+  }));
 
   app.post(api.auth.logout.path, (req, res) => {
     req.session.destroy(() => res.json({ message: "Logged out" }));
   });
 
-  app.get(api.auth.me.path, async (req, res) => {
+  app.get(api.auth.me.path, asyncRoute(async (req, res) => {
     if (!req.session.userId) return res.status(401).json({ message: "Not logged in" });
     res.json(toPublicUser(await storage.getUser(req.session.userId)));
-  });
+  }));
 
-  app.post(api.auth.register.path, async (req, res) => {
+  app.post(api.auth.register.path, asyncRoute(async (req, res) => {
     const input = api.auth.register.input.parse(req.body);
     if (await storage.getUserByUsername(input.username)) {
       return res.status(400).json({ message: "Username exists" });
@@ -462,12 +479,12 @@ export async function registerRoutes(
     req.session.userId = user.id;
     req.session.role = user.role;
     res.status(201).json(toPublicUser(user));
-  });
+  }));
 
   // ── EQUIPMENT ─────────────────────────────────────────────────────────────
-  app.get(api.equipment.list.path, requireAuth, async (req, res) => {
+  app.get(api.equipment.list.path, requireAuth, asyncRoute(async (req, res) => {
     res.json(await storage.listEquipment(req.query.search as string, req.query.status as string));
-  });
+  }));
 
   const EQUIPMENT_NULLABLE_FIELDS = [
     'weeklyRate', 'monthlyRate', 'currentMileage', 'initialMileage',
@@ -482,11 +499,11 @@ export async function registerRoutes(
     return out;
   }
 
-  app.get('/api/equipment/:id', requireAuth, async (req, res) => {
+  app.get('/api/equipment/:id', requireAuth, asyncRoute(async (req, res) => {
     const equip = await storage.getEquipment(parseInt(req.params.id));
     if (!equip) return res.status(404).json({ message: "Equipment not found" });
     res.json(equip);
-  });
+  }));
 
   app.post(api.equipment.create.path, requireAdmin, async (req, res) => {
     try {
@@ -651,13 +668,13 @@ export async function registerRoutes(
     }
   });
 
-  app.get('/api/rentals/:id', requireAuth, async (req, res) => {
+  app.get('/api/rentals/:id', requireAuth, asyncRoute(async (req, res) => {
     const rental = await storage.getRental(parseInt(req.params.id));
     if (!rental) return res.status(404).json({ message: "Rental not found" });
     res.json(rental);
-  });
+  }));
 
-  app.post(api.rentals.complete.path, requireAdmin, async (req, res) => {
+  app.post(api.rentals.complete.path, requireAdmin, asyncRoute(async (req, res) => {
     const rental = await storage.getRental(parseInt(req.params.id));
     if (!rental) return res.status(404).json({ message: "Rental not found" });
     const cursor = await getSimulationDate();
@@ -696,7 +713,7 @@ export async function registerRoutes(
     await storage.updateRental(rental.id, { returnHours: returnHours.toFixed(1) });
 
     res.json({ message: "Rental completed successfully" });
-  });
+  }));
 
   // ── INVOICES ─────────────────────────────────────────────────────────────
   app.post('/api/invoices', requireAdmin, async (req, res) => {

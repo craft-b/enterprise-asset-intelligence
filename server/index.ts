@@ -24,6 +24,20 @@ import {
 import { toMlSnapshot } from "./services/multi-horizon-scoring";
 import { summariseBody } from "./services/request-log";
 
+// Last line of defence for an async handler nobody wrapped.
+//
+// Express 4 does not await route handlers, so a rejected promise is not an
+// error it sees -- and Node has terminated the process on unhandled
+// rejections since v15. A malformed body on an unauthenticated endpoint was
+// enough to take the server down, which also loses every in-memory job,
+// including a running seed.
+//
+// Handlers are wrapped at the source (asyncRoute in routes.ts); this exists so
+// that the next one anybody forgets is a loud log rather than a restart.
+process.on("unhandledRejection", (reason: unknown) => {
+  console.error("[FATAL-GUARD] Unhandled promise rejection — request dropped, process kept alive:", reason);
+});
+
 const app = express();
 // No ETag on API responses: with no-store it is redundant, and it is the
 // mechanism that produced the 304s above.
