@@ -61,7 +61,7 @@ export interface FeatureSnapshot {
   costTrend: number;
   hoursVelocity: number;
   neglectAcceleration: number;
-  sensorDegradationRate: number;
+  sensorDegradationRate: number | null;
 }
 
 class FeatureEngineeringService {
@@ -220,7 +220,7 @@ class FeatureEngineeringService {
       costTrend: 1,
       hoursVelocity: 1,
       neglectAcceleration: 1,
-      sensorDegradationRate: 0,
+      sensorDegradationRate: null,
     
     };
   }
@@ -283,7 +283,7 @@ class FeatureEngineeringService {
       costTrend:             snapshot.costTrend.toString(),
       hoursVelocity:         snapshot.hoursVelocity.toString(),
       neglectAcceleration:   snapshot.neglectAcceleration.toString(),
-      sensorDegradationRate: snapshot.sensorDegradationRate.toString(),
+      sensorDegradationRate: snapshot.sensorDegradationRate?.toString() ?? null,
       willFail10d: null,
       willFail30d: null,
       willFail60d: null,

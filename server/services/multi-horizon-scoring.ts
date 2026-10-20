@@ -83,7 +83,7 @@ export function toMlSnapshot(equipmentId: number, snapshot: any) {
     cost_trend:                  snapshot.costTrend ?? 1.0,
     hours_velocity:              snapshot.hoursVelocity ?? 1.0,
     neglect_acceleration:        snapshot.neglectAcceleration ?? 1.0,
-    sensor_degradation_rate:     snapshot.sensorDegradationRate ?? 0,
+    sensor_degradation_rate:     snapshot.sensorDegradationRate ?? IMPUTATION_DEFAULTS.sensor_degradation_rate,
   };
 }
 

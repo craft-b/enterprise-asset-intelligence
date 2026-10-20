@@ -61,7 +61,9 @@ export interface EnhancedFeatureSnapshot {
   costTrend: number;               // ratio: avg cost per event 90d vs 180d
   hoursVelocity: number;           // hours/day in last 30d vs last 90d
   neglectAcceleration: number;     // days_since_maint / mean_time_between — overdue ratio
-  sensorDegradationRate: number;   // vibration/temp trend vs baseline (0–1)
+  // null when the baseline window holds no readings -- an unmeasured
+  // signal, not an undegraded machine.
+  sensorDegradationRate: number | null;   // vibration/temp trend vs baseline (0–1)
 
   // Optional sensor readings
   avgVibration?: number;
@@ -80,6 +82,37 @@ export interface EnhancedFeatureSnapshot {
 
 export function computeWearRateVelocity(wearRate: number, wearRate90dAgo: number): number {
   return (wearRate - wearRate90dAgo) * 30; // per month
+}
+
+/**
+ * How far recent sensor readings have drifted above their own baseline.
+ *
+ * Returns null when there is nothing to compare against — an unmeasured
+ * signal, not an undegraded machine. The previous version substituted the
+ * recent value for a missing baseline, making the arithmetic (x - x) / x and
+ * reporting a confident 0.0000 for every asset in every snapshot.
+ *
+ * Each available signal carries equal weight: with only one measured, it
+ * carries the whole score rather than being halved against a signal that was
+ * never taken.
+ */
+export function computeSensorDegradation(
+  recentVib: number | null | undefined,
+  baselineVib: number | null | undefined,
+  recentTemp: number | null | undefined,
+  baselineTemp: number | null | undefined
+): number | null {
+  const parts: number[] = [];
+  if (recentVib != null && baselineVib != null && baselineVib > 0) {
+    parts.push(Math.min((recentVib - baselineVib) / baselineVib, 1));
+  }
+  if (recentTemp != null && baselineTemp != null && baselineTemp > 0) {
+    parts.push(Math.min((recentTemp - baselineTemp) / baselineTemp, 1));
+  }
+  if (parts.length === 0) return null;
+  const mean = parts.reduce((a, b) => a + b, 0) / parts.length;
+  // Running cooler and quieter than baseline is not negative degradation.
+  return Math.max(0, Math.min(mean, 1));
 }
 
 export function computeMaintFrequencyTrend(maintRate30d: number, maintRate90d: number): number {
@@ -141,6 +174,7 @@ class EnhancedFeatureEngineeringService {
 
     const now = snapshotDate;
     const d30  = new Date(now); d30.setDate(d30.getDate() - 30);
+    const d60  = new Date(now); d60.setDate(d60.getDate() - 60);
     const d90  = new Date(now); d90.setDate(d90.getDate() - 90);
     const d180 = new Date(now); d180.setDate(d180.getDate() - 180);
     const d365 = new Date(now); d365.setDate(d365.getDate() - 365);
@@ -304,7 +338,11 @@ class EnhancedFeatureEngineeringService {
 
     // ── Sensor data ────────────────────────────────────────────────────────
     const sensorStats    = await this.getSensorStats(equipmentId, d30, now);
-    const sensorBaseline = await this.getSensorStats(equipmentId, d365, d180);
+    // Baseline: days 90 to 60 ago. It used to be 365 to 180, a window no
+    // deployment of this system has ever had readings for -- the sensor log
+    // holds 90 days. See the degradation calculation below for what that
+    // produced.
+    const sensorBaseline = await this.getSensorStats(equipmentId, d90, d60);
 
     // ── Derived features ──────────────────────────────────────────────────
     const hoursUsed30d = rentalDays30d * 8;
@@ -393,19 +431,18 @@ class EnhancedFeatureEngineeringService {
 
     // 6. Sensor degradation rate: recent sensor readings vs historical baseline
     //    Compare vibration and temp — most sensitive leading indicators
-    const recentVib   = sensorStats.avgVibration ?? 0;
-    const baselineVib = sensorBaseline.avgVibration ?? recentVib;
-    const recentTemp  = sensorStats.avgEngineTemp ?? 0;
-    const baselineTemp = sensorBaseline.avgEngineTemp ?? recentTemp;
-
-    let sensorDegradationRate = 0;
-    if (baselineVib > 0) {
-      sensorDegradationRate += Math.min((recentVib - baselineVib) / baselineVib, 1) * 0.5;
-    }
-    if (baselineTemp > 0) {
-      sensorDegradationRate += Math.min((recentTemp - baselineTemp) / baselineTemp, 1) * 0.5;
-    }
-    sensorDegradationRate = Math.max(0, Math.min(sensorDegradationRate, 1));
+    //    With no baseline this used to fall back to `baseline = recent`, so
+    //    the arithmetic became (x - x) / x: exactly zero, for every asset, in
+    //    every snapshot ever taken. A window with no readings in it is not a
+    //    machine with no degradation, and 0.0000 in all 50 rows read as a
+    //    measurement rather than the absence of one. It is null now, and the
+    //    model's imputation default handles it where a number is required.
+    const sensorDegradationRate = computeSensorDegradation(
+      sensorStats.avgVibration,
+      sensorBaseline.avgVibration,
+      sensorStats.avgEngineTemp,
+      sensorBaseline.avgEngineTemp
+    );
 
     return {
       equipmentId,
