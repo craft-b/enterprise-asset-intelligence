@@ -592,6 +592,33 @@ export const insertMlModelSchema = createInsertSchema(mlModels)
 export const insertMaintenanceOverrideSchema = createInsertSchema(maintenanceOverrides)
   .omit({ id: true, createdAt: true });
 
+/**
+ * The outcome of each demo seed, kept so it survives the API process.
+ *
+ * The run's steps and warnings lived only in memory. On free hosting the API
+ * restarts often -- a deploy, or the instance suspending -- and when it did,
+ * the record of why a run's ML steps had been skipped went with it. Three
+ * consecutive seeds wrote no predictions and the only evidence left was the
+ * shape of the tables: counts of zero, and a drift row older than the seed
+ * that was supposed to have replaced it.
+ *
+ * Written on every step transition rather than at the end, because a run that
+ * dies is exactly the run whose reasons matter.
+ */
+export const seedRuns = mysqlTable("seed_runs", {
+  id:         serial("id").primaryKey(),
+  status:     varchar("status", { length: 20, enum: ["running", "completed", "failed"] }).notNull(),
+  steps:      mediumtext("steps"),     // JSON: SeedStep[]
+  warnings:   mediumtext("warnings"),  // JSON: string[]
+  error:      text("error"),
+  startedAt:  timestamp("started_at").defaultNow(),
+  updatedAt:  timestamp("updated_at").defaultNow().onUpdateNow(),
+  finishedAt: timestamp("finished_at"),
+});
+
+export const insertSeedRunSchema = createInsertSchema(seedRuns).omit({ id: true });
+export type SeedRun = typeof seedRuns.$inferSelect;
+
 export const simulationState = mysqlTable("simulation_state", {
   id:           int("id").primaryKey().autoincrement(),
   cursorDate:   varchar("cursor_date", { length: 10 }).notNull(),

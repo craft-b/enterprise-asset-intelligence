@@ -16,8 +16,8 @@
 // Reset wipes all tables (except users) and resets the simulation cursor.
 
 import { db } from "../db";
-import { sql, eq } from "drizzle-orm";
-import { equipment } from "../../shared/schema";
+import { sql, eq, desc } from "drizzle-orm";
+import { equipment, seedRuns } from "../../shared/schema";
 import { isDuplicateKey } from "../seeds/seed-errors";
 import { seedJobSites } from "../seeds/job-sites";
 import { seedVendors } from "../seeds/vendors";
@@ -191,15 +191,96 @@ function resetJobState() {
     steps: STEP_NAMES.map(name => ({ name, status: "pending" })),
     warnings: [],
   };
+  runRowId = undefined;
+}
+
+/**
+ * The row this run is being written to, if one could be created.
+ *
+ * Undefined means persistence is unavailable -- an older database without the
+ * table, say -- and the run carries on in memory exactly as it used to. Losing
+ * the audit trail is not a reason to refuse to seed.
+ */
+let runRowId: number | undefined;
+
+/** Create the row for this run. Never throws: this is bookkeeping. */
+async function beginRunRecord(): Promise<void> {
+  runRowId = undefined;
+  try {
+    const result: any = await db.insert(seedRuns).values({
+      status: "running",
+      steps: JSON.stringify(jobState.steps),
+      warnings: JSON.stringify(jobState.warnings),
+    } as any);
+    const id = Number(result?.[0]?.insertId ?? result?.insertId);
+    if (Number.isFinite(id) && id > 0) runRowId = id;
+  } catch (err: any) {
+    console.warn("[SEED] run history unavailable, continuing without it:", err?.message ?? err);
+  }
+}
+
+/**
+ * Mirror the in-memory state to that row.
+ *
+ * Deliberately not awaited by its callers: a seed must not slow down or fall
+ * over because its own audit trail could not be written. Every rejection is
+ * swallowed here rather than escaping as an unhandled rejection, which this
+ * process exits on.
+ */
+function persistRunRecord(): void {
+  if (runRowId === undefined) return;
+  const finished = jobState.status === "completed" || jobState.status === "failed";
+  db.update(seedRuns)
+    .set({
+      status: jobState.status === "idle" ? "running" : jobState.status,
+      steps: JSON.stringify(jobState.steps),
+      warnings: JSON.stringify(jobState.warnings),
+      error: jobState.error ?? null,
+      ...(finished ? { finishedAt: new Date() } : {}),
+    } as any)
+    .where(eq(seedRuns.id, runRowId))
+    .catch((err: any) =>
+      console.warn("[SEED] could not persist run state:", err?.message ?? err)
+    );
+}
+
+/**
+ * The last run this database recorded, for when the process that ran it is
+ * gone. Returns undefined if there is nothing to report.
+ */
+export async function getLastSeedRun(): Promise<SeedJobState | undefined> {
+  try {
+    const [row] = await db.select().from(seedRuns).orderBy(desc(seedRuns.id)).limit(1);
+    if (!row) return undefined;
+    const parse = <T>(raw: unknown, fallback: T): T => {
+      if (typeof raw !== "string" || raw.length === 0) return fallback;
+      try { return JSON.parse(raw) as T; } catch { return fallback; }
+    };
+    return {
+      // A run still marked "running" with no process behind it did not finish;
+      // the setup screen already knows how to say that.
+      status: row.status as SeedJobState["status"],
+      steps: parse<SeedStep[]>(row.steps, []),
+      warnings: parse<string[]>(row.warnings, []),
+      error: row.error ?? undefined,
+      startedAt: row.startedAt ? new Date(row.startedAt).toISOString() : undefined,
+      completedAt: row.finishedAt ? new Date(row.finishedAt).toISOString() : undefined,
+    };
+  } catch (err: any) {
+    console.warn("[SEED] could not read run history:", err?.message ?? err);
+    return undefined;
+  }
 }
 
 function setStep(index: number, status: StepStatus, detail?: string) {
   jobState.steps[index] = { ...jobState.steps[index], status, detail };
+  persistRunRecord();
 }
 
 /** Record a step that was skipped but did not sink the run. */
 function addWarning(message: string) {
   jobState.warnings.push(message);
+  persistRunRecord();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -244,10 +325,16 @@ export async function startSeedJob(): Promise<{ started: boolean; message: strin
   jobState.status = "running";
   jobState.startedAt = new Date().toISOString();
 
+  // Awaited, unlike the pipeline: without the row id, every later write is a
+  // no-op and the run leaves no trace at all.
+  await beginRunRecord();
+  persistRunRecord();
+
   // Run async — don't await
   runSeedPipeline().catch(err => {
     jobState.status = "failed";
     jobState.error = err?.message ?? "Unknown error";
+    persistRunRecord();
   });
 
   return { started: true, message: "Seed pipeline started" };
@@ -500,6 +587,7 @@ async function runSeedPipeline() {
     `);
 
     jobState.status = "completed";
+    persistRunRecord();
     jobState.completedAt = new Date().toISOString();
 
   } catch (err: any) {
@@ -508,6 +596,7 @@ async function runSeedPipeline() {
     if (runningIdx >= 0) setStep(runningIdx, "failed", err?.message ?? "Error");
     jobState.status = "failed";
     jobState.error = err?.message ?? "Seed pipeline failed";
+    persistRunRecord();
     throw err;
   }
 }

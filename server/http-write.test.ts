@@ -355,3 +355,61 @@ describe.runIf(ENABLED)("write paths over HTTP", () => {
     expect(left, `left behind: ${left.map(e => e.equipmentId).join(", ")}`).toHaveLength(0);
   });
 });
+
+describe.runIf(ENABLED)("the seed run record", () => {
+  it("reads back a finished run after the process that ran it is gone", async () => {
+    // getLastSeedRun is the fallback the status endpoint uses once the
+    // in-memory job is gone. Writing the row directly here is the point:
+    // it stands in for a run whose process no longer exists.
+    const { db } = await import("./db");
+    const { seedRuns } = await import("@shared/schema");
+    const { getLastSeedRun } = await import("./services/seed-orchestrator");
+
+    await db.insert(seedRuns).values({
+      status: "completed",
+      steps: JSON.stringify([{ name: "Batch predictions", status: "failed", detail: "401" }]),
+      warnings: JSON.stringify(["No assets were scored: the ML service rejected the call."]),
+      finishedAt: new Date(),
+    } as any);
+
+    const run = await getLastSeedRun();
+    expect(run, "nothing came back from the history").toBeDefined();
+    expect(run!.status).toBe("completed");
+    expect(run!.warnings[0]).toMatch(/rejected the call/);
+    expect(run!.steps[0].status).toBe("failed");
+  });
+
+  it("degrades to an empty run rather than throwing on unreadable JSON", async () => {
+    // A truncated or hand-edited column must not take down the status
+    // endpoint, which is the one thing you reach for when a seed misbehaved.
+    const { db } = await import("./db");
+    const { seedRuns } = await import("@shared/schema");
+    const { getLastSeedRun } = await import("./services/seed-orchestrator");
+
+    await db.insert(seedRuns).values({
+      status: "failed",
+      steps: "{not json",
+      warnings: "",
+      error: "something went wrong",
+    } as any);
+
+    const run = await getLastSeedRun();
+    expect(run!.status).toBe("failed");
+    expect(run!.steps).toEqual([]);
+    expect(run!.warnings).toEqual([]);
+    expect(run!.error).toBe("something went wrong");
+  });
+
+  it("reports the most recent run, not the first", async () => {
+    const { getLastSeedRun } = await import("./services/seed-orchestrator");
+    const run = await getLastSeedRun();
+    expect(run!.status).toBe("failed"); // the row written just above
+  });
+
+  it("answers the status endpoint from history when nothing is running", async () => {
+    const r = await api("GET", "/api/admin/seed/status");
+    expect(r.status).toBe(200);
+    expect(r.body.fromHistory, "the endpoint ignored the stored run").toBe(true);
+    expect(r.body.state).toBe("failed");
+  });
+});

@@ -19,7 +19,7 @@ import { featureEngineeringService } from './services/feature-engineering';
 import { assetRiskPredictions } from "@shared/schema";
 import { enhancedFeatureService } from "./services/feature-engineering-enhanced";
 import { evaluatePMSchedule, generatePMDescription, samplePMCost, MaintenanceTypeKey } from "./services/pm-scheduler";
-import { startSeedJob, getSeedStatus, getSystemStatus, resetSystem } from "./services/seed-orchestrator";
+import { startSeedJob, getSeedStatus, getLastSeedRun, getSystemStatus, resetSystem } from "./services/seed-orchestrator";
 import { mlFetch, describeMlFailure } from "./services/ml-client";
 import { timingSafeEqual } from "crypto";
 import { registerTestLogin } from "./test-login";
@@ -2544,7 +2544,13 @@ export async function registerRoutes(
   // GET /api/admin/seed/status — poll progress
   app.get("/api/admin/seed/status", requireAuth, async (req, res) => {
     try {
-      const raw = getSeedStatus();
+      // In-memory first; it is the live run. When this process never ran one
+      // -- a deploy or a suspend between the seed and the question -- fall back
+      // to what the last run recorded, so "why were there no predictions?" is
+      // still answerable afterwards rather than only while it is happening.
+      const memory = getSeedStatus();
+      const raw = memory.status === "idle" ? (await getLastSeedRun()) ?? memory : memory;
+      const fromHistory = raw !== memory;
       // Progress counts settled steps, not successful ones. A skipped ML step
       // has advanced the pipeline, and counting only completions left the bar
       // stuck at 80% next to the words "All done".
@@ -2560,6 +2566,10 @@ export async function registerRoutes(
         log: raw.steps.filter(s => s.detail).map(s => `[${s.name}] ${s.detail}`),
         warnings: raw.warnings,
         error: raw.error,
+        // So the client never presents a previous run as the live one.
+        fromHistory,
+        startedAt: raw.startedAt,
+        completedAt: raw.completedAt,
       });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
