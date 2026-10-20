@@ -416,6 +416,14 @@ name a database with `test` in it. Set it up once:
 DATABASE_URL="$TEST_DATABASE_URL" npm run db:push
 ```
 
+> `drizzle-kit push` is interactive. If the schema has drifted it asks before
+> adding a unique constraint, and one of the options it offers is to **truncate
+> the table**. Run it in a terminal you can answer, and read what it is asking:
+> piped or scripted it receives no answer, applies nothing, and still **exits
+> 0** — a migration that looks like it succeeded and did not. There is no
+> migration history or rollback here either; `docs/DESIGN_SPEC.md` records that
+> as a known limitation rather than a decision.
+
 The HTTP tiers authenticate through `POST /api/test-login`, which issues a
 session for an existing user id without a password. It is registered only when
 `TEST_LOGIN_SECRET` is set and at least 24 characters, refuses outright under
