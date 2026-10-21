@@ -22,6 +22,13 @@
       "when": 1791485133628,
       "tag": "0002_thankful_hulk",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "5",
+      "when": 1792598159097,
+      "tag": "0003_loving_red_wolf",
+      "breakpoints": true
     }
   ]
 }

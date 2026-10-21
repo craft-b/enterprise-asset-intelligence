@@ -452,6 +452,40 @@ export const predictionDriftMetrics = mysqlTable("prediction_drift_metrics", {
   idxHorizon: index("idx_horizon").on(t.horizon),
 }));
 
+// The drift reference itself — the "normal" every PSI check is measured
+// against.
+//
+// It used to live only in ml-service/registry/drift_reference.json, written at
+// runtime by POST /drift/compute-reference. Two things went wrong with that.
+// The ML service runs on free hosting with no persistent disk, so a file
+// written at runtime is gone at the next cold start. And the loader globs
+// `drift_reference_*.json` — note the underscore — which matches the committed
+// per-version files but never the plain `drift_reference.json` the compute step
+// writes, so on any restart the freshly computed reference was not merely lost,
+// it had never been the one in use.
+//
+// Here instead: survives restarts, is visible to anything that can read the
+// database, and keeps its history like the three metrics tables above.
+export const driftReference = mysqlTable("drift_reference", {
+  id: bigint("id", { mode: 'number', unsigned: true }).primaryKey().autoincrement(),
+  computedAt: timestamp("computed_at").notNull().defaultNow(),
+  modelVersion: varchar("model_version", { length: 50 }).notNull(),
+  // Counts are columns rather than JSON fields so "does a prediction reference
+  // exist?" is answerable without parsing the payload -- that question went
+  // unanswered for three model versions.
+  featureCount: int("feature_count").notNull().default(0),
+  horizonCount: int("horizon_count").notNull().default(0),
+  biasCategoryCount: int("bias_category_count").notNull().default(0),
+  /** Snapshots behind the feature references. */
+  nSamples: int("n_samples").notNull().default(0),
+  /** Distinct assets behind the prediction and bias references. */
+  nAssets: int("n_assets").notNull().default(0),
+  /** JSON: { features, predictions, bias } — the distributions themselves. */
+  payload: mediumtext("payload").notNull(),
+}, (t) => ({
+  idxComputedAt: index("idx_computed_at").on(t.computedAt),
+}));
+
 // Bias drift — per-category HIGH-rate deviation vs. baseline.
 export const biasDriftMetrics = mysqlTable("bias_drift_metrics", {
   id: bigint("id", { mode: 'number', unsigned: true }).primaryKey().autoincrement(),
