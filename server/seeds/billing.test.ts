@@ -59,8 +59,23 @@ describe("a swap describes something that could have happened", () => {
     expect(SRC).toMatch(/durationDays\(rental\) \/ 2/);
   });
 
-  it("prefers a replacement from the same category", () => {
+  it("requires a replacement from the same category, with no fallback", () => {
+    // This assertion used to read "prefers the same category" and matched the
+    // preference in the source. It passed while the rows written on the real
+    // fleet were a Grader replaced by a Tower Crane and an Excavator replaced
+    // by that same crane -- because ten units span nine categories, only Crane
+    // has a second unit, and so the "any other unit" fallback fired every
+    // single time. The code path existed; the outcome was nonsense.
     expect(SRC).toMatch(/e\.category === rental\.category/);
+    // No fallback to an arbitrary unit. If this reappears, a one-per-category
+    // fleet silently produces implausible swaps again.
+    expect(SRC).not.toMatch(/otherUnits/);
+    expect(SRC).not.toMatch(/sameCategory\[0\]\s*\?\?/);
+  });
+
+  it("drops a rental that has no like-for-like replacement", () => {
+    // Fewer swaps is the right answer on a fleet that cannot supply one.
+    expect(SRC).toMatch(/\.filter\(r => replacementFor\(r\) !== undefined\)/);
   });
 
   it("never swaps a unit for itself", () => {

@@ -113,9 +113,18 @@ export async function seedInvoices(cursorDate: Date): Promise<number> {
  * Equipment swaps: a unit replaced partway through a rental.
  *
  * Seeded against the longest completed rentals, because a swap needs room
- * either side of it to make sense. The replacement is a different unit of the
- * same category where the fleet has one, so the substitution is plausible
- * rather than a grader standing in for a generator.
+ * either side of it to make sense. The replacement must be another unit of the
+ * SAME category -- a rental is for a machine that does a job, and no yard sends
+ * a tower crane to replace an excavator.
+ *
+ * That requirement is strict, and on this fleet it binds hard: ten units across
+ * nine categories, so only Crane has a second unit. A rental of anything else
+ * gets no swap, and that is the correct answer rather than a missing feature.
+ * An earlier version preferred the same category and fell back to "any other
+ * unit", which on this fleet meant the fallback fired every time -- it seeded a
+ * Grader replaced by a Tower Crane and an Excavator replaced by the same crane.
+ * The test asserted the preference existed in the code and passed while both
+ * rows it produced were nonsense.
  */
 export async function seedEquipmentSwaps(): Promise<number> {
   const rentals = await completedRentals();
@@ -132,8 +141,15 @@ export async function seedEquipmentSwaps(): Promise<number> {
     (new Date(`${r.returnDate}T00:00:00Z`).getTime() -
      new Date(`${r.receiveDate}T00:00:00Z`).getTime()) / (24 * 3600 * 1000);
 
+  /** A unit of the same category that is not the one already on hire. */
+  const replacementFor = (rental: CompletedRental) =>
+    fleet.find(e => e.category === rental.category && e.id !== rental.equipmentId);
+
   const candidates = [...rentals]
     .filter(r => durationDays(r) >= 20)
+    // No like-for-like unit in the fleet means no swap, rather than a swap to
+    // whatever happened to be first in the list.
+    .filter(r => replacementFor(r) !== undefined)
     .sort((a, b) => durationDays(b) - durationDays(a))
     .slice(0, 2);
 
@@ -156,11 +172,8 @@ export async function seedEquipmentSwaps(): Promise<number> {
 
   for (let i = 0; i < candidates.length; i++) {
     const rental = candidates[i];
-    const sameCategory = fleet.filter(
-      e => e.category === rental.category && e.id !== rental.equipmentId
-    );
-    const otherUnits = fleet.filter(e => e.id !== rental.equipmentId);
-    const replacement = (sameCategory[0] ?? otherUnits[0]);
+    // Guaranteed present: candidates were filtered on exactly this.
+    const replacement = replacementFor(rental);
     if (!replacement) continue;
 
     // Partway through, not on either boundary: a swap on the receive date is a
