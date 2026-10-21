@@ -25,7 +25,7 @@ from api.schemas.prediction import (
 from engine.genai_advisor import is_available, LLM_PROVIDER, generate_recommendation
 from engine.predictor_multihorizon import MultiHorizonPredictor
 from engine.projector import project as project_trajectory
-from engine.drift_detector import DriftDetector
+from engine.drift_detector import DriftDetector, MIN_BATCH_SIZE
 from engine.model_registry import (
     get_state as registry_get_state,
     register_new_version,
@@ -398,7 +398,23 @@ async def drift_latest():
         "STABLE"  if rows else
         "NO_DATA"
     )
-    return {"overall": overall, "features": rows}
+    # The reference state and the batch floor travel with the readings so a
+    # dashboard can tell apart the three reasons there might be nothing to show:
+    # no baseline computed, a baseline with no qualifying batch yet, or a
+    # genuine set of readings. Without this the card could only say "no drift
+    # data yet" and advise computing a baseline that already existed.
+    return {
+        "overall":  overall,
+        "features": rows,
+        "min_batch_size": MIN_BATCH_SIZE,
+        "reference": {
+            "loaded":          bool(drift_detector.reference),
+            "model_version":   drift_detector.ref_model_version,
+            "features":        len(drift_detector.reference),
+            "horizons":        len(drift_detector.pred_reference),
+            "bias_categories": len(drift_detector.bias_reference),
+        },
+    }
 
 
 @app.post("/drift/compute-reference", tags=["Drift"])

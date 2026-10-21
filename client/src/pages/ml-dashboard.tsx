@@ -165,7 +165,33 @@ function DriftMonitorCard() {
             <Alert className="border-slate-200">
               <AlertCircle className="h-4 w-4" />
               <AlertDescription className="text-sm">
-                No drift data yet. {isAdmin ? "Click \"Reset Baseline\" to compute a reference distribution from current training data." : "A baseline has not been computed yet."}
+                {/*
+                  Two different situations used to share one message. "No drift
+                  data yet — click Reset Baseline" told an admin to compute a
+                  baseline that already existed, when the real reason for the
+                  empty monitor was that no scoring batch had reached the
+                  minimum sample count. Saying which one it is costs a sentence.
+                */}
+                {drift?.reference?.loaded ? (
+                  <>
+                    Baseline established
+                    {drift.reference.model_version ? ` (${drift.reference.model_version})` : ""}
+                    {" — "}
+                    {drift.reference.features} feature{drift.reference.features === 1 ? "" : "s"},
+                    {" "}{drift.reference.horizons} prediction horizon{drift.reference.horizons === 1 ? "" : "s"},
+                    {" "}{drift.reference.bias_categories} bias categor{drift.reference.bias_categories === 1 ? "y" : "ies"}.
+                    {" "}No PSI reading has been taken yet: a scoring batch needs at least{" "}
+                    {drift.min_batch_size ?? 20} snapshots, and a fleet smaller than that
+                    cannot reach it in one run.
+                  </>
+                ) : (
+                  <>
+                    No reference distribution loaded.{" "}
+                    {isAdmin
+                      ? "Click \"Reset Baseline\" to compute one from the current snapshots."
+                      : "A baseline has not been computed yet."}
+                  </>
+                )}
               </AlertDescription>
             </Alert>
           </div>
@@ -180,7 +206,16 @@ function DriftMonitorCard() {
               </Badge>
               {drift.features[0] && (
                 <span className="text-xs text-muted-foreground ml-auto">
+                  {/*
+                    The batch size belongs next to the date. A reading is only
+                    as good as the batch it came from, and a PSI from 50
+                    snapshots last week says something different from one taken
+                    on the current fleet -- which the date alone did not convey.
+                  */}
                   Last checked {new Date(drift.features[0].checked_at).toLocaleString()}
+                  {drift.features[0].batch_size != null
+                    ? ` · batch of ${drift.features[0].batch_size}`
+                    : ""}
                 </span>
               )}
             </div>

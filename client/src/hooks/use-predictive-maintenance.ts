@@ -425,11 +425,26 @@ export interface DriftFeature {
   status: "STABLE" | "WARNING" | "ALERT";
   checked_at: string;
   model_version: string;
+  /** Snapshots the reading was computed from — it qualifies the PSI. */
+  batch_size?: number;
 }
 
 export interface DriftStatus {
   overall: "STABLE" | "WARNING" | "ALERT" | "NO_DATA";
   features: DriftFeature[];
+  /**
+   * Optional: added to /drift/latest after the fields below were needed to
+   * explain an empty monitor. Absent while an older ML service is still
+   * deployed, so every read of these is guarded.
+   */
+  min_batch_size?: number;
+  reference?: {
+    loaded: boolean;
+    model_version: string | null;
+    features: number;
+    horizons: number;
+    bias_categories: number;
+  };
 }
 
 export function useDriftStatus() {

@@ -283,10 +283,20 @@ class DriftDetector:
 
     # ── Public API — Feature Drift ────────────────────────────────────────────
 
-    def check(self, snapshots: list, model_version: str = "unknown") -> dict:
+    def check(self, snapshots: list, model_version: str = "unknown",
+              persist: bool = True) -> dict:
         """
         Feature drift: PSI on input feature distributions.
         Returns summary dict — safe to include in batch prediction response.
+
+        `persist=False` runs the comparison without recording it. Used by the
+        self-check after a reference is computed, which compares the reference
+        sample against the reference built from it and can therefore only ever
+        return PSI 0. Recording that produced four rows of PSI 0.000000 /
+        STABLE as the newest readings in drift_metrics -- and because
+        get_latest() takes the newest row per feature, they hid the genuine
+        readings behind them (a batch of 50 with PSI up to 0.4376) and left the
+        dashboard asserting a stability it had not measured.
         """
         if not self.reference:
             return {"status": "inactive", "reason": "no reference distribution loaded"}
@@ -333,7 +343,8 @@ class DriftDetector:
         else:
             print(f"[DRIFT] Feature {overall} (batch_size={len(snapshots)})")
 
-        self._persist_feature(results, len(snapshots), model_version)
+        if persist:
+            self._persist_feature(results, len(snapshots), model_version)
 
         return {
             "status":        overall,
@@ -720,10 +731,13 @@ class DriftDetector:
               f"n={len(feat_sample)}, assets={n_assets}, "
               f"stored={'db' if persisted else 'file only'}")
 
-        # Post-reset feature drift check
+        # Post-reset self-check: proves the comparison path runs. It compares
+        # the reference sample against the reference derived from it, so PSI 0
+        # is arithmetic, not a measurement -- hence persist=False.
         try:
-            check_result = self.check(feat_sample.to_dict("records"), model_version)
-            print(f"[DRIFT] Post-reset feature check: {check_result.get('status')}")
+            check_result = self.check(feat_sample.to_dict("records"), model_version,
+                                      persist=False)
+            print(f"[DRIFT] Reference self-check (not recorded): {check_result.get('status')}")
         except Exception as e:
             print(f"[DRIFT] Post-reset check warning (non-fatal): {e}")
 

@@ -30,7 +30,7 @@ This is the second of two portfolio repositories, deliberately built to be compl
 - **ML pipeline** — Full automated pipeline: feature snapshot generation → failure labeling → model training → inference, all triggerable from the admin UI
 - **MLflow experiment tracking** — Every training run logs hyperparameters, per-horizon metrics (ROC-AUC, PR-AUC, recall, F1), per-fold CV scores, model artifacts, and feature importance JSONs under the `equipment-failure-multihorizon` experiment
 - **SHAP explainability** — `TreeExplainer` runs at inference time; top 5 features by |SHAP value| are returned with every prediction for per-asset attribution. On the bundled simulator these attributions recover the generator rather than discover anything — failures are drawn from a function of age, hours and maintenance recency and the model receives all three — so the UI renders that caveat inline. The machinery is real; only the dataset makes it circular
-- **Three-layer drift detection** — Data drift (PSI on monitored features), prediction drift (distribution shift in 30d output scores), and bias drift (disparity in HIGH-rate across equipment categories); all persisted to `drift_metrics` table; dashboard surfaces per-feature PSI with STABLE / WARNING / ALERT status
+- **Three-layer drift detection** — Data drift (PSI on monitored features), prediction drift (distribution shift in output scores per horizon), and bias drift (disparity in HIGH-rate across equipment categories); each persisted to its own table (`drift_metrics`, `prediction_drift_metrics`, `bias_drift_metrics`) with reference distributions in `drift_reference`; dashboard surfaces per-feature PSI with STABLE / WARNING / ALERT status. A ten-asset demo fleet sits below the 20-snapshot batch minimum and the 3-per-category bias minimum, so it does not generate readings — [why, and why those floors stay](#deployment-status)
 - **Champion-challenger model governance** — Newly trained models enter registry as challengers; shadow-score every batch alongside champion without persisting results; admin promotes challenger to champion via `POST /api/ml/models/promote` with zero downtime (in-memory hot-swap); full audit history in `model_registry.json`
 - **Pre-training data quality gate** — 8-check validator (row count, label completeness, class balance, null rates, physical bounds, non-zero required features, temporal spread, duplicate snapshots) blocks training on FAIL, warns on marginal data, PASS/WARN/FAIL summary in training log
 - **Prevalence-honest calibration** — Random Forests calibrated (`CalibratedClassifierCV`) on the untouched, real-prevalence dev set with `class_weight='balanced'` (no SMOTE), so the emitted failure probability isn't inflated by resampling; Brier score + expected calibration error published per horizon
@@ -383,8 +383,8 @@ Authenticated with `Authorization: Bearer <AGENT_API_KEY>`. Designed for program
 ## Testing
 
 ```bash
-# Python — ml-service (180 tests: inference, training smoke test, point-in-time
-# correctness, leakage canaries, data-quality gate, model registry)
+# Python — ml-service (193 tests: inference, training smoke test, point-in-time
+# correctness, leakage canaries, data-quality gate, model registry, drift reference)
 cd ml-service
 pytest tests/ -v
 
@@ -563,19 +563,49 @@ Five things that deployment needed, and now has:
 Honest about the free tier: both Render services suspend after ~15 minutes idle. Three successive
 cold starts of the ML service measured 51s, 62s and 73s — the host's own dashboard warns of "50
 seconds or more", and the figure drifts upward, so anything in the code that waits on it is sized
-against the slowest seen rather than the average. and 512MB serves the champion model (measured ~340MB resident) but will not train one — so
+against the slowest seen rather than the average. And 512MB serves the champion model (measured ~340MB resident) but will not train one — so
 the deployed instance loads artifacts baked into its image rather than training on demand. The
 ~$33/mo configuration that removes the cold starts is documented in
 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Docker Compose (`docker-compose.yml`) runs all three
 services locally, and [Quickstart](#quickstart) seeds a full fleet in two to five minutes —
 two of its steps wait on the ML service's cold start.
 
-The seed does not train a model, anywhere. It produces 40 labeled snapshots and the trainer's
+The seed does not train a model, anywhere. It produces 230 labeled snapshots and the trainer's
 data-quality gate refuses anything under 500 rows, so that step is skipped by design and the fleet
 is scored by the champion shipped in the image. The step reports itself as skipped rather than
 failed, and the metrics on the model page are that champion's own, registered from its bundle and
 dated to the run that produced it. Training on demand needs a dataset the demo seed is not trying
 to be.
+
+**Drift monitoring is implemented; a ten-asset fleet cannot exercise it.** All three layers run
+inside `POST /predict/multi-horizon/batch`, which is the path the Run Multi-Horizon Forecast button
+takes, and each persists to its own table. The reference distributions live in the
+`drift_reference` table rather than a file in the container, because a free tier has no persistent
+disk — and because the loader's glob previously matched the committed per-version files but never
+the one the compute step wrote, so a freshly computed reference was not the one in use.
+
+What the fleet cannot reach are two sample minimums, both of which are correct:
+
+- **A batch needs 20 snapshots to be worth a PSI.** Scoring ten assets produces ten rows, so every
+  run returns `{"status": "skipped", "reason": "batch too small (10 < 20)"}`. PSI over ten samples
+  moves on noise; the floor stays. The genuine readings in `drift_metrics` came from a batch of 50,
+  with PSI ranging to 0.4376 — the detector measures when given something to measure.
+- **Bias drift needs three units per category.** Ten units span nine categories and only Crane has
+  a second, so no category can reach three and the bias reference is empty. A HIGH-rate computed
+  across one or two machines is not a disparity statistic.
+
+Feature references cover four of the five monitored features. `mean_time_between_failures` is
+non-null in 1 of 240 snapshots, so it cannot clear the 20-sample floor either — worth stating
+plainly, because it also means the model receives that feature's imputed default (500) for
+practically every asset.
+
+None of this is reported as stability. The reference self-check that follows a recompute compares
+the reference sample against the reference built from it, so its PSI is 0 by arithmetic; it is run
+as a smoke test and deliberately not recorded, because when it *was* recorded it became the newest
+row per feature and the dashboard displayed four features at PSI 0.000000 / STABLE — hiding the
+real readings behind it and asserting a stability nothing had measured. The monitor card now names
+which of the three states it is in: no reference, a reference with no qualifying batch yet, or
+actual readings, shown with the batch size they came from.
 
 ---
 

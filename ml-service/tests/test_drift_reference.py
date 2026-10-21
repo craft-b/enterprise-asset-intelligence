@@ -132,6 +132,39 @@ class TestLoadFloors:
         assert d.reference == {}
 
 
+class TestSelfCheckIsNotARecordedReading:
+    """
+    compute_reference_from_db ends by checking the reference sample against the
+    reference built from it. PSI 0 is arithmetic there, not a measurement, and
+    it used to be written to drift_metrics like any other reading. Because
+    get_latest() returns the newest row per feature, those zeros became what
+    the dashboard displayed -- four features reading PSI 0.000000 / STABLE,
+    hiding the genuine readings behind them (a batch of 50, PSI up to 0.4376)
+    and asserting a stability nothing had measured.
+    """
+
+    def test_check_can_run_without_recording(self, registry, monkeypatch):
+        write_ref(registry / "drift_reference_v1.17.json", "v1.17", feature_block(50))
+        d = DriftDetector()
+
+        persisted = []
+        monkeypatch.setattr(DriftDetector, "_persist_feature",
+                            lambda self, *a, **k: persisted.append(a))
+
+        snapshots = [{"mechanical_wear_score": float(i % 10)} for i in range(40)]
+        d.check(snapshots, "v1.17", persist=False)
+        assert persisted == []
+
+        d.check(snapshots, "v1.17")
+        assert len(persisted) == 1, "a real batch check must still be recorded"
+
+    def test_the_self_check_passes_persist_false(self):
+        from pathlib import Path
+        src = Path(dd.__file__).read_text(encoding="utf-8")
+        block = src[src.index("Post-reset self-check"):]
+        assert "persist=False" in block[:600]
+
+
 class TestGateConstants:
     def test_building_a_reference_and_scoring_a_batch_are_separate_floors(self):
         # These were one constant. Collapsing them back would restore a state
