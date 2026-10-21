@@ -20,8 +20,12 @@
 import { db } from "../db";
 import { equipmentFailurePredictions } from "../../shared/schema";
 import { enhancedFeatureService } from "./feature-engineering-enhanced";
-import { IMPUTATION_DEFAULTS, isColdStart, coldStartMultiHorizon } from "./imputation";
+import { isColdStart, coldStartMultiHorizon } from "./imputation";
 import { mlFetch, describeMlFailure } from "./ml-client";
+// One assembly site, shared with the predict-all path. Re-exported because
+// routes.ts and index.ts have always imported it from here.
+import { toMlSnapshot } from "./ml-snapshot-payload";
+export { toMlSnapshot };
 import { getSimulationDate } from "./simulation-clock";
 
 export interface MultiHorizonResult {
@@ -44,48 +48,6 @@ export interface MultiHorizonOutcome {
 
 /** Gateway statuses mean the host answered, not the service. */
 const GATEWAY_STATUSES = new Set([502, 503, 504]);
-
-/** Build the payload the ML service expects from a feature snapshot. */
-export function toMlSnapshot(equipmentId: number, snapshot: any) {
-  return {
-    equipment_id:                equipmentId,
-    asset_age_years:             snapshot.assetAgeYears,
-    category:                    snapshot.category,
-    total_hours_lifetime:        snapshot.totalHoursLifetime,
-    hours_used_30d:              snapshot.hoursUsed30d,
-    hours_used_90d:              snapshot.hoursUsed90d,
-    rental_days_30d:             Math.round(snapshot.rentalDays30d),
-    rental_days_90d:             Math.round(snapshot.rentalDays90d),
-    avg_rental_duration:         snapshot.avgRentalDuration,
-    maintenance_events_90d:      snapshot.maintenanceEvents90d,
-    maintenance_cost_180d:       snapshot.maintenanceCost180d,
-    avg_downtime_per_event:      snapshot.avgDowntimePerEvent,
-    days_since_last_maintenance: Math.max(
-      0,
-      snapshot.daysSinceLastMaintenance ?? IMPUTATION_DEFAULTS.days_since_last_maintenance
-    ),
-    mean_time_between_failures:  snapshot.meanTimeBetweenFailures ?? IMPUTATION_DEFAULTS.mean_time_between_failures,
-    vendor_reliability_score:    snapshot.vendorReliabilityScore,
-    jobsite_risk_score:          snapshot.jobSiteRiskScore,
-    usage_intensity:             Math.min(snapshot.usageIntensity, 12),
-    usage_trend:                 Math.min(Math.max(snapshot.usageTrend, 0.5), 3.0),
-    utilization_vs_expected:     snapshot.utilizationVsExpected,
-    wear_rate:                   snapshot.wearRate,
-    aging_factor:                Math.min(snapshot.agingFactor, 1.0),
-    maint_overdue:               snapshot.maintOverdue,
-    cost_per_event:              snapshot.costPerEvent,
-    maint_burden:                snapshot.maintBurden,
-    mechanical_wear_score:       Math.min(snapshot.mechanicalWearScore, 10),
-    abuse_score:                 Math.min(snapshot.abuseScore, 10),
-    neglect_score:               Math.min(Math.max(0, snapshot.neglectScore), 10),
-    wear_rate_velocity:          snapshot.wearRateVelocity ?? 0,
-    maint_frequency_trend:       snapshot.maintFrequencyTrend ?? 1.0,
-    cost_trend:                  snapshot.costTrend ?? 1.0,
-    hours_velocity:              snapshot.hoursVelocity ?? 1.0,
-    neglect_acceleration:        snapshot.neglectAcceleration ?? 1.0,
-    sensor_degradation_rate:     snapshot.sensorDegradationRate ?? IMPUTATION_DEFAULTS.sensor_degradation_rate,
-  };
-}
 
 /** Write one scored asset to equipment_failure_predictions. */
 async function store(result: MultiHorizonResult): Promise<void> {

@@ -11,8 +11,10 @@ import { db } from "../db";
 import { assetRiskPredictions, equipmentRiskScores, equipment } from "@shared/schema";
 import { eq, desc } from "drizzle-orm";
 import { enhancedFeatureService as featureEngineeringService } from "./feature-engineering-enhanced";
-import { IMPUTATION_DEFAULTS, COLD_START, isColdStart } from "./imputation";
+import { COLD_START, isColdStart } from "./imputation";
 import { mlFetch, ML_SERVICE_URL, describeMlFailure } from "./ml-client";
+// Was a second, 25-field copy of this payload. See ml-snapshot-payload.ts.
+import { toMlSnapshot } from "./ml-snapshot-payload";
 import { getSimulationDate } from "./simulation-clock";
 // Request timeouts for the ML plane, overridable because the right value is a
 // property of the deployment, not the code. Alongside a warm container 10s is
@@ -102,46 +104,6 @@ async function checkMLServiceHealth(): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-export function buildSnapshotPayload(
-  equipmentId: number,
-  snapshot: Record<string, unknown>
-): Record<string, unknown> {
-  const safe = (val: unknown, fallback: number): number => {
-    const n = Number(val);
-    return isNaN(n) || val === null || val === undefined ? fallback : n;
-  };
-
-  return {
-    equipment_id:                equipmentId,
-    asset_age_years:             safe(snapshot.assetAgeYears, 1),
-    category:                    String(snapshot.category ?? "Unknown"),
-    total_hours_lifetime:        safe(snapshot.totalHoursLifetime, 0),
-    hours_used_30d:              safe(snapshot.hoursUsed30d, 0),
-    hours_used_90d:              safe(snapshot.hoursUsed90d, 0),
-    rental_days_30d:             Math.round(safe(snapshot.rentalDays30d, 0)),
-    rental_days_90d:             Math.round(safe(snapshot.rentalDays90d, 0)),
-    avg_rental_duration:         safe(snapshot.avgRentalDuration, 1),
-    maintenance_events_90d:      safe(snapshot.maintenanceEvents90d, 0),
-    maintenance_cost_180d:       safe(snapshot.maintenanceCost180d, 0),
-    avg_downtime_per_event:      safe(snapshot.avgDowntimePerEvent, 0),
-    days_since_last_maintenance: Math.max(0, safe(snapshot.daysSinceLastMaintenance, IMPUTATION_DEFAULTS.days_since_last_maintenance)),
-    vendor_reliability_score:    safe(snapshot.vendorReliabilityScore, 0.5),
-    jobsite_risk_score:          safe(snapshot.jobSiteRiskScore, 0.5),
-    usage_intensity:             Math.min(safe(snapshot.usageIntensity, 1), 12),
-    usage_trend:                 Math.min(Math.max(safe(snapshot.usageTrend, 1), 0.5), 3.0),
-    utilization_vs_expected:     safe(snapshot.utilizationVsExpected, 1),
-    wear_rate:                   safe(snapshot.wearRate, 0),
-    aging_factor:                Math.min(safe(snapshot.agingFactor, 0.1), 1.0),
-    maint_overdue:               safe(snapshot.maintOverdue, 0),
-    cost_per_event:              safe(snapshot.costPerEvent, 0),
-    maint_burden:                safe(snapshot.maintBurden, 0),
-    mechanical_wear_score:       Math.min(safe(snapshot.mechanicalWearScore, 1), 10),
-    abuse_score:                 Math.min(safe(snapshot.abuseScore, 1), 10),
-    neglect_score:               Math.min(Math.max(0, safe(snapshot.neglectScore, 1)), 10),
-    mean_time_between_failures:  safe(snapshot.meanTimeBetweenFailures, IMPUTATION_DEFAULTS.mean_time_between_failures),
-  };
 }
 
 async function savePrediction(
@@ -238,7 +200,7 @@ class PredictiveMaintenanceService {
           return prediction;
         }
 
-        const payload = buildSnapshotPayload(equipmentId, snapshot as unknown as Record<string, unknown>);
+        const payload = toMlSnapshot(equipmentId, snapshot);
 
         const invalidFields = Object.entries(payload).filter(([, v]) =>
           typeof v === 'number' && isNaN(v as number)
