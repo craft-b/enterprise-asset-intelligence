@@ -65,9 +65,14 @@ describe("classifyScoringOutcome", () => {
     }
   });
 
-  it("tells you how to recover", () => {
+  it("tells you how to recover, naming the button that exists", () => {
+    // This string sends a reader to a specific control, so it has to match the
+    // label on it. The button was called "Score Fleet" while the hook behind it
+    // was useRunPredictions and a different page's button said "Run
+    // Predictions" -- so advice naming one of them was as likely to misdirect
+    // as to help. If the label moves again, this fails.
     const v = classifyScoringOutcome(outcome({ serviceAvailable: false }));
-    expect(v.warning).toMatch(/Score Fleet/);
+    expect(v.warning).toMatch(/Refresh Risk Queue/);
   });
 
   it("reports a partial pass as completed, with a warning", () => {

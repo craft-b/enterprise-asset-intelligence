@@ -3,7 +3,6 @@ import { useAuth } from "@/hooks/use-auth";
 import { MlServiceNotice } from "@/components/ml-service-notice";
 import {
   useFleetRisk,
-  useRunPredictions,
   useGenerateSnapshots,
   useLabelSnapshots,
   usePipelineStatus,
@@ -489,7 +488,6 @@ export default function PredictiveMaintenanceDashboard() {
 
   const { data: fleetRisk } = useFleetRisk();
   const { data: equipment } = useEquipment();
-  const runPredictions = useRunPredictions();
   const generateSnapshots = useGenerateSnapshots();
   const labelSnapshots = useLabelSnapshots();
   const { data: pipelineStatus } = usePipelineStatus();
@@ -567,7 +565,7 @@ export default function PredictiveMaintenanceDashboard() {
           <div className="flex gap-2">
             <Button onClick={handleRunMultiHorizon} disabled={mhMutation.isPending} className="gap-2">
               {mhMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-              Run Predictions
+              Run Multi-Horizon Forecast
             </Button>
           </div>
         )}
@@ -632,7 +630,7 @@ export default function PredictiveMaintenanceDashboard() {
         <CardContent>
           {sortedResults.length === 0 ? (
             <div className="text-center py-12 text-muted-foreground">
-              No predictions yet. Click <strong>Run Predictions</strong> to generate multi-horizon forecasts.
+              No forecasts yet. Click <strong>Run Multi-Horizon Forecast</strong> to generate 10, 30 and 60-day probabilities.
             </div>
           ) : (
             <div>

@@ -195,7 +195,15 @@ export function useEquipmentWithRisk() {
 }
 
 // Run batch predictions (admin only)
-export function useRunPredictions() {
+/**
+ * Scores every asset and refreshes the 30-day risk queue (POST predict-all).
+ *
+ * Named useRunPredictions until the name cost three misdiagnoses in one
+ * session: it backs the button labelled "Score Fleet", while the button
+ * labelled "Run Predictions" is the multi-horizon one below. Each name
+ * described the other's button.
+ */
+export function useScoreRiskQueue() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
 

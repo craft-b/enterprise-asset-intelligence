@@ -22,6 +22,7 @@ import { isDuplicateKey } from "../seeds/seed-errors";
 import { seedJobSites } from "../seeds/job-sites";
 import { seedVendors } from "../seeds/vendors";
 import { seedRentals } from "../seeds/rentals";
+import { seedInvoices, seedEquipmentSwaps } from "../seeds/billing";
 import { seedMaintenanceConfig } from "../seeds/maintenance-config";
 import { featureEngineeringService } from "./feature-engineering";
 import { predictiveMaintenanceService } from "./predictive-maintenance-fixed";
@@ -167,7 +168,7 @@ const STEP_NAMES = [
   "Job sites",
   "Vendors",
   "Equipment & maintenance config",
-  "Rentals",
+  "Rentals, invoices & swaps",
   "Historical sensor data & failure events",
   "Feature snapshots (backfill)",
   "Label snapshots",
@@ -391,7 +392,7 @@ export function classifyScoringOutcome(outcome: {
   firstError?: string;
 }): { status: StepStatus; detail: string; warning?: string } {
   const scored = outcome.predictions.length;
-  const retry = ' Use "Score Fleet" on the ML dashboard to retry.';
+  const retry = ' Use "Refresh Risk Queue" on the ML dashboard to retry.';
 
   if (!outcome.serviceAvailable) {
     return {
@@ -450,10 +451,17 @@ async function runSeedPipeline() {
     const equipmentIds = allEquipment.map(e => e.id);
     setStep(2, "completed", `${equipmentIds.length} equipment units`);
 
-    // ── Step 3: Rentals ────────────────────────────────────────────────────
+    // ── Step 3: Rentals, invoices & swaps ──────────────────────────────────
     setStep(3, "running");
     await seedRentals(equipmentIds, jobSiteIds, vendorIds, cursorDate);
-    setStep(3, "completed", "15 historical rentals");
+    // Both of these read the rentals back, so they have to follow the insert.
+    // They live in step 3 rather than a step of their own because the client
+    // renders a fixed ten-step list and an eleventh would have shown as
+    // progress past the end.
+    const invoiceCount = await seedInvoices(cursorDate);
+    const swapCount = await seedEquipmentSwaps();
+    setStep(3, "completed",
+      `15 historical rentals · ${invoiceCount} invoices · ${swapCount} equipment swaps`);
 
     // ── Step 4: Historical sensor data + failure events ────────────────────
     setStep(4, "running");
@@ -536,7 +544,7 @@ async function runSeedPipeline() {
     setStep(8, "running", "Waking the ML service…");
     if (!(await waitForMlService(8, ML_WAKE_TIMEOUT_MS))) {
       setStep(8, "failed", `Skipped — ${ML_ASLEEP}`);
-      addWarning(`No assets were scored: ${ML_ASLEEP} Use "Score Fleet" on the ML dashboard to retry.`);
+      addWarning(`No assets were scored: ${ML_ASLEEP} Use "Refresh Risk Queue" on the ML dashboard to retry.`);
     } else {
       setStep(8, "running", "Scoring fleet…");
       let outcome = await predictiveMaintenanceService.predictAllEquipmentWithOutcome();
@@ -579,7 +587,7 @@ async function runSeedPipeline() {
           horizonDetail = " · multi-horizon skipped";
           addWarning(
             `The 10/30/60-day forecasts were not generated (${mh.firstError ?? "no reason reported"}), ` +
-            `so the Fleet Command Center will be empty. Use "Run Predictions" on ` +
+            `so the Fleet Command Center will be empty. Use "Run Multi-Horizon Forecast" on ` +
             `Predictive Maintenance to retry.`
           );
         }

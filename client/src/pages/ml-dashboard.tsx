@@ -8,7 +8,7 @@ import {
   useChampionChallengerCompare,
   usePromoteChallenger,
   useDataQualityReport,
-  useRunPredictions,
+  useScoreRiskQueue,
   type HorizonMetrics,
   type DQCheck,
 } from "@/hooks/use-predictive-maintenance";
@@ -98,8 +98,8 @@ function statusTextClass(status: string) {
  * the only way to get a risk queue was to re-seed, re-inserting 90 days of
  * sensor readings to fix a cold start.
  */
-function ScoreFleetButton() {
-  const run = useRunPredictions();
+function RefreshRiskQueueButton() {
+  const run = useScoreRiskQueue();
   const { user } = useAuth();
   if ((user as any)?.role !== "ADMINISTRATOR") return null;
 
@@ -114,7 +114,7 @@ function ScoreFleetButton() {
       {run.isPending
         ? <Loader2 className="h-3 w-3 animate-spin mr-1" />
         : <RefreshCw className="h-3 w-3 mr-1" />}
-      {run.isPending ? "Scoring fleet…" : "Score Fleet"}
+      {run.isPending ? "Refreshing queue…" : "Refresh Risk Queue"}
     </Button>
   );
 }
@@ -757,7 +757,7 @@ export default function MLPerformanceDashboard() {
               get you out of. It was previously in the header below, which
               renders only once metrics are available. */}
           <div className="flex justify-center pt-1">
-            <ScoreFleetButton />
+            <RefreshRiskQueueButton />
           </div>
         </div>
 
@@ -843,7 +843,7 @@ export default function MLPerformanceDashboard() {
             Predictive maintenance model evaluation and monitoring
           </p>
         </div>
-        <ScoreFleetButton />
+        <RefreshRiskQueueButton />
       </div>
 
       {/* The drift and governance cards below come from the ML service; the
