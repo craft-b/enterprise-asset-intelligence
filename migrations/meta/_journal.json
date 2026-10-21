@@ -29,6 +29,13 @@
       "when": 1792598159097,
       "tag": "0003_loving_red_wolf",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "5",
+      "when": 1792606993795,
+      "tag": "0004_sloppy_living_tribunal",
+      "breakpoints": true
     }
   ]
 }

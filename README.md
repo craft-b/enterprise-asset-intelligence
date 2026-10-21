@@ -388,7 +388,7 @@ Authenticated with `Authorization: Bearer <AGENT_API_KEY>`. Designed for program
 cd ml-service
 pytest tests/ -v
 
-# Node/TypeScript — server + shared client logic (585 tests across 44 files)
+# Node/TypeScript — server + shared client logic (591 tests across 45 files)
 npm test
 
 # TypeScript type-check
@@ -595,9 +595,12 @@ What the fleet cannot reach are two sample minimums, both of which are correct:
   across one or two machines is not a disparity statistic.
 
 Feature references cover four of the five monitored features. `mean_time_between_failures` is
-non-null in 1 of 240 snapshots, so it cannot clear the 20-sample floor either — worth stating
-plainly, because it also means the model receives that feature's imputed default (500) for
-practically every asset.
+non-null in 1 of 240 snapshots, so it cannot clear the 20-sample floor either. That one is
+arithmetic, not a defect: a mean needs two failures before the snapshot date, and 180 days of
+history gives most assets one or none. Only EQ-005 has two, 124 days apart, and only its final
+snapshot carries the value. The other 239 take the trainer's `COALESCE(…, 500)`, so this feature
+carries almost no signal in the demo — stated plainly because it is a real limit on one of the
+model's 31 inputs, and because the fix is a longer seed rather than a code change.
 
 None of this is reported as stability. The reference self-check that follows a recompute compares
 the reference sample against the reference built from it, so its PSI is 0 by arithmetic; it is run

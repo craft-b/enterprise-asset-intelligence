@@ -1,10 +1,15 @@
-import { mysqlTable, varchar, serial, bigint, int, smallint, tinyint, timestamp, decimal, date, text, mediumtext, mysqlEnum, index} from "drizzle-orm/mysql-core";
+import { mysqlTable, varchar, serial, bigint, int, smallint, tinyint, timestamp, decimal, date, text, mediumtext, mysqlEnum, index, uniqueIndex} from "drizzle-orm/mysql-core";
 import { relations } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
 // === TABLE DEFINITIONS ===
 
+// One current risk score per asset. The writer upserts on equipment_id, which
+// needs a unique index on it to work: without one the ON DUPLICATE KEY clause
+// in predictAllEquipmentWithOutcome never matched anything, so every scoring
+// run appended another row per asset instead of updating it. Two runs left two
+// rows per asset, and the table grew without bound.
 export const equipmentRiskScores = mysqlTable("equipment_risk_scores", {
   id: serial("id").primaryKey(),
   equipmentId: int("equipment_id").notNull(),
@@ -13,7 +18,9 @@ export const equipmentRiskScores = mysqlTable("equipment_risk_scores", {
   drivers: text("drivers").notNull(), // JSON array of strings
   modelVersion: varchar("model_version", { length: 50 }).default("v1.0").notNull(),
   scoredAt: timestamp("scored_at").defaultNow().notNull(),
-});
+}, (t) => ({
+  uqEquipment: uniqueIndex("uq_equipment_risk_scores_equipment").on(t.equipmentId),
+}));
 
 export const equipmentFailurePredictions = mysqlTable("equipment_failure_predictions", {
   id: bigint("id", { mode: 'number', unsigned: true }).primaryKey().autoincrement(),

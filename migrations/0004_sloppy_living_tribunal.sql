@@ -1,0 +1,1 @@
+ALTER TABLE `equipment_risk_scores` ADD CONSTRAINT `uq_equipment_risk_scores_equipment` UNIQUE(`equipment_id`);

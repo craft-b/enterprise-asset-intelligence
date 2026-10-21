@@ -309,7 +309,23 @@ class EnhancedFeatureEngineeringService {
       ? Math.max(0, (now.getTime() - new Date(lastMaint.maintenanceDate).getTime()) / (24 * 3600 * 1000))
       : null;
 
-    // Mean time between failures — history up to the snapshot date only
+    // Mean time between FAILURES — history up to the snapshot date only.
+    //
+    // Selected by event_source, not maintenance_type. The distinction is the
+    // one the schema calls out: maintenance_type is what was done,
+    // event_source is why. A MAJOR_SERVICE performed as SCHEDULED_PM is
+    // planned work, and counting it as a failure both inflates the failure
+    // count and shortens the mean -- a well-maintained asset would look like
+    // it broke down constantly. Filtering on type did exactly that.
+    //
+    // On the current seed the two filters select the same eight rows (every
+    // MAJOR_SERVICE is a REACTIVE_REPAIR and nothing else qualifies), so this
+    // changes no value today; it stops being accidentally right as soon as a
+    // scheduled major service exists.
+    //
+    // Training reads this column from asset_feature_snapshots rather than
+    // recomputing it (COALESCE to 500), so there is one definition and both
+    // sides move together.
     const allMaint = await db
       .select()
       .from(maintenanceEvents)
@@ -317,7 +333,7 @@ class EnhancedFeatureEngineeringService {
         and(
           eq(maintenanceEvents.equipmentId, equipmentId),
           sql`${maintenanceEvents.maintenanceDate} <= ${nowStr}`,
-          sql`${maintenanceEvents.maintenanceType} IN ('MAJOR_SERVICE', 'MINOR_SERVICE')`
+          sql`${maintenanceEvents.eventSource} = 'REACTIVE_REPAIR'`
         )
       )
       .orderBy(maintenanceEvents.maintenanceDate);
