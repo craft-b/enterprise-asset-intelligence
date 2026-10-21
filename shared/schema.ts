@@ -562,6 +562,29 @@ export const insertUserSchema = createInsertSchema(users).omit({ id: true, creat
   password: z.string().min(6, "Password must be at least 6 characters"),
 });
 
+// What POST /api/auth/register is allowed to accept.
+//
+// insertUserSchema stays the storage-layer insert type and keeps `role`,
+// because the demo seed has to be able to create an ADMINISTRATOR. The public
+// registration route must not accept one. It is unauthenticated, it spreads
+// its parsed input straight into createUser, and it then logs the new account
+// in by writing user.role into the session -- so `role` in the request body
+// was self-service privilege escalation. One curl with
+// {"role":"ADMINISTRATOR"} returned an admin session and every requireAdmin
+// route with it: equipment and rental deletes, /api/admin/reset,
+// /api/ml/models/promote, /api/simulate/day.
+//
+// The browser form never sent a role, so nothing in the UI exercised this and
+// nothing looked wrong. Rotating the published admin password closed the front
+// door while this stood open beside it.
+//
+// Omitted rather than pinned to VIEWER: zod strips unknown keys, so the field
+// is dropped at the edge instead of being accepted and quietly rewritten
+// deeper in. New accounts take the column default (VIEWER); promoting one is a
+// deliberate act against the database, not something a request body can ask
+// for.
+export const registerUserSchema = insertUserSchema.omit({ role: true });
+
 export const insertJobSiteSchema = createInsertSchema(jobSites)
   .omit({ id: true, createdAt: true, jobId: true })
   .extend({

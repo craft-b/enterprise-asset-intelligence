@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { 
-  insertEquipmentSchema, insertRentalSchema, insertUserSchema, 
+  insertEquipmentSchema, insertRentalSchema, registerUserSchema, 
   insertJobSiteSchema, insertVendorSchema, insertInvoiceSchema,
   EVENT_SOURCE_VALUES,
 } from './schema';
@@ -113,7 +113,7 @@ export const api = {
     register: {
       method: 'POST' as const,
       path: '/api/auth/register',
-      input: insertUserSchema,
+      input: registerUserSchema,
       responses: {
         201: z.custom<User>(),
         400: errorSchemas.validation,
