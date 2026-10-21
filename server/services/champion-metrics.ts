@@ -163,13 +163,29 @@ function trainedAtFrom(metricsByHorizon: Record<string, any>): Date {
   return new Date();
 }
 
-/** That run's row count, from the canonical horizon. */
-function datasetSizeFrom(metricsByHorizon: Record<string, any>): number | null {
+/**
+ * That run's dataset size, from the canonical horizon.
+ *
+ * Train + test + embargoed. The embargo drops rows either side of the
+ * train/test boundary so no training row's features overlap a test row's label
+ * window, and it widens with the horizon — 80 rows at 10 days, 239 at 30, 451
+ * at 60. Those rows are part of the dataset; they are just unusable at that
+ * horizon. Summing only train and test therefore gave a different answer per
+ * horizon (10,748 / 10,589 / 10,377) for one dataset of 10,828, and the ML
+ * dashboard showed the 30-day figure under the label "Training Dataset Size"
+ * while the README said 10,828. Two numbers for the same thing.
+ */
+export function datasetSizeFrom(metricsByHorizon: Record<string, any>): number | null {
   const meta = metricsByHorizon["30"] ?? metricsByHorizon["10"] ?? metricsByHorizon["60"];
   const train = Number(meta?.samples_train);
   const test = Number(meta?.samples_test);
+  const embargoed = Number(meta?.embargoed_rows);
+  // Train and test are the required pair: without either there is no run to
+  // report. An absent embargo count means an older metadata file, not zero
+  // rows dropped, but zero is the only honest thing to add for it.
   if (!Number.isFinite(train) && !Number.isFinite(test)) return null;
-  return (Number.isFinite(train) ? train : 0) + (Number.isFinite(test) ? test : 0);
+  const orZero = (v: number) => (Number.isFinite(v) ? v : 0);
+  return orZero(train) + orZero(test) + orZero(embargoed);
 }
 
 /** True when some model's metrics are already registered. */

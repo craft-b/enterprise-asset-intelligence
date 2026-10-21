@@ -16,7 +16,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { join } from "path";
-import { flattenHorizonMetadata, parseCvRocAuc } from "./champion-metrics";
+import { flattenHorizonMetadata, parseCvRocAuc, datasetSizeFrom } from "./champion-metrics";
 
 /**
  * The real metadata_30d_v1.17.json from the shipped bundle, trimmed to the
@@ -250,5 +250,49 @@ describe("the positive rate the dashboard actually reads", () => {
   it("omits it rather than dividing by zero", () => {
     const out = rowsFor({ roc_auc: 0.8, confusion_matrix: { TN: 0, FP: 0, FN: 0, TP: 0 } });
     expect(out.some(r => r.metric === "positive_rate_test")).toBe(false);
+  });
+});
+
+describe("the dataset size the dashboard shows", () => {
+  // It renders under the label "Training Dataset Size", and it used to be
+  // train + test from the 30-day horizon: 10,589, against a README that said
+  // 10,828. Both were describing the same dataset. The difference is the
+  // embargo -- rows dropped around the train/test split so no training row's
+  // features overlap a test row's label window -- which widens with the
+  // horizon, so train + test alone answers differently per horizon for one
+  // dataset.
+  const champion = (embargoed: number, train: number, test = 2166) => ({
+    "30": { samples_train: train, samples_test: test, embargoed_rows: embargoed },
+  });
+
+  it("counts embargoed rows as part of the dataset", () => {
+    expect(datasetSizeFrom(champion(239, 8423))).toBe(10828);
+  });
+
+  it("gives one answer whichever horizon is canonical", () => {
+    // v1.17's real numbers. The point of including the embargo: all three
+    // horizons draw from the same dataset and now say so.
+    expect(datasetSizeFrom({ "30": { samples_train: 8423, samples_test: 2166, embargoed_rows: 239 } })).toBe(10828);
+    expect(datasetSizeFrom({ "10": { samples_train: 8582, samples_test: 2166, embargoed_rows: 80 } })).toBe(10828);
+    expect(datasetSizeFrom({ "60": { samples_train: 8211, samples_test: 2166, embargoed_rows: 451 } })).toBe(10828);
+  });
+
+  it("prefers the 30-day horizon when several are present", () => {
+    const all = {
+      "10": { samples_train: 8582, samples_test: 2166, embargoed_rows: 80 },
+      "30": { samples_train: 8423, samples_test: 2166, embargoed_rows: 239 },
+    };
+    expect(datasetSizeFrom(all)).toBe(10828);
+  });
+
+  it("treats a missing embargo count as zero rather than failing", () => {
+    // Older metadata has no such field. Under-reporting by the embargo is
+    // worse than nothing, but refusing to show a size at all is worse still.
+    expect(datasetSizeFrom({ "30": { samples_train: 8423, samples_test: 2166 } })).toBe(10589);
+  });
+
+  it("returns null when there is no run to describe", () => {
+    expect(datasetSizeFrom({})).toBeNull();
+    expect(datasetSizeFrom({ "30": { embargoed_rows: 239 } })).toBeNull();
   });
 });
