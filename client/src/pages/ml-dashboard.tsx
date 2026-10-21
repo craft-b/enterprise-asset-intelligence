@@ -306,7 +306,20 @@ function PredictionDriftCard() {
           <Alert className="border-slate-200">
             <AlertCircle className="h-4 w-4" />
             <AlertDescription className="text-sm">
-              No prediction drift data yet — run a batch prediction to populate.
+              {/*
+                This said "run a batch prediction to populate", which cannot
+                work on this fleet and had the visitor wait out a cold start to
+                find that out. The README says it plainly -- "drift monitoring
+                is implemented; a ten-asset fleet cannot exercise it" -- and the
+                card now says the same thing as the document.
+              */}
+              No prediction drift reading. A PSI needs at least 20 scored assets
+              in one batch, and a fleet smaller than that cannot reach the floor
+              in a single run: ten assets produce ten rows and the check returns
+              {" "}<span className="font-mono text-xs">batch too small (10 &lt; 20)</span>.
+              {" "}The floor is deliberate, because PSI over ten samples moves on
+              noise. The baseline itself is in place — it is gated on fleet
+              coverage rather than row count for exactly this reason.
             </AlertDescription>
           </Alert>
         )}
@@ -399,7 +412,19 @@ function BiasDriftCard() {
           <Alert className="border-slate-200">
             <AlertCircle className="h-4 w-4" />
             <AlertDescription className="text-sm">
-              No bias data yet — run a batch prediction to populate.
+              {/*
+                Same correction, and this one is stronger: no amount of scoring
+                produces a bias reading on this fleet. Telling someone to run a
+                batch prediction was advice that could never pay off.
+              */}
+              No bias reading, and this dataset cannot produce one. A
+              per-category HIGH-rate needs at least three units in a category
+              before it is a disparity statistic rather than an anecdote; this
+              fleet spans nine categories and only Crane has a second unit, so
+              the bias reference is empty by arithmetic rather than by failure.
+              It is the one drift layer a ten-asset fleet cannot exercise at
+              all, and widening the fleet to light it up would be reshaping the
+              data to satisfy the card.
             </AlertDescription>
           </Alert>
         )}
