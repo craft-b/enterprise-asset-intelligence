@@ -200,9 +200,6 @@ path in step 4.
    `eai-api.onrender.com`. A wrong host here returns 404 from every API call
    while the service itself is perfectly healthy.
 
-   ```json
-   ```
-
 2. Vercel → **Add New** → **Project** → import this repo.
 
 3. Leave the defaults. `vercel.json` already sets the build
@@ -229,7 +226,7 @@ Skip the `vercel.json` rewrite, and set these instead:
 
 | Where | Variable | Value |
 |---|---|---|
-| Vercel | `VITE_API_URL` | `https://eai-api.onrender.com` — no trailing slash |
+| Vercel | `VITE_API_URL` | `https://YOUR-API.onrender.com` — your real host, no trailing slash |
 | Render `eai-api` | `ALLOWED_ORIGINS` | `https://your-project.vercel.app` |
 
 `VITE_API_URL` is inlined at **build** time, so changing it needs a redeploy,
@@ -291,9 +288,18 @@ cd ml-service && python training/train_model_multihorizon.py
 
 ## Verifying
 
+Substitute your own API host throughout. Render suffixes the hostname when the
+plain name is taken, so the API is very unlikely to be at `eai-api.onrender.com`
+— take it from `vercel.json`'s rewrite destination, or from the top of the
+Render service page. This repo's own deployment is `eai-api-q3u3.onrender.com`;
+the ML service did keep the plain `eai-ml.onrender.com`.
+
+A wrong host here answers `404 Not Found` in under a second, which reads exactly
+like a dead API and is not one.
+
 ```bash
-curl -s https://eai-api.onrender.com/api/health
-# {"status":"healthy","timestamp":"..."}
+curl -s https://YOUR-API.onrender.com/api/health
+# {"status":"healthy","timestamp":"...","commit":"...","uptimeSeconds":...}
 
 curl -s https://eai-ml.onrender.com/health
 # model_loaded true, model_version v1.17
@@ -304,7 +310,7 @@ curl -s https://your-project.vercel.app/api/health
 
 # Only on the direct cross-origin path - must echo the origin, never *
 # curl -s -D- -o /dev/null -H 'Origin: https://your-project.vercel.app' \
-#   https://eai-api.onrender.com/api/health | grep -i access-control
+#   https://YOUR-API.onrender.com/api/health | grep -i access-control
 
 # The token gate - must be 401, never 200:
 curl -s -o /dev/null -w '%{http_code}\n' -X POST https://eai-ml.onrender.com/train
