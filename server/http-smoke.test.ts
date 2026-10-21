@@ -14,7 +14,11 @@
 // smoke test you stop trusting.
 //
 // Skipped when DATABASE_URL is absent, like the point-in-time test, so a
-// checkout with no database still runs the rest of the suite.
+// checkout with no database still runs the rest of the suite. The detail
+// routes look up an id from the matching list endpoint rather than assuming
+// one, so this passes against the seeded demo database and against an empty
+// one -- where it skips the two lookups instead of reporting the missing rows
+// as broken code.
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import express from "express";
@@ -28,13 +32,18 @@ let baseUrl = "";
 let server: http.Server | undefined;
 let cookie = "";
 
-/** Endpoints that should answer for a signed-in administrator. */
+/** First id the list endpoints report, or undefined if they report nothing. */
+let equipmentId: number | undefined;
+let rentalId: number | undefined;
+
+/**
+ * Endpoints that should answer for a signed-in administrator, and that need
+ * no row to exist first. The detail routes are checked separately, below.
+ */
 const READ_ENDPOINTS = [
   "/api/auth/me",
   "/api/equipment",
-  "/api/equipment/1",
   "/api/rentals",
-  "/api/rentals/1",
   "/api/job-sites",
   "/api/vendors",
   "/api/admin/system-status",
@@ -44,6 +53,21 @@ const READ_ENDPOINTS = [
   "/api/predictive-maintenance/fleet-risk",
   "/api/maintenance/due-soon",
 ];
+
+async function expectAnswers(path: string) {
+  const res = await get(path);
+  const body = await res.text();
+
+  expect(
+    res.status,
+    `${path} -> ${res.status}: ${body.slice(0, 200)}`
+  ).toBeLessThan(400);
+
+  // The rentals bug answered 500 with an HTML error page. Anything under
+  // /api that is not JSON is a route that fell through or blew up.
+  expect(res.headers.get("content-type") ?? "", `${path} content-type`)
+    .toMatch(/json/);
+}
 
 async function get(path: string, withCookie = true) {
   return fetch(`${baseUrl}${path}`, {
@@ -78,7 +102,22 @@ beforeAll(async () => {
   });
   const setCookie = res.headers.get("set-cookie");
   if (setCookie) cookie = setCookie.split(";")[0];
+
+  equipmentId = await firstId("/api/equipment");
+  rentalId = await firstId("/api/rentals");
 }, 120_000);
+
+/**
+ * The id of the first row a list endpoint returns. An empty database is not a
+ * failure here -- it just means there is no detail route to check.
+ */
+async function firstId(path: string): Promise<number | undefined> {
+  const res = await get(path);
+  if (!res.ok) return undefined;
+  const rows = await res.json().catch(() => undefined);
+  const id = Array.isArray(rows) ? rows[0]?.id : undefined;
+  return typeof id === "number" ? id : undefined;
+}
 
 afterAll(async () => {
   if (server) await new Promise<void>(resolve => server!.close(() => resolve()));
@@ -108,18 +147,21 @@ describe.runIf(HAS_DB)("the API answers over HTTP", () => {
   });
 
   it.each(READ_ENDPOINTS)("GET %s answers", async path => {
-    const res = await get(path);
-    const body = await res.text();
+    await expectAnswers(path);
+  });
 
-    expect(
-      res.status,
-      `${path} -> ${res.status}: ${body.slice(0, 200)}`
-    ).toBeLessThan(400);
+  it("GET the equipment detail route answers", async ctx => {
+    if (equipmentId === undefined) {
+      ctx.skip("GET /api/equipment returned no rows, so there is no equipment id to look up");
+    }
+    await expectAnswers(`/api/equipment/${equipmentId}`);
+  });
 
-    // The rentals bug answered 500 with an HTML error page. Anything under
-    // /api that is not JSON is a route that fell through or blew up.
-    expect(res.headers.get("content-type") ?? "", `${path} content-type`)
-      .toMatch(/json/);
+  it("GET the rental detail route answers", async ctx => {
+    if (rentalId === undefined) {
+      ctx.skip("GET /api/rentals returned no rows, so there is no rental id to look up");
+    }
+    await expectAnswers(`/api/rentals/${rentalId}`);
   });
 
   it("still requires a session", async () => {
