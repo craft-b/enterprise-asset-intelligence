@@ -11,7 +11,7 @@ import { toPublicUser } from "./services/public-user";
 import { csvToRecords, ingestReadings, MAX_ROWS } from "./services/sensor-ingest";
 import { validateMlServiceUrl } from "./services/ml-client";
 import bcrypt from "bcryptjs";
-import { maintenanceEvents, equipment, equipmentRiskScores, rentals, equipmentFailurePredictions, equipmentSwaps } from "@shared/schema";
+import { maintenanceEvents, equipment, equipmentRiskScores, rentals, equipmentFailurePredictions, equipmentSwaps, users } from "@shared/schema";
 import { eq, desc, asc, count, sql, and, like } from "drizzle-orm";
 import { db, pool } from "./db";
 import { predictiveMaintenanceService } from './services/predictive-maintenance-fixed';
@@ -519,9 +519,34 @@ export async function registerRoutes(
     if (await storage.getUserByUsername(input.username)) {
       return res.status(400).json({ message: "Username exists" });
     }
+    // The first account on an empty users table is an ADMINISTRATOR.
+    // Everything after it takes the column default, VIEWER.
+    //
+    // Without this a self-hosted instance cannot be used at all. Registration
+    // is not allowed to ask for a role (registerUserSchema omits it, because
+    // accepting one was a privilege escalation), so the first person to sign
+    // up is a VIEWER -- and seeding, resetting and every write route require
+    // an ADMINISTRATOR that does not exist yet. The alternatives were
+    // publishing credentials through SEED_DEMO_USERS, which is right for the
+    // local compose stack and wrong for anything reachable, or shell access
+    // to run scripts/promote-admin.ts, which a container host may not give
+    // you.
+    //
+    // This cannot fire on a seeded deployment: `users` already holds admin
+    // and viewer, and resetSystem leaves that table alone on purpose -- it is
+    // absent from TABLES_TO_CLEAR -- so the count is never zero again once
+    // the first account exists.
+    //
+    // Two simultaneous first registrations would both read zero and both
+    // become administrators. That is a race on an empty private instance in
+    // the seconds before its owner signs up, and the owner is both of them.
+    const [counted] = await db.select({ existing: count() }).from(users);
+    const isFirstAccount = Number(counted?.existing ?? 0) === 0;
+
     const user = await storage.createUser({
       ...input,
       password: bcrypt.hashSync(input.password, 10),
+      ...(isFirstAccount ? { role: "ADMINISTRATOR" as const } : {}),
     });
     req.session.userId = user.id;
     req.session.role = user.role;
@@ -2556,7 +2581,18 @@ export async function registerRoutes(
   });
 
   // POST /api/admin/seed — kick off background seed job
-  app.post("/api/admin/seed", requireAuth, async (req, res) => {
+  //
+  // requireAdmin, not requireAuth. The pipeline does not truncate -- only
+  // resetSystem does -- it appends, so running it against an already-seeded
+  // database produces a second fleet: twenty equipment units, duplicate
+  // rentals, doubled revenue. A VIEWER session could ask for that directly,
+  // and on the public demo the advertised account is a VIEWER.
+  //
+  // Not reachable from the UI, which only shows the setup screen on an
+  // unseeded database, so this was a request someone had to make deliberately.
+  // It is still the seed button, and the seed button belongs to the role that
+  // owns the reset button.
+  app.post("/api/admin/seed", requireAdmin, async (req, res) => {
     try {
       const result = await startSeedJob();
       res.json(result);

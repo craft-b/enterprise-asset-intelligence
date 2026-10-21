@@ -1,10 +1,16 @@
 # docker-compose.yml
 # Enterprise Asset Intelligence — Full Stack
 #
-# Starts three services:
+# Starts four services:
 #   - client:      React frontend (Nginx)   → http://localhost
 #   - server:      Node.js API gateway      → http://localhost:5000
-#   - ml-service:  FastAPI ML service       → http://localhost:8000
+#   - ml-service:  FastAPI ML service       (internal only)
+#   - db:          MySQL 8                  (internal only)
+#
+# This is a complete, self-contained instance. Nothing has to be provisioned
+# anywhere: the database runs in the stack, docker-entrypoint.sh applies the
+# migrations on boot, and the /setup screen seeds the demo fleet. Fork it,
+# change it, break it -- it is yours and it touches nothing else.
 #
 # The browser always talks to the HOST ports above.
 # Inter-service calls use Docker DNS: http://ml-service:8000
@@ -12,7 +18,7 @@
 # Requirements: 16 GB RAM recommended, Docker Desktop 4.x+
 #
 # Usage:
-#   cp .env.example .env          # fill in secrets first
+#   npm run setup:env             # writes .env with freshly generated secrets
 #   docker-compose up --build     # first run (builds all images)
 #   docker-compose up             # subsequent runs
 #   docker-compose down           # stop + remove containers
@@ -52,13 +58,20 @@ services:
     ports:
       - "5000:5000"
     depends_on:
+      db:
+        condition: service_healthy
       ml-service:
         condition: service_healthy
     environment:
       NODE_ENV: production
       PORT: 5000
-      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_URL: ${DATABASE_URL:-mysql://eai:eai@db:3306/enterprise_assets}
       SESSION_SECRET: ${SESSION_SECRET}
+      # Creates the admin/viewer accounts the login page names. On by default
+      # HERE and nowhere else: this stack publishes no port but 80 on the
+      # local machine, so published credentials cost nothing. A deployment
+      # leaves it unset and takes the first-registration admin instead.
+      SEED_DEMO_USERS: ${SEED_DEMO_USERS:-true}
       JWT_SECRET: ${JWT_SECRET}
       # Resolved via Docker DNS — never use localhost here
       ML_SERVICE_URL: http://ml-service:8000
@@ -91,18 +104,22 @@ services:
     # "anyone can trigger training / promote a model" exposure.
     expose:
       - "8000"
+    depends_on:
+      db:
+        condition: service_healthy
     environment:
       ENVIRONMENT: production          # Python convention, not NODE_ENV
       ML_SERVICE_PORT: 8000
       ML_SERVICE_TOKEN: ${ML_SERVICE_TOKEN}
-      # Supply either DATABASE_URL or the individual DB_* vars — not both.
-      # Individual vars are used by SQLAlchemy connection pooling in ml-service.
-      DATABASE_URL: ${DATABASE_URL}
-      DB_HOST: ${DB_HOST}
+      # SQLAlchemy reads the individual DB_* vars; they and DATABASE_URL must
+      # describe the same database. The defaults point at the `db` service, so
+      # they already agree.
+      DATABASE_URL: ${DATABASE_URL:-mysql://eai:eai@db:3306/enterprise_assets}
+      DB_HOST: ${DB_HOST:-db}
       DB_PORT: ${DB_PORT:-3306}
-      DB_USER: ${DB_USER}
-      DB_PASSWORD: ${DB_PASSWORD}
-      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER:-eai}
+      DB_PASSWORD: ${DB_PASSWORD:-eai}
+      DB_NAME: ${DB_NAME:-enterprise_assets}
       LLM_PROVIDER: ${LLM_PROVIDER:-groq}
       GROQ_API_KEY: ${GROQ_API_KEY}
       # llama3-8b-8192 is deprecated on Groq — default to the current model
@@ -133,6 +150,61 @@ services:
       resources:
         limits:
           memory: 1G
+
+  # ── MySQL ──────────────────────────────────────────────────────
+  # The deployed stack runs on TiDB Cloud Serverless, which is
+  # MySQL-compatible; this is the local equivalent of it. It exists so that a
+  # clone of this repository is a working instance rather than a working
+  # instance minus a database you have to go and provision.
+  #
+  # No host `ports:` mapping, for the same reason ml-service has none: nothing
+  # here should be reachable from outside the stack. To look inside it:
+  #   docker compose exec db mysql -u eai -p enterprise_assets
+  #
+  # UTC explicitly. Every date in this system is load-bearing -- the
+  # simulation cursor, snapshot dates, the point-in-time feature rule -- and
+  # TiDB serves UTC, so a local stack on a different zone would compute
+  # different features from the same seed.
+  db:
+    image: mysql:8.4
+    command: --default-time-zone=+00:00
+    environment:
+      MYSQL_DATABASE: ${DB_NAME:-enterprise_assets}
+      MYSQL_USER: ${DB_USER:-eai}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-eai}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-eai-root}
+    expose:
+      - "3306"
+    volumes:
+      # Named volume: the fleet you build survives `docker compose down`.
+      # `docker compose down -v` is the deliberate way to throw it away.
+      - eai-db-data:/var/lib/mysql
+    healthcheck:
+      # The other services wait on this. Without it the server starts first,
+      # runs migrations against a database still initialising, and exits 1 --
+      # which the entrypoint is right to do and is a confusing first run.
+      test:
+        - CMD
+        - mysqladmin
+        - ping
+        - -h
+        - 127.0.0.1
+        - -u
+        - root
+        - -p${MYSQL_ROOT_PASSWORD:-eai-root}
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+# ── Persistent data ──────────────────────────────────────────────
+volumes:
+  eai-db-data:
 
 # ── Shared network ───────────────────────────────────────────────────────────
 # All three containers join this network automatically.

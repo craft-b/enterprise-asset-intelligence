@@ -12,6 +12,7 @@
   "scripts": {
     "dev": "tsx --max-old-space-size=4096 server/index.ts",
     "build": "tsx script/build.ts",
+    "setup:env": "tsx scripts/setup-env.ts",
     "build:client": "vite build",
     "preview:client": "vite preview --port 4173 --strictPort",
     "start": "node dist/index.cjs",

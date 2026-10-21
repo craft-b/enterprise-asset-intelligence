@@ -13,6 +13,6 @@ export default defineConfig({
     // Client-side units that are pure logic (no DOM) run in the node
     // environment alongside the server tests -- jsdom is not installed, and
     // these deliberately need no document.
-    include: ["server/**/*.test.ts", "client/src/**/*.test.ts"],
+    include: ["server/**/*.test.ts", "client/src/**/*.test.ts", "scripts/**/*.test.ts"],
   },
 });

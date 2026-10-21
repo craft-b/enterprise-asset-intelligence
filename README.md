@@ -442,43 +442,62 @@ database row rather than the request.
 
 ## Quickstart
 
-### 1. Clone and configure
+### Run your own instance
+
+The compose stack is self-contained: it brings its own MySQL, so there is
+nothing to provision anywhere.
 
 ```bash
 git clone <repo-url>
 cd enterprise-asset-intelligence
-cp .env.example .env
+npm install
+npm run setup:env          # writes .env with freshly generated secrets
+docker-compose up --build  # first run builds the images
 ```
 
-Fill in `.env`:
+Then open <http://localhost>.
 
-```env
-DATABASE_URL=mysql://root:yourpassword@localhost:3306/asset_inventory
-DB_HOST=localhost
-DB_PORT=3306
-DB_USER=root
-DB_PASSWORD=yourpassword
-DB_NAME=asset_inventory
-SESSION_SECRET=<openssl rand -hex 32>
-GROQ_API_KEY=gsk_...
-AGENT_API_KEY=<python -c "import secrets; print(secrets.token_hex(32))">
-```
+Four containers come up: the React client on port 80, the Node API on 5000,
+and the ML service and database on the internal network only — neither is
+bound to a host port. `docker-entrypoint.sh` applies the Drizzle migrations
+before the API starts, so the schema builds itself on an empty database.
 
-> `DATABASE_URL` and the individual `DB_*` vars must point at the same database — the Node/Drizzle server reads `DATABASE_URL` (and will refuse to start without it), while the Python ML service reads the individual `DB_*` vars via SQLAlchemy.
+Sign in as `admin` / `admin123`, then press **Load Demo Data**. The compose
+stack sets `SEED_DEMO_USERS=true` because it publishes nothing beyond your own
+machine; a deployment leaves that unset, and there the **first account you
+register becomes the administrator** and every account after it is a viewer.
 
-### 2. Install and migrate
+`npm run setup:env` exists because `cp .env.example .env` could not work: the
+stack runs with `NODE_ENV=production`, and the session-secret check rejects the
+example file's placeholder outright under production — correctly, since that is
+the check that stops a real deployment booting with a known signing key. So the
+three secrets the app refuses to start without are generated rather than
+defaulted, and nothing fake is committed here.
+
+Your fleet lives in a named Docker volume and survives `docker-compose down`.
+`docker-compose down -v` is the deliberate way to throw it away.
+
+The licence is MIT. Fork it, change it, break it — it is your instance, and it
+touches nothing of anyone else's.
+
+### Or run it from source
 
 ```bash
 npm install
+npm run setup:env -- --local   # same, but pointed at localhost:3306
+```
+
+Create the database named in `.env` (`enterprise_assets` by default), then:
+
+```bash
 npm run db:migrate     # applies migrations/ — creates the full schema on a clean DB
 ```
 
-Drizzle migrations (`shared/schema.ts` → `migrations/`) are the **single DDL owner**:
-one `drizzle-kit migrate` builds every table (equipment, rentals, feature
-snapshots, sensor logs, sessions, drift + model-metrics tables). The Node and Python
-services only read and write — neither creates tables at runtime.
-
-### 3. Start services
+Drizzle migrations (`shared/schema.ts` -> `migrations/`) are the **single DDL
+owner**: one `drizzle-kit migrate` builds every table (equipment, rentals,
+feature snapshots, sensor logs, sessions, drift + model-metrics tables). The
+Node and Python services only read and write — neither creates tables at
+runtime.
 
 ```bash
 # Terminal 1 — Node API + Vite dev server
@@ -490,20 +509,36 @@ pip install -r requirements.txt
 uvicorn api.main:app --reload --port 8000
 ```
 
-### 4. First-time setup (onboarding screen)
+> `DATABASE_URL` and the individual `DB_*` vars must point at the same database — the Node/Drizzle server reads `DATABASE_URL` (and will refuse to start without it), while the Python ML service reads the individual `DB_*` vars via SQLAlchemy. `setup:env` writes both from one set of values so they cannot drift.
 
-On first login, the app automatically redirects to `/setup`. Choose one of two paths:
+### First-time setup (onboarding screen)
 
-**Load Demo Data** — recommended for evaluation and interviews. Runs the full seed pipeline in the background (~60–90 seconds) and streams live progress. Seeds:
-- 10 heavy equipment units across four categories
-- 6 months of sensor readings per asset
-- Maintenance history with realistic failure events
-- Trained multi-horizon ML model (10d / 30d / 60d)
-- SHAP attribution, MLflow run, drift reference baseline
+On first login, the app redirects to `/setup`. Choose one of two paths:
 
-**Start Fresh** — skip demo data and build the dataset manually with real equipment and operational records. The dashboard surfaces guided empty states that walk you through adding equipment, logging maintenance, running the ML pipeline, and generating predictions in the right order.
+**Load Demo Data** — recommended for evaluation and interviews. Runs the full
+seed pipeline in the background (~60-90 seconds) and streams live progress.
+Seeds:
 
-> The onboarding screen re-appears any time the system is reset via `POST /api/admin/reset` (ADMINISTRATOR role only).
+- 10 heavy equipment units across nine categories (only Crane has two units)
+- six months of sensor readings and maintenance history per asset, with failure events
+- the fleet scored at all three horizons (10d / 30d / 60d), with SHAP attribution and a drift reference baseline
+
+The **"Train model" step is reported as skipped, and says why**. It is not a
+failure and it is not hidden: the data-quality gate refuses training below 500
+labelled rows, and because a snapshot cannot be labelled until its 60-day
+horizon has elapsed, this seed produces a couple of hundred. The fleet is
+scored by the v1.17 champion that ships inside the ML image — trained offline
+on 10,828 snapshots — and its metrics are copied into `model_metrics` so the ML
+dashboard shows what the system actually has. Nothing here is trained on the
+demo data, and the seed log says so rather than letting a green checkmark imply
+otherwise.
+
+**Start Fresh** — skip demo data and build the dataset manually with real
+equipment and operational records. The dashboard surfaces guided empty states
+that walk you through adding equipment, logging maintenance, running the ML
+pipeline, and generating predictions in the right order.
+
+> The onboarding screen re-appears any time the system is reset via `POST /api/admin/reset` (ADMINISTRATOR only). The reset leaves the `users` table alone, so accounts and changed passwords survive it.
 
 ---
 
