@@ -109,7 +109,7 @@ export default function Login() {
                 <Label htmlFor="username">Username</Label>
                 <Input
                   id="username"
-                  placeholder="admin"
+                  placeholder="viewer"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   disabled={isPending}
@@ -157,9 +157,21 @@ export default function Login() {
           </form>
           {!isRegister && (
             <div className="px-8 pb-8 text-center text-xs text-muted-foreground">
+              {/*
+                Only the read-only account is advertised. The administrator one
+                still exists -- the seed creates both -- but it can reseed and
+                reset the demo, and a visitor who does that wipes the data for
+                everyone else looking at the same deployment.
+
+                This is "not advertised", not "protected": the seed's passwords
+                are committed in server/seeds/demo-users.ts and the repository
+                is public. Anyone who reads it has the administrator password.
+                Keeping it off this card only stops a casual visitor finding a
+                destructive button they had no reason to press.
+              */}
               <p>Demo Credentials:</p>
-              <p>Admin: <span className="font-mono">admin / admin123</span></p>
-              <p>Viewer: <span className="font-mono">viewer / viewer123</span></p>
+              <p><span className="font-mono">viewer / viewer123</span></p>
+              <p className="mt-1">Read-only access to the full dataset.</p>
             </div>
           )}
         </Card>

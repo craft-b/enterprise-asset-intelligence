@@ -1,6 +1,6 @@
 # Enterprise Asset Intelligence
 
-**[Live demo](https://enterprise-asset-intelligence.vercel.app)** — sign in with `admin` / `admin123`.
+**[Live demo](https://enterprise-asset-intelligence.vercel.app)** — sign in with `viewer` / `viewer123` for read-only access to the full dataset.
 
 > The page loads instantly, but the API behind it runs on a free tier that suspends an idle
 > container. If nobody has visited recently the first request waits around a minute while it wakes;

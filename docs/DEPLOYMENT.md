@@ -264,11 +264,22 @@ names the cause:
 
 ## 6. Seed the demo data
 
-Open the Vercel URL and sign in with the credentials the login page shows
-(`admin` / `admin123`). They exist because `render.yaml` sets
-`SEED_DEMO_USERS=true`, which creates them at boot if absent — without it
-the page advertises an account nobody created, and a visitor who types
-what they were told is rejected.
+Open the Vercel URL and sign in as `admin` / `admin123`. Seeding needs the
+administrator account: **Load Demo Data** is behind an admin check, and the
+login page deliberately advertises only `viewer` / `viewer123` — a visitor who
+reseeds wipes the data for anyone else looking at the same deployment.
+
+Both accounts exist because `render.yaml` sets `SEED_DEMO_USERS=true`, which
+creates them at boot if absent — without it the page advertises an account
+nobody created, and a visitor who types what they were told is rejected.
+
+Neither password is a secret: both are committed in
+[`server/seeds/demo-users.ts`](../server/seeds/demo-users.ts) in a public
+repository. Not advertising the administrator one keeps a destructive button
+out of a casual visitor's way; it does not protect the account. To actually
+protect it, change that account's password directly in the database — the seed
+is idempotent and never overwrites an account that already exists, so it will
+not be reverted on the next run.
 
 Then use **Load Demo Data** on the onboarding screen.
 
