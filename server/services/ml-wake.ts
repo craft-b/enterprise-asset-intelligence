@@ -122,7 +122,20 @@ export async function waitForMl(
  * escaping as an unhandled one, which this process exits on.
  */
 export function nudgeMlAwake(): void {
-  probe(WAKE_PROBE_MS).catch(() => {
-    /* a nudge that fails has still started the container */
+  // No abort, no timeout, nothing waiting on it.
+  //
+  // Every other call here is bounded because something is waiting. This one
+  // is not, and the bound was actively harmful: aborting at 120 seconds tears
+  // down the request that is holding the cold start open, so a container that
+  // needs longer than the probe never finishes starting and the next probe
+  // begins again from nothing. A seed observed 20 minutes of this — three full
+  // wake budgets, every probe aborted, the service never up — while a plain
+  // curl with no deadline woke the same service in 62 seconds.
+  //
+  // A cold start after hours idle is slower than one after thirty minutes:
+  // the image may need pulling again. The nudge has nowhere to be, so it waits
+  // as long as the host takes.
+  mlFetch("/health").catch(() => {
+    /* a nudge that fails has still asked the container to start */
   });
 }

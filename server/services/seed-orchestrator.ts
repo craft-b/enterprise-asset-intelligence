@@ -347,7 +347,7 @@ export async function startSeedJob(): Promise<{ started: boolean; message: strin
   persistRunRecord();
 
   // Start the ML service waking NOW, not in fifteen minutes when step 8 needs
-  // it.
+  // it. Unbounded on purpose — see nudgeMlAwake.
   //
   // The data steps take long enough that a service which was awake when
   // someone pressed the button has suspended again by the time it is wanted —

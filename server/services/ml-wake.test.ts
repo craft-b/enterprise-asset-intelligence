@@ -96,4 +96,17 @@ describe("nudging it awake", () => {
     await new Promise(r => setTimeout(r, 10));
     expect(mlFetch).toHaveBeenCalled();
   });
+
+  it("does not abort the cold start it is trying to cause", async () => {
+    // The bug this replaced: the nudge aborted at 120 seconds, tearing down
+    // the request holding the cold start open, so a container needing longer
+    // never finished starting. Three full wake budgets failed this way over
+    // twenty minutes while a curl with no deadline woke the same service in
+    // 62 seconds. Nothing waits on a nudge, so nothing should bound it.
+    mlFetch.mockResolvedValue({ ok: true });
+    nudgeMlAwake();
+    await new Promise(r => setTimeout(r, 10));
+    const init = mlFetch.mock.calls[0]?.[1] as { signal?: unknown } | undefined;
+    expect(init?.signal, "the nudge passed an abort signal").toBeUndefined();
+  });
 });
