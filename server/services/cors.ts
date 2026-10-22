@@ -28,7 +28,7 @@ const PREFLIGHT_MAX_AGE = "86400"; // 24h — preflights are per-origin per-path
  * Parse the ALLOWED_ORIGINS allowlist.
  *
  * Comma-separated absolute origins, e.g.
- *   https://eai.vercel.app,http://localhost:5173
+ *   https://enterprise-asset-intelligence.vercel.app,http://localhost:5173
  *
  * Throws on a wildcard (see rule 3) and on anything that is not a bare origin;
  * a trailing path never matches the Origin header, so it would be a silent

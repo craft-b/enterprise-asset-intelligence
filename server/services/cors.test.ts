@@ -10,7 +10,7 @@ import express from "express";
 import type { Server } from "http";
 import { applyCors, parseAllowedOrigins } from "./cors";
 
-const FRONTEND = "https://eai.vercel.app";
+const FRONTEND = "https://enterprise-asset-intelligence.vercel.app";
 const LOCAL = "http://localhost:5173";
 const HOSTILE = "https://not-mine.example";
 
@@ -41,7 +41,7 @@ describe("parseAllowedOrigins", () => {
   });
 
   it("refuses something that is not a URL", () => {
-    expect(() => parseAllowedOrigins("eai.vercel.app")).toThrow(/not a valid origin/);
+    expect(() => parseAllowedOrigins("enterprise-asset-intelligence.vercel.app")).toThrow(/not a valid origin/);
   });
 
   it("normalises away a bare trailing slash", () => {
