@@ -611,9 +611,15 @@ the deployed instance loads artifacts baked into its image rather than training 
 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Docker Compose (`docker-compose.yml`) runs all three
 services locally, and [Quickstart](#quickstart) seeds a full fleet — two of its steps wait on the
 ML service's cold start. The ten-asset fleet took two to five minutes; sixty units multiply the
-sensor and snapshot passes by six, since the snapshot loop saves one row at a time, so expect
-tens of minutes rather than minutes. Batching those saves is the obvious next optimisation and
-has not been done.
+sensor and snapshot passes by six, so expect tens of minutes rather than minutes.
+
+Snapshot writes are batched a hundred rows to a statement, which removed about 1,400 round trips
+from a sixty-asset seed. That is the smaller half of the problem and is worth saying plainly:
+building each snapshot runs roughly eleven sequential queries against the database, so generation
+is something like eight times the cost of the writes it feeds. The remaining win is concurrency
+across assets within a snapshot date — the queries are per-asset and independent, so it needs no
+change to what is computed, only to how many are in flight. It has not been done, and neither
+figure has been measured against a reseeded database.
 
 The seed does not train a model on free hosting. The sixty-asset fleet produces about 1,380
 labelled snapshots, which clears the trainer's 500-row data-quality gate — so unlike the

@@ -547,14 +547,12 @@ async function runSeedPipeline() {
     let backfillDate = new Date(seedStart.getTime() + stepMs);
     while (backfillDate <= labelableCutoff) {
       const snaps = await featureEngineeringService.generateSnapshotsForAllEquipment(backfillDate);
-      for (const snap of snaps) await featureEngineeringService.saveSnapshot(snap);
-      totalSnapshots += snaps.length;
+      totalSnapshots += await featureEngineeringService.saveSnapshots(snaps);
       backfillDate = new Date(backfillDate.getTime() + stepMs);
     }
     // Current-date snapshot (for live predictions — won't be labeled yet)
     const currentSnaps = await featureEngineeringService.generateSnapshotsForAllEquipment(cursorDate);
-    for (const snap of currentSnaps) await featureEngineeringService.saveSnapshot(snap);
-    totalSnapshots += currentSnaps.length;
+    totalSnapshots += await featureEngineeringService.saveSnapshots(currentSnaps);
     setStep(5, "completed", `${totalSnapshots} snapshots (${totalSnapshots - currentSnaps.length} backfill + ${currentSnaps.length} current)`);
 
     // ── Step 6: Label snapshots ────────────────────────────────────────────

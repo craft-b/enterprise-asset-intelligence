@@ -1425,7 +1425,7 @@ export async function registerRoutes(
       if (req.body.snapshotDate) {
         const snapshotDate = new Date(req.body.snapshotDate);
         const snapshots = await featureEngineeringService.generateSnapshotsForAllEquipment(snapshotDate);
-        for (const snapshot of snapshots) await featureEngineeringService.saveSnapshot(snapshot);
+        await featureEngineeringService.saveSnapshots(snapshots);
         return res.json({ message: `Generated ${snapshots.length} feature snapshots`, count: snapshots.length });
       }
 
@@ -1457,7 +1457,7 @@ export async function registerRoutes(
         await Promise.all(datesToProcess.slice(i, i + BATCH_SIZE).map(async (snapshotDate) => {
           try {
             const snapshots = await featureEngineeringService.generateSnapshotsForAllEquipment(snapshotDate);
-            for (const snapshot of snapshots) await featureEngineeringService.saveSnapshot(snapshot);
+            await featureEngineeringService.saveSnapshots(snapshots);
             totalGenerated += snapshots.length;
           } catch (err) {
             totalFailed++;

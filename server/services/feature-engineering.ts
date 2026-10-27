@@ -246,10 +246,14 @@ class FeatureEngineeringService {
   }
   
   /**
-   * Save snapshot to database
+   * One snapshot as a row.
+   *
+   * Extracted so the single-row and batched writers cannot drift apart: there
+   * are thirty-seven columns here, and two copies of that list is two places
+   * for a feature to be added to one and not the other.
    */
-  async saveSnapshot(snapshot: FeatureSnapshot): Promise<void> {
-    await db.insert(assetFeatureSnapshots).values([{
+  private toRow(snapshot: FeatureSnapshot) {
+    return {
       equipmentId: snapshot.equipmentId,
       snapshotTs: snapshot.snapshotTs,
       assetAgeYears: snapshot.assetAgeYears.toString(),
@@ -287,9 +291,47 @@ class FeatureEngineeringService {
       willFail10d: null,
       willFail30d: null,
       willFail60d: null,
-    }]);
+    };
   }
-  
+
+  /**
+   * Save snapshot to database
+   */
+  async saveSnapshot(snapshot: FeatureSnapshot): Promise<void> {
+    await db.insert(assetFeatureSnapshots).values([this.toRow(snapshot)]);
+  }
+
+  /**
+   * Save many snapshots in as few statements as possible.
+   *
+   * The seed wrote these one at a time. At ten assets that was 240 inserts and
+   * nobody noticed; at sixty it is 1,440, each a separate round trip to a
+   * hosted database, and the seed step that does it is linear in the fleet.
+   *
+   * Chunked rather than one enormous statement: a multi-row INSERT consumes a
+   * placeholder per column per row, and at thirty-seven columns a few thousand
+   * rows would approach the protocol's limit. A hundred rows is 3,700
+   * placeholders, comfortably inside it and still a 100:1 reduction in round
+   * trips.
+   *
+   * Failure semantics change slightly and for the better: a row-at-a-time loop
+   * that threw on the fiftieth row left forty-nine committed, so a failed seed
+   * left a partial snapshot set that looked like a complete one. A chunk is a
+   * single statement, so it lands or it does not.
+   */
+  async saveSnapshots(snapshots: FeatureSnapshot[], chunkSize = 100): Promise<number> {
+    if (snapshots.length === 0) return 0;
+    if (chunkSize < 1) throw new Error(`chunkSize must be at least 1, got ${chunkSize}`);
+
+    let written = 0;
+    for (let i = 0; i < snapshots.length; i += chunkSize) {
+      const chunk = snapshots.slice(i, i + chunkSize);
+      await db.insert(assetFeatureSnapshots).values(chunk.map(s => this.toRow(s)));
+      written += chunk.length;
+    }
+    return written;
+  }
+
   /**
    * Label historical snapshots with failure outcomes (ML-2 / ML-11).
    *
