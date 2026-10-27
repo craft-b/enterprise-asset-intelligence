@@ -27,6 +27,8 @@ const SOURCE = readFileSync(join(__dirname, "seed-orchestrator.ts"), "utf-8");
 interface Asset {
   code: string;
   serialPrefix: string;
+  /** Unique within a shared prefix: several units run the same model. */
+  serialSuffix: string;
   /** Years old at the cursor, which is how the seed now defines the fleet. */
   ageYears: number;
   hours: number;
@@ -39,11 +41,11 @@ interface Asset {
 function parseFleet(): Asset[] {
   const assets: Asset[] = [];
   const row =
-    /equipmentId:\s*"(EQ-\d+)"[\s\S]*?category:\s*"([^"]+)"[\s\S]*?serialPrefix:\s*"([^"]+)"[\s\S]*?ageYears:\s*(\d+),\s*hours:\s*(\d+),\s*duty:\s*([\d.]+)/g;
+    /equipmentId:\s*"(EQ-\d+)"[\s\S]*?category:\s*"([^"]+)"[\s\S]*?serialPrefix:\s*"([^"]+)"[\s\S]*?serialSuffix:\s*"([^"]+)"[\s\S]*?ageYears:\s*(\d+),\s*hours:\s*(\d+),\s*duty:\s*([\d.]+)/g;
   for (const m of SOURCE.matchAll(row)) {
     assets.push({
-      code: m[1], category: m[2], serialPrefix: m[3],
-      ageYears: Number(m[4]), hours: Number(m[5]), duty: Number(m[6]),
+      code: m[1], category: m[2], serialPrefix: m[3], serialSuffix: m[4],
+      ageYears: Number(m[5]), hours: Number(m[6]), duty: Number(m[7]),
     });
   }
   return assets;
@@ -114,10 +116,22 @@ function projectedWearRate(a: Asset): number {
 const fleet = parseFleet();
 const cursor = cursorDate();
 
+/**
+ * The model year the seeder computes for an asset: cursor year minus age.
+ *
+ * This used to be read as `a.year`, a field Asset has never had. Every use of
+ * it built `new Date("undefined-06-15")`, an Invalid Date, so the cold-start
+ * check's `if (ageYears >= 1) continue` compared NaN and never continued --
+ * it was applying the 500-hour floor to the whole fleet rather than to young
+ * assets, and the future-dating check was asserting on NaN. Both tests passed
+ * for the wrong reason; the 500-hour one passed by 57 hours on EQ-010.
+ */
+const assetYear = (a: Asset) => cursor.getFullYear() - a.ageYears;
+
 describe("the demo fleet", () => {
   it("parsed", () => {
     // Guards everything below: a regex that matched nothing would pass it all.
-    expect(fleet).toHaveLength(10);
+    expect(fleet).toHaveLength(60);
     expect(fleet.map(a => a.code)).toContain("EQ-001");
     expect(fleet.every(a => a.ageYears > 0 && a.hours >= 0)).toBe(true);
   });
@@ -127,14 +141,23 @@ describe("the demo fleet", () => {
   });
 
   it("does not stack the fleet into the HIGH tier", () => {
-    // Six years is where injected failures begin in earnest. More than four
-    // such assets and the risk queue is mostly red before anything is scored.
+    // Six years is where injected failures begin in earnest, so the count of
+    // assets at or above it is the count of HIGH rows, near enough.
+    //
+    // This was pinned at exactly three, which was right for a ten-asset yard
+    // and is wrong as a constant: the thing that matters is the share. Sixty
+    // units with three old ones is a 5% HIGH rate, cleaner than any real
+    // rental fleet and a waste of the extra assets. Held as a proportion, with
+    // a floor so the fleet cannot go uniformly new either.
     const old = fleet.filter(a => tierAge(a) >= 6);
+    expect(old.length, "a fleet with no old assets has no risk to show")
+      .toBeGreaterThanOrEqual(3);
     expect(
-      old.map(a => `${a.code} (${tierAge(a)}y)`),
-      "assets aged 6+ score HIGH; keep this to four or fewer or the demo " +
-      "shows a fleet where everything is failing"
-    ).toHaveLength(3);
+      old.length / fleet.length,
+      `${old.length}/${fleet.length} assets are 6+ years old; past a quarter ` +
+      `the risk queue is mostly red before anything is scored, which reads as ` +
+      `a model with one output rather than an ageing yard`
+    ).toBeLessThanOrEqual(0.25);
   });
 
   it("keeps genuinely old assets, so HIGH means something", () => {
@@ -194,8 +217,16 @@ describe("the demo fleet", () => {
     // lifetime hours is scored by rule, not by the model. An asset that lands
     // there shows "rule:cold-start-v1" in the risk queue instead of a
     // prediction, which is honest but is not what the demo is for.
+    // With the year computed correctly the loop below is vacuous unless the
+    // fleet holds a sub-one-year asset, so state the reason the rule cannot
+    // fire rather than leaving it to a skipped branch.
+    const young = fleet.filter(a => a.ageYears < 1);
+    expect(young, "the fleet is entirely a year old or more, so cold-start " +
+      "cannot trigger; if that changes, the loop below is what guards it")
+      .toHaveLength(0);
+
     for (const a of fleet) {
-      const purchase = new Date(`${a.year}-06-15`);
+      const purchase = new Date(`${assetYear(a)}-06-15`);
       const ageYears = (cursor.getTime() - purchase.getTime()) / (365.25 * 24 * 3600 * 1000);
       if (ageYears >= 1) continue;
       const hoursAtCursor = a.hours + minAdded(a);
@@ -209,7 +240,7 @@ describe("the demo fleet", () => {
 
   it("owns nothing it has not bought yet", () => {
     for (const a of fleet) {
-      expect(new Date(`${a.year}-06-15`).getTime(), `${a.code} is future-dated`)
+      expect(new Date(`${assetYear(a)}-06-15`).getTime(), `${a.code} is future-dated`)
         .toBeLessThan(cursor.getTime());
     }
   });
@@ -236,12 +267,17 @@ describe("the demo fleet", () => {
     expect(seedFn).not.toMatch(/serial:\s*"[^"]*-\d{4}-/);
   });
 
-  it("has unique codes and serial prefixes", () => {
-    // The prefix is what distinguishes one serial from another now that the
-    // year is computed; two assets sharing a prefix and suffix would be
-    // stamped identically in any year they share.
+  it("has unique codes and serial stamps", () => {
+    // The prefix is no longer unique by itself, and should not be: a yard runs
+    // several units of one model, which is the whole reason a serial carries a
+    // suffix. What has to be unique is the stamp -- prefix, computed year,
+    // suffix -- because two assets sharing prefix and suffix are stamped
+    // identically in every year they share.
     expect(new Set(fleet.map(a => a.code)).size).toBe(fleet.length);
-    expect(new Set(fleet.map(a => a.serialPrefix)).size).toBe(fleet.length);
+    expect(
+      new Set(fleet.map(a => `${a.serialPrefix}-${a.serialSuffix}`)).size,
+      "two assets would carry the same serial stamp"
+    ).toBe(fleet.length);
   });
 });
 
@@ -387,7 +423,7 @@ describe("every fleet category has a maintenance interval", () => {
 
   it("parsed both lists", () => {
     expect(configured.size).toBeGreaterThan(5);
-    expect(fleet.length).toBe(10);
+    expect(fleet.length).toBe(60);
   });
 
   it("covers every category the fleet actually contains", () => {
@@ -458,9 +494,17 @@ describe("the fleet works its machines at different rates", () => {
   });
 });
 
+/** Snapshot spacing and labelling lag, read from the seeder. */
+const SNAPSHOT_INTERVAL = Number(
+  SOURCE.match(/const SNAPSHOT_INTERVAL_DAYS = (\d+)/)?.[1] ?? 0
+);
+const LABEL_LAG = Number(
+  SOURCE.match(/const LABELABLE_LAG_DAYS = (\d+)/)?.[1] ?? 0
+);
+
 describe("the labelled training set the history produces", () => {
-  const interval = Number(SOURCE.match(/const SNAPSHOT_INTERVAL_DAYS = (\d+)/)?.[1] ?? 0);
-  const lag = Number(SOURCE.match(/const LABELABLE_LAG_DAYS = (\d+)/)?.[1] ?? 0);
+  const interval = SNAPSHOT_INTERVAL;
+  const lag = LABEL_LAG;
 
   it("reads the three constants it reasons about", () => {
     expect(HISTORY_DAYS).toBeGreaterThan(0);
@@ -494,5 +538,68 @@ describe("the labelled training set the history produces", () => {
     // The data-quality gate counts duplicate snapshots against the training
     // set, and consecutive snapshots of one asset barely differ.
     expect(interval).toBeGreaterThanOrEqual(5);
+  });
+});
+
+describe("the fleet clears the floors the ML service actually enforces", () => {
+  // This is what growing the yard to sixty was for, so it is asserted against
+  // the Python the service runs rather than against numbers copied into a
+  // comment here. Copied numbers are how the fleet came to sit just under
+  // three separate floors without anything failing: each gate returned a
+  // polite "skipped", the dashboard rendered the skip, and the pipeline
+  // reported success having measured nothing.
+  const ENGINE = join(__dirname, "..", "..", "ml-service", "engine");
+  const DRIFT = readFileSync(join(ENGINE, "drift_detector.py"), "utf-8");
+  const QUALITY = readFileSync(join(ENGINE, "data_quality.py"), "utf-8");
+
+  const minBatch = Number(DRIFT.match(/^MIN_BATCH_SIZE\s*=\s*(\d+)/m)?.[1] ?? 0);
+  const minRows = Number(QUALITY.match(/^MIN_ROWS\s*=\s*(\d+)/m)?.[1] ?? 0);
+  // The per-category floor is inline in check_bias_drift, not a named
+  // constant: `if len(items) < 3:  # too few to be meaningful`.
+  const minPerCategory = Number(
+    DRIFT.match(/if len\(items\) < (\d+):/)?.[1] ?? 0
+  );
+
+  const labelledDates =
+    Math.floor((HISTORY_DAYS - LABEL_LAG - SNAPSHOT_INTERVAL) / SNAPSHOT_INTERVAL) + 1;
+
+  it("read all three floors out of the service", () => {
+    // Without this the three assertions below would pass against zero.
+    expect(minBatch, "MIN_BATCH_SIZE").toBeGreaterThan(0);
+    expect(minRows, "MIN_ROWS").toBeGreaterThan(0);
+    expect(minPerCategory, "the inline per-category floor").toBeGreaterThan(0);
+  });
+
+  it("scores enough assets in one batch for a PSI", () => {
+    // One snapshot per asset per scoring run, so the batch is the fleet.
+    expect(
+      fleet.length,
+      `a scoring run submits ${fleet.length} rows; under ${minBatch} every ` +
+      `drift layer returns "batch too small" and the dashboard shows nothing`
+    ).toBeGreaterThanOrEqual(minBatch);
+  });
+
+  it("puts enough units in every category for a bias reading", () => {
+    const counts = new Map<string, number>();
+    for (const a of fleet) counts.set(a.category, (counts.get(a.category) ?? 0) + 1);
+    const thin = [...counts.entries()].filter(([, n]) => n < minPerCategory);
+    expect(
+      thin.map(([c, n]) => `${c} (${n})`),
+      `every category needs ${minPerCategory}+ units or check_bias_drift ` +
+      `silently drops it, and a fleet of one-offs produces an empty reading`
+    ).toEqual([]);
+  });
+
+  it("labels enough rows to get past the training gate", () => {
+    // Clearing this one is not an unmixed win: the row count was what refused
+    // training cheaply, and above it the run proceeds until it runs out of
+    // memory on a 512MB instance instead. Asserted anyway, because the gate
+    // being cleared is a fact about the fleet and the seeder's comments and
+    // the README both now depend on it.
+    expect(
+      labelledDates * fleet.length,
+      `${labelledDates} labelled dates x ${fleet.length} assets is under ` +
+      `MIN_ROWS ${minRows}, so training is refused on row count`
+    ).toBeGreaterThanOrEqual(minRows);
   });
 });

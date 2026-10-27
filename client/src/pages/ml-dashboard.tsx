@@ -307,19 +307,21 @@ function PredictionDriftCard() {
             <AlertCircle className="h-4 w-4" />
             <AlertDescription className="text-sm">
               {/*
-                This said "run a batch prediction to populate", which cannot
-                work on this fleet and had the visitor wait out a cold start to
-                find that out. The README says it plainly -- "drift monitoring
-                is implemented; a ten-asset fleet cannot exercise it" -- and the
-                card now says the same thing as the document.
+                Third version of this card. It first said "run a batch
+                prediction to populate" -- advice that could not pay off on the
+                ten-asset fleet, after a cold start. It then said the fleet was
+                too small, which was true of ten assets and is not true of
+                sixty. Both failures were the same one: the card described a
+                state the data was not in.
               */}
-              No prediction drift reading. A PSI needs at least 20 scored assets
-              in one batch, and a fleet smaller than that cannot reach the floor
-              in a single run: ten assets produce ten rows and the check returns
+              No prediction drift reading yet. A PSI needs at least 20 scored
+              assets in one batch; the seeded fleet is sixty, so the floor is
+              no longer what stands in the way. An empty card means no scoring
+              run has completed against the current baseline — refreshing the
+              risk queue scores the fleet again. On a database still holding
+              the earlier ten-asset yard it stays empty whatever you press,
+              because ten rows return
               {" "}<span className="font-mono text-xs">batch too small (10 &lt; 20)</span>.
-              {" "}The floor is deliberate, because PSI over ten samples moves on
-              noise. The baseline itself is in place — it is gated on fleet
-              coverage rather than row count for exactly this reason.
             </AlertDescription>
           </Alert>
         )}
@@ -413,18 +415,23 @@ function BiasDriftCard() {
             <AlertCircle className="h-4 w-4" />
             <AlertDescription className="text-sm">
               {/*
-                Same correction, and this one is stronger: no amount of scoring
-                produces a bias reading on this fleet. Telling someone to run a
-                batch prediction was advice that could never pay off.
+                This card used to end "widening the fleet to light it up would
+                be reshaping the data to satisfy the card". The fleet was then
+                widened to sixty, so that sentence needs answering rather than
+                deleting: what changed is the yard's size, not its category
+                mix. Ten units was not a plausible rental fleet to begin with,
+                and every floor it failed is one real use clears. Tuning how
+                many units sit in each category until a disparity appeared
+                would still be reshaping the data, and is not what was done.
               */}
-              No bias reading, and this dataset cannot produce one. A
-              per-category HIGH-rate needs at least three units in a category
-              before it is a disparity statistic rather than an anecdote; this
-              fleet spans nine categories and only Crane has a second unit, so
-              the bias reference is empty by arithmetic rather than by failure.
-              It is the one drift layer a ten-asset fleet cannot exercise at
-              all, and widening the fleet to light it up would be reshaping the
-              data to satisfy the card.
+              No bias reading yet. A per-category HIGH-rate needs at least
+              three units in a category before it is a disparity statistic
+              rather than an anecdote. Every category in the seeded fleet now
+              carries at least four, so this populates once a batch has been
+              scored. It stays empty on a database still holding the earlier
+              ten-asset yard, where nine categories held one unit each and only
+              Crane had a second — that fleet could not produce a bias reading
+              at any amount of scoring.
             </AlertDescription>
           </Alert>
         )}

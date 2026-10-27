@@ -63,7 +63,7 @@ describe("a swap describes something that could have happened", () => {
     // This assertion used to read "prefers the same category" and matched the
     // preference in the source. It passed while the rows written on the real
     // fleet were a Grader replaced by a Tower Crane and an Excavator replaced
-    // by that same crane -- because ten units span nine categories, only Crane
+    // by that same crane -- because ten units spanned nine categories, only Crane
     // has a second unit, and so the "any other unit" fallback fired every
     // single time. The code path existed; the outcome was nonsense.
     expect(SRC).toMatch(/e\.category === rental\.category/);

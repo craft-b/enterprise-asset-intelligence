@@ -63,10 +63,15 @@ import { scoreFleetMultiHorizon } from "./multi-horizon-scoring";
  * that a calibrated model centres its output on the rate it was trained on.
  * That is true of a model trained here, and nothing is: the demo always scores
  * with the v1.17 champion shipped in the ML image, trained offline on 10,828
- * snapshots. The data-quality gate fails training below 500 labelled rows and
- * this seed produces a couple of hundred, so the gate refuses it before memory
- * is even a factor. The seeded labels train nothing; they exist so the
- * pipeline has a training set to show.
+ * snapshots.
+ *
+ * At ten assets this seed produced about 230 labelled rows, under the
+ * data-quality gate's 500, so training was refused on row count before memory
+ * was ever a factor. At sixty it produces about 1,380 and clears that gate --
+ * which means step 7 now attempts a real training run instead of being turned
+ * away at the door. On a 512MB instance it is still expected to fail, but on
+ * memory, later, and possibly by taking the container with it; see step 7.
+ * The accidental protection the row count used to provide is gone.
  *
  * The window is still worth widening -- 22 days of labelled history is a
  * threadbare thing to display next to a claim about temporal splits -- but
@@ -116,6 +121,66 @@ const SEED_FLEET = [
   { equipmentId: "EQ-008", name: "Bobcat Skid Steer Loader",      category: "Loader",     make: "Bobcat",      model: "S650",     serialPrefix: "BOB-S650", serialSuffix: "0512",    status: "AVAILABLE", daily: "280.00",  weekly: "1700.00",  monthly: "6000.00",  ageYears: 2, hours: 400, duty: 0.3  },
   { equipmentId: "EQ-009", name: "Wacker Neuson Vibratory Roller",category: "Compactor",  make: "Wacker Neuson",model: "RD27",    serialPrefix: "WN-RD27", serialSuffix: "0789",     status: "AVAILABLE", daily: "190.00",  weekly: "1150.00",  monthly: "4100.00",  ageYears: 3, hours: 560, duty: 1.0  },
   { equipmentId: "EQ-010", name: "Generac Industrial Generator",  category: "Generator",  make: "Generac",     model: "XG10000E", serialPrefix: "GEN-XG10K", serialSuffix: "0633",  status: "AVAILABLE", daily: "160.00",  weekly: "980.00",   monthly: "3500.00",  ageYears: 2, hours: 200, duty: 0.3  },
+
+  // ── The other fifty ────────────────────────────────────────────────────
+  //
+  // The ten above are measured units: every probability quoted in the
+  // comments in this file was read off one of them, so they are left exactly
+  // as they were. These fifty widen the yard to a size where the pipeline
+  // can actually run, and they are shaped to hold the ten-asset mix:
+  // twelve units at six years or more (the HIGH tier), five past ten, and
+  // twelve worked at duty 0.3. Multiple units share a model, which is what a
+  // rental yard looks like and what makes the serial suffix load-bearing.
+  { equipmentId: "EQ-011",   name: "Liebherr All-Terrain Crane",        category: "Crane",       make: "Liebherr",       model: "LTM 1090",   serialPrefix: "LH-LTM1090",    serialSuffix: "1007",   status: "AVAILABLE", daily: "884.00",  weekly: "5304.00",  monthly: "18564.00",  ageYears: 11,  hours: 8140,  duty: 1.0 },
+  { equipmentId: "EQ-012",   name: "Terex All-Terrain Crane",           category: "Crane",       make: "Terex",          model: "AC 100",     serialPrefix: "TRX-AC100",     serialSuffix: "1014",   status: "AVAILABLE", daily: "918.00",  weekly: "5508.00",  monthly: "19278.00",  ageYears: 7,   hours: 5180,  duty: 1.0 },
+  { equipmentId: "EQ-013",   name: "Caterpillar Motor Grader",          category: "Grader",      make: "Caterpillar",    model: "12M3",       serialPrefix: "CAT-12M3",      serialSuffix: "1021",   status: "AVAILABLE", daily: "644.80",  weekly: "3868.80",  monthly: "13540.80",  ageYears: 8,   hours: 5520,  duty: 1.0 },
+  { equipmentId: "EQ-014",   name: "John Deere Motor Grader",           category: "Grader",      make: "John Deere",     model: "772G",       serialPrefix: "JD-772G",       serialSuffix: "1028",   status: "AVAILABLE", daily: "669.60",  weekly: "4017.60",  monthly: "14061.60",  ageYears: 5,   hours: 3450,  duty: 1.0 },
+  { equipmentId: "EQ-015",   name: "Volvo Motor Grader",                category: "Grader",      make: "Volvo",          model: "G940",       serialPrefix: "VOL-G940",      serialSuffix: "1035",   status: "AVAILABLE", daily: "620.00",  weekly: "3720.00",  monthly: "13020.00",  ageYears: 4,   hours: 2760,  duty: 1.0 },
+  { equipmentId: "EQ-016",   name: "Caterpillar Motor Grader",          category: "Grader",      make: "Caterpillar",    model: "12M3",       serialPrefix: "CAT-12M3",      serialSuffix: "1042",   status: "AVAILABLE", daily: "644.80",  weekly: "3868.80",  monthly: "13540.80",  ageYears: 3,   hours: 2070,  duty: 1.0 },
+  { equipmentId: "EQ-017",   name: "Komatsu Hydraulic Excavator",       category: "Excavator",   make: "Komatsu",        model: "PC290",      serialPrefix: "KOM-PC290",     serialSuffix: "1049",   status: "AVAILABLE", daily: "572.00",  weekly: "3432.00",  monthly: "12012.00",  ageYears: 10,  hours: 7600,  duty: 1.0 },
+  { equipmentId: "EQ-018",   name: "Caterpillar Hydraulic Excavator",   category: "Excavator",   make: "Caterpillar",    model: "320",        serialPrefix: "CAT-320",       serialSuffix: "1056",   status: "AVAILABLE", daily: "594.00",  weekly: "3564.00",  monthly: "12474.00",  ageYears: 8,   hours: 6080,  duty: 1.0 },
+  { equipmentId: "EQ-019",   name: "Hitachi Hydraulic Excavator",       category: "Excavator",   make: "Hitachi",        model: "ZX350",      serialPrefix: "HIT-ZX350",     serialSuffix: "1063",   status: "AVAILABLE", daily: "550.00",  weekly: "3300.00",  monthly: "11550.00",  ageYears: 6,   hours: 4560,  duty: 1.0 },
+  { equipmentId: "EQ-020",   name: "Volvo Hydraulic Excavator",         category: "Excavator",   make: "Volvo",          model: "EC220",      serialPrefix: "VOL-EC220",     serialSuffix: "1070",   status: "AVAILABLE", daily: "572.00",  weekly: "3432.00",  monthly: "12012.00",  ageYears: 5,   hours: 3800,  duty: 1.0 },
+  { equipmentId: "EQ-021",   name: "Komatsu Hydraulic Excavator",       category: "Excavator",   make: "Komatsu",        model: "PC290",      serialPrefix: "KOM-PC290",     serialSuffix: "1077",   status: "AVAILABLE", daily: "594.00",  weekly: "3564.00",  monthly: "12474.00",  ageYears: 4,   hours: 3040,  duty: 1.0 },
+  { equipmentId: "EQ-022",   name: "Caterpillar Hydraulic Excavator",   category: "Excavator",   make: "Caterpillar",    model: "320",        serialPrefix: "CAT-320",       serialSuffix: "1084",   status: "AVAILABLE", daily: "550.00",  weekly: "3300.00",  monthly: "11550.00",  ageYears: 3,   hours: 2280,  duty: 1.0 },
+  { equipmentId: "EQ-023",   name: "Hitachi Hydraulic Excavator",       category: "Excavator",   make: "Hitachi",        model: "ZX350",      serialPrefix: "HIT-ZX350",     serialSuffix: "1091",   status: "AVAILABLE", daily: "572.00",  weekly: "3432.00",  monthly: "12012.00",  ageYears: 3,   hours: 2280,  duty: 1.0 },
+  { equipmentId: "EQ-024",   name: "Volvo Hydraulic Excavator",         category: "Excavator",   make: "Volvo",          model: "EC220",      serialPrefix: "VOL-EC220",     serialSuffix: "1098",   status: "AVAILABLE", daily: "594.00",  weekly: "3564.00",  monthly: "12474.00",  ageYears: 2,   hours: 1520,  duty: 1.0 },
+  { equipmentId: "EQ-025",   name: "JLG Telescopic Boom Lift",          category: "Lift",        make: "JLG",            model: "860SJ",      serialPrefix: "JLG-860SJ",     serialSuffix: "1105",   status: "AVAILABLE", daily: "499.20",  weekly: "2995.20",  monthly: "10483.20",  ageYears: 7,   hours: 4200,  duty: 1.0 },
+  { equipmentId: "EQ-026",   name: "Genie Telescopic Boom Lift",        category: "Lift",        make: "Genie",          model: "S-65",       serialPrefix: "GEN-S65",       serialSuffix: "1112",   status: "AVAILABLE", daily: "518.40",  weekly: "3110.40",  monthly: "10886.40",  ageYears: 5,   hours: 3000,  duty: 1.0 },
+  { equipmentId: "EQ-027",   name: "Skyjack Telescopic Boom Lift",      category: "Lift",        make: "Skyjack",        model: "SJ9250",     serialPrefix: "SKY-SJ9250",    serialSuffix: "1119",   status: "AVAILABLE", daily: "480.00",  weekly: "2880.00",  monthly: "10080.00",  ageYears: 4,   hours: 2400,  duty: 1.0 },
+  { equipmentId: "EQ-028",   name: "JLG Telescopic Boom Lift",          category: "Lift",        make: "JLG",            model: "860SJ",      serialPrefix: "JLG-860SJ",     serialSuffix: "1126",   status: "AVAILABLE", daily: "499.20",  weekly: "2995.20",  monthly: "10483.20",  ageYears: 3,   hours: 1800,  duty: 1.0 },
+  { equipmentId: "EQ-029",   name: "Genie Telescopic Boom Lift",        category: "Lift",        make: "Genie",          model: "S-65",       serialPrefix: "GEN-S65",       serialSuffix: "1133",   status: "AVAILABLE", daily: "518.40",  weekly: "3110.40",  monthly: "10886.40",  ageYears: 2,   hours: 1200,  duty: 1.0 },
+  { equipmentId: "EQ-030",   name: "Skyjack Telescopic Boom Lift",      category: "Lift",        make: "Skyjack",        model: "SJ9250",     serialPrefix: "SKY-SJ9250",    serialSuffix: "1140",   status: "AVAILABLE", daily: "480.00",  weekly: "2880.00",  monthly: "10080.00",  ageYears: 2,   hours: 360,   duty: 0.3 },
+  { equipmentId: "EQ-031",   name: "Caterpillar Articulated Hauler",    category: "Hauler",      make: "Caterpillar",    model: "730",        serialPrefix: "CAT-730",       serialSuffix: "1147",   status: "AVAILABLE", daily: "447.20",  weekly: "2683.20",  monthly: "9391.20",   ageYears: 9,   hours: 7920,  duty: 1.0 },
+  { equipmentId: "EQ-032",   name: "Bell Articulated Hauler",           category: "Hauler",      make: "Bell",           model: "B30E",       serialPrefix: "BEL-B30E",      serialSuffix: "1154",   status: "AVAILABLE", daily: "464.40",  weekly: "2786.40",  monthly: "9752.40",   ageYears: 5,   hours: 4400,  duty: 1.0 },
+  { equipmentId: "EQ-033",   name: "Volvo Articulated Hauler",          category: "Hauler",      make: "Volvo",          model: "A30G",       serialPrefix: "VOL-A30G",      serialSuffix: "1161",   status: "AVAILABLE", daily: "430.00",  weekly: "2580.00",  monthly: "9030.00",   ageYears: 4,   hours: 3520,  duty: 1.0 },
+  { equipmentId: "EQ-034",   name: "Caterpillar Articulated Hauler",    category: "Hauler",      make: "Caterpillar",    model: "730",        serialPrefix: "CAT-730",       serialSuffix: "1168",   status: "AVAILABLE", daily: "447.20",  weekly: "2683.20",  monthly: "9391.20",   ageYears: 3,   hours: 2640,  duty: 1.0 },
+  { equipmentId: "EQ-035",   name: "Bell Articulated Hauler",           category: "Hauler",      make: "Bell",           model: "B30E",       serialPrefix: "BEL-B30E",      serialSuffix: "1175",   status: "AVAILABLE", daily: "464.40",  weekly: "2786.40",  monthly: "9752.40",   ageYears: 2,   hours: 1760,  duty: 1.0 },
+  { equipmentId: "EQ-036",   name: "Caterpillar Skid Steer Loader",     category: "Loader",      make: "Caterpillar",    model: "262D3",      serialPrefix: "CAT-262D3",     serialSuffix: "1182",   status: "AVAILABLE", daily: "291.20",  weekly: "1747.20",  monthly: "6115.20",   ageYears: 8,   hours: 6320,  duty: 1.0 },
+  { equipmentId: "EQ-037",   name: "John Deere Skid Steer Loader",      category: "Loader",      make: "John Deere",     model: "324G",       serialPrefix: "JD-324G",       serialSuffix: "1189",   status: "AVAILABLE", daily: "302.40",  weekly: "1814.40",  monthly: "6350.40",   ageYears: 5,   hours: 3950,  duty: 1.0 },
+  { equipmentId: "EQ-038",   name: "Case Skid Steer Loader",            category: "Loader",      make: "Case",           model: "SR210",      serialPrefix: "CSE-SR210",     serialSuffix: "1196",   status: "AVAILABLE", daily: "280.00",  weekly: "1680.00",  monthly: "5880.00",   ageYears: 4,   hours: 3160,  duty: 1.0 },
+  { equipmentId: "EQ-039",   name: "Kubota Skid Steer Loader",          category: "Loader",      make: "Kubota",         model: "SSV65",      serialPrefix: "KUB-SSV65",     serialSuffix: "1203",   status: "AVAILABLE", daily: "291.20",  weekly: "1747.20",  monthly: "6115.20",   ageYears: 3,   hours: 2370,  duty: 1.0 },
+  { equipmentId: "EQ-040",   name: "Caterpillar Skid Steer Loader",     category: "Loader",      make: "Caterpillar",    model: "262D3",      serialPrefix: "CAT-262D3",     serialSuffix: "1210",   status: "AVAILABLE", daily: "302.40",  weekly: "1814.40",  monthly: "6350.40",   ageYears: 3,   hours: 2370,  duty: 1.0 },
+  { equipmentId: "EQ-041",   name: "John Deere Skid Steer Loader",      category: "Loader",      make: "John Deere",     model: "324G",       serialPrefix: "JD-324G",       serialSuffix: "1217",   status: "AVAILABLE", daily: "280.00",  weekly: "1680.00",  monthly: "5880.00",   ageYears: 2,   hours: 1580,  duty: 1.0 },
+  { equipmentId: "EQ-042",   name: "Case Skid Steer Loader",            category: "Loader",      make: "Case",           model: "SR210",      serialPrefix: "CSE-SR210",     serialSuffix: "1224",   status: "AVAILABLE", daily: "291.20",  weekly: "1747.20",  monthly: "6115.20",   ageYears: 2,   hours: 320,   duty: 0.3 },
+  { equipmentId: "EQ-043",   name: "Kubota Skid Steer Loader",          category: "Loader",      make: "Kubota",         model: "SSV65",      serialPrefix: "KUB-SSV65",     serialSuffix: "1231",   status: "AVAILABLE", daily: "302.40",  weekly: "1814.40",  monthly: "6350.40",   ageYears: 3,   hours: 480,   duty: 0.3 },
+  { equipmentId: "EQ-044",   name: "Bomag Vibratory Roller",            category: "Compactor",   make: "Bomag",          model: "BW 120",     serialPrefix: "BMG-BW120",     serialSuffix: "1238",   status: "AVAILABLE", daily: "197.60",  weekly: "1185.60",  monthly: "4149.60",   ageYears: 5,   hours: 3200,  duty: 1.0 },
+  { equipmentId: "EQ-045",   name: "Dynapac Vibratory Roller",          category: "Compactor",   make: "Dynapac",        model: "CA2500",     serialPrefix: "DYN-CA2500",    serialSuffix: "1245",   status: "AVAILABLE", daily: "205.20",  weekly: "1231.20",  monthly: "4309.20",   ageYears: 4,   hours: 2560,  duty: 1.0 },
+  { equipmentId: "EQ-046",   name: "Caterpillar Vibratory Roller",      category: "Compactor",   make: "Caterpillar",    model: "CB2.7",      serialPrefix: "CAT-CB27",      serialSuffix: "1252",   status: "AVAILABLE", daily: "190.00",  weekly: "1140.00",  monthly: "3990.00",   ageYears: 3,   hours: 1920,  duty: 1.0 },
+  { equipmentId: "EQ-047",   name: "Bomag Vibratory Roller",            category: "Compactor",   make: "Bomag",          model: "BW 120",     serialPrefix: "BMG-BW120",     serialSuffix: "1259",   status: "AVAILABLE", daily: "197.60",  weekly: "1185.60",  monthly: "4149.60",   ageYears: 2,   hours: 1280,  duty: 1.0 },
+  { equipmentId: "EQ-048",   name: "Dynapac Vibratory Roller",          category: "Compactor",   make: "Dynapac",        model: "CA2500",     serialPrefix: "DYN-CA2500",    serialSuffix: "1266",   status: "AVAILABLE", daily: "205.20",  weekly: "1231.20",  monthly: "4309.20",   ageYears: 2,   hours: 360,   duty: 0.3 },
+  { equipmentId: "EQ-049",   name: "Caterpillar Vibratory Roller",      category: "Compactor",   make: "Caterpillar",    model: "CB2.7",      serialPrefix: "CAT-CB27",      serialSuffix: "1273",   status: "AVAILABLE", daily: "190.00",  weekly: "1140.00",  monthly: "3990.00",   ageYears: 3,   hours: 540,   duty: 0.3 },
+  { equipmentId: "EQ-050",   name: "Atlas Copco Air Compressor",        category: "Compressor",  make: "Atlas Copco",    model: "XAS 185",    serialPrefix: "AC-XAS185",     serialSuffix: "1280",   status: "AVAILABLE", daily: "228.80",  weekly: "1372.80",  monthly: "4804.80",   ageYears: 5,   hours: 5400,  duty: 1.0 },
+  { equipmentId: "EQ-051",   name: "Sullair Air Compressor",            category: "Compressor",  make: "Sullair",        model: "375H",       serialPrefix: "SUL-375H",      serialSuffix: "1287",   status: "AVAILABLE", daily: "237.60",  weekly: "1425.60",  monthly: "4989.60",   ageYears: 4,   hours: 4320,  duty: 1.0 },
+  { equipmentId: "EQ-052",   name: "Doosan Air Compressor",             category: "Compressor",  make: "Doosan",         model: "P185",       serialPrefix: "DSN-P185",      serialSuffix: "1294",   status: "AVAILABLE", daily: "220.00",  weekly: "1320.00",  monthly: "4620.00",   ageYears: 3,   hours: 3240,  duty: 1.0 },
+  { equipmentId: "EQ-053",   name: "Atlas Copco Air Compressor",        category: "Compressor",  make: "Atlas Copco",    model: "XAS 185",    serialPrefix: "AC-XAS185",     serialSuffix: "1301",   status: "AVAILABLE", daily: "228.80",  weekly: "1372.80",  monthly: "4804.80",   ageYears: 2,   hours: 280,   duty: 0.3 },
+  { equipmentId: "EQ-054",   name: "Sullair Air Compressor",            category: "Compressor",  make: "Sullair",        model: "375H",       serialPrefix: "SUL-375H",      serialSuffix: "1308",   status: "AVAILABLE", daily: "237.60",  weekly: "1425.60",  monthly: "4989.60",   ageYears: 3,   hours: 420,   duty: 0.3 },
+  { equipmentId: "EQ-055",   name: "Generac Industrial Generator",      category: "Generator",   make: "Generac",        model: "MDG25",      serialPrefix: "GEN-MDG25",     serialSuffix: "1315",   status: "AVAILABLE", daily: "166.40",  weekly: "998.40",   monthly: "3494.40",   ageYears: 5,   hours: 5750,  duty: 1.0 },
+  { equipmentId: "EQ-056",   name: "Cummins Industrial Generator",      category: "Generator",   make: "Cummins",        model: "C60D6",      serialPrefix: "CMS-C60D6",     serialSuffix: "1322",   status: "AVAILABLE", daily: "172.80",  weekly: "1036.80",  monthly: "3628.80",   ageYears: 4,   hours: 4600,  duty: 1.0 },
+  { equipmentId: "EQ-057",   name: "Kohler Industrial Generator",       category: "Generator",   make: "Kohler",         model: "60REOZK",    serialPrefix: "KOH-60REOZK",   serialSuffix: "1329",   status: "AVAILABLE", daily: "160.00",  weekly: "960.00",   monthly: "3360.00",   ageYears: 3,   hours: 3450,  duty: 1.0 },
+  { equipmentId: "EQ-058",   name: "Generac Industrial Generator",      category: "Generator",   make: "Generac",        model: "MDG25",      serialPrefix: "GEN-MDG25",     serialSuffix: "1336",   status: "AVAILABLE", daily: "166.40",  weekly: "998.40",   monthly: "3494.40",   ageYears: 2,   hours: 280,   duty: 0.3 },
+  { equipmentId: "EQ-059",   name: "Cummins Industrial Generator",      category: "Generator",   make: "Cummins",        model: "C60D6",      serialPrefix: "CMS-C60D6",     serialSuffix: "1343",   status: "AVAILABLE", daily: "172.80",  weekly: "1036.80",  monthly: "3628.80",   ageYears: 2,   hours: 280,   duty: 0.3 },
+  { equipmentId: "EQ-060",   name: "Kohler Industrial Generator",       category: "Generator",   make: "Kohler",         model: "60REOZK",    serialPrefix: "KOH-60REOZK",   serialSuffix: "1350",   status: "AVAILABLE", daily: "160.00",  weekly: "960.00",   monthly: "3360.00",   ageYears: 3,   hours: 420,   duty: 0.3 },
 ];
 
 /** duty by equipment code, for the sensor seeder. */
@@ -514,9 +579,15 @@ async function runSeedPipeline() {
 
       // Register the shipped champion's own evaluation instead. Without this
       // the ML dashboard shows a "train the model" checklist forever: it reads
-      // model_metrics, only a training run writes that table, and training is
-      // refused below 500 labeled rows while this seed produces 40. The model
+      // model_metrics, and only a training run writes that table. The model
       // itself is loaded and fully evaluated; only the paperwork was missing.
+      //
+      // This used to be reached because the data-quality gate refused the run
+      // on row count -- fast, clean, and free. The sixty-asset fleet produces
+      // about 1,380 labelled rows and clears that gate, so the likely failure
+      // here is now memory partway through three 200-tree forests with SHAP
+      // loaded. Step 8 already re-wakes and retries for exactly that reason,
+      // but this path is no longer the cheap one it was.
       let registered = "";
       try {
         const champion = await registerChampionMetrics();
@@ -652,9 +723,14 @@ async function seedEquipment(cursorDate: Date) {
   //
   // The shape below is how rental yards actually age: cranes and graders are
   // long-lived capital that stays in service past a decade, while skid steers,
-  // rollers, haulers and gensets turn over every few years. That gives three
-  // genuinely old assets, a middle group, and new units -- without touching
-  // the hazard model to flatter the numbers.
+  // rollers, haulers and gensets turn over every few years. Across sixty units
+  // that gives twelve assets in the HIGH tier (six years or more), five of them
+  // past ten, a large middle group, and twelve lightly-used units -- a 20% HIGH
+  // rate, without touching the hazard model to flatter the numbers.
+  //
+  // The ratio is the point, not the count. The ten-asset yard held this at
+  // three of ten; sixty units at a fixed three would be a 5% HIGH rate, which
+  // is cleaner than any real rental fleet and wastes the assets.
   //
   // Hours are the meter reading when the seeded history starts; the sensor
   // seed adds to them over SEED_HISTORY_DAYS, scaled by each unit's duty.

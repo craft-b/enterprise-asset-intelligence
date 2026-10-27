@@ -30,7 +30,7 @@ This is the second of two portfolio repositories, deliberately built to be compl
 - **ML pipeline** — Full automated pipeline: feature snapshot generation → failure labeling → model training → inference, all triggerable from the admin UI
 - **MLflow experiment tracking** — Every training run logs hyperparameters, per-horizon metrics (ROC-AUC, PR-AUC, recall, F1), per-fold CV scores, model artifacts, and feature importance JSONs under the `equipment-failure-multihorizon` experiment
 - **SHAP explainability** — `TreeExplainer` runs at inference time; top 5 features by |SHAP value| are returned with every prediction for per-asset attribution. On the bundled simulator these attributions recover the generator rather than discover anything — failures are drawn from a function of age, hours and maintenance recency and the model receives all three — so the UI renders that caveat inline. The machinery is real; only the dataset makes it circular
-- **Three-layer drift detection** — Data drift (PSI on monitored features), prediction drift (distribution shift in output scores per horizon), and bias drift (disparity in HIGH-rate across equipment categories); each persisted to its own table (`drift_metrics`, `prediction_drift_metrics`, `bias_drift_metrics`) with reference distributions in `drift_reference`; dashboard surfaces per-feature PSI with STABLE / WARNING / ALERT status. A ten-asset demo fleet sits below the 20-snapshot batch minimum and the 3-per-category bias minimum, so it does not generate readings — [why, and why those floors stay](#deployment-status)
+- **Three-layer drift detection** — Data drift (PSI on monitored features), prediction drift (distribution shift in output scores per horizon), and bias drift (disparity in HIGH-rate across equipment categories); each persisted to its own table (`drift_metrics`, `prediction_drift_metrics`, `bias_drift_metrics`) with reference distributions in `drift_reference`; dashboard surfaces per-feature PSI with STABLE / WARNING / ALERT status. The demo fleet is sized to clear the 20-snapshot batch minimum and the 3-per-category bias minimum rather than to sit below them — [why, and why those floors stay](#deployment-status)
 - **Champion-challenger model governance** — Newly trained models enter registry as challengers; shadow-score every batch alongside champion without persisting results; admin promotes challenger to champion via `POST /api/ml/models/promote` with zero downtime (in-memory hot-swap); full audit history in `model_registry.json`
 - **Pre-training data quality gate** — 8-check validator (row count, label completeness, class balance, null rates, physical bounds, non-zero required features, temporal spread, duplicate snapshots) blocks training on FAIL, warns on marginal data, PASS/WARN/FAIL summary in training log
 - **Prevalence-honest calibration** — Random Forests calibrated (`CalibratedClassifierCV`) on the untouched, real-prevalence dev set with `class_weight='balanced'` (no SMOTE), so the emitted failure probability isn't inflated by resampling; Brier score + expected calibration error published per horizon
@@ -516,17 +516,24 @@ uvicorn api.main:app --reload --port 8000
 On first login, the app redirects to `/setup`. Choose one of two paths:
 
 **Load Demo Data** — recommended for evaluation and interviews. Runs the full
-seed pipeline in the background (~60-90 seconds) and streams live progress.
+seed pipeline in the background and streams live progress. Budget ten to
+thirty minutes: that is the two-to-five-minute ten-asset figure scaled by the
+six-fold fleet, plus the ML service's two cold starts, and it has not been
+measured against the larger seed.
 Seeds:
 
-- 10 heavy equipment units across nine categories (only Crane has two units)
+- 60 heavy equipment units across nine categories, at least four in each; twelve are six years or older and five are past ten
 - six months of sensor readings and maintenance history per asset, with failure events
 - the fleet scored at all three horizons (10d / 30d / 60d), with SHAP attribution and a drift reference baseline
 
-The **"Train model" step is reported as skipped, and says why**. It is not a
-failure and it is not hidden: the data-quality gate refuses training below 500
-labelled rows, and because a snapshot cannot be labelled until its 60-day
-horizon has elapsed, this seed produces a couple of hundred. The fleet is
+The **"Train model" step may still report itself as skipped, and says why**. At
+ten assets it was refused on row count: the data-quality gate wants 500 labelled
+rows and the seed produced about 230, because a snapshot cannot be labelled until
+its 60-day horizon has elapsed. Sixty assets produce about 1,380, which clears
+that gate — so the step now attempts a real training run rather than being turned
+away. On a 512MB instance it is expected to fail anyway, on memory rather than
+rows, partway through three 200-tree forests with SHAP loaded. Either way the
+fleet is
 scored by the v1.17 champion that ships inside the ML image — trained offline
 on 10,828 snapshots — and its metrics are copied into `model_metrics` so the ML
 dashboard shows what the system actually has. Nothing here is trained on the
@@ -602,35 +609,52 @@ against the slowest seen rather than the average. And 512MB serves the champion 
 the deployed instance loads artifacts baked into its image rather than training on demand. The
 ~$33/mo configuration that removes the cold starts is documented in
 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Docker Compose (`docker-compose.yml`) runs all three
-services locally, and [Quickstart](#quickstart) seeds a full fleet in two to five minutes —
-two of its steps wait on the ML service's cold start.
+services locally, and [Quickstart](#quickstart) seeds a full fleet — two of its steps wait on the
+ML service's cold start. The ten-asset fleet took two to five minutes; sixty units multiply the
+sensor and snapshot passes by six, since the snapshot loop saves one row at a time, so expect
+tens of minutes rather than minutes. Batching those saves is the obvious next optimisation and
+has not been done.
 
-The seed does not train a model, anywhere. It produces 230 labeled snapshots and the trainer's
-data-quality gate refuses anything under 500 rows, so that step is skipped by design and the fleet
-is scored by the champion shipped in the image. The step reports itself as skipped rather than
+The seed does not train a model on free hosting. The sixty-asset fleet produces about 1,380
+labelled snapshots, which clears the trainer's 500-row data-quality gate — so unlike the
+ten-asset version it is no longer refused at the door; it is expected to run out of memory
+instead, since 512MB serves the champion but will not fit three forests being fitted. Either
+way the fleet is scored by the champion shipped in the image. The step reports itself as skipped rather than
 failed, and the metrics on the model page are that champion's own, registered from its bundle and
 dated to the run that produced it. Training on demand needs a dataset the demo seed is not trying
 to be.
 
-**Drift monitoring is implemented; a ten-asset fleet cannot exercise it.** All three layers run
+**Drift monitoring is implemented, and the sixty-asset fleet can exercise it.** All three layers run
 inside `POST /predict/multi-horizon/batch`, which is the path the Run Multi-Horizon Forecast button
 takes, and each persists to its own table. The reference distributions live in the
 `drift_reference` table rather than a file in the container, because a free tier has no persistent
 disk — and because the loader's glob previously matched the committed per-version files but never
 the one the compute step wrote, so a freshly computed reference was not the one in use.
 
-What the fleet cannot reach are two sample minimums, both of which are correct:
+Two sample minimums used to stop it, and the fleet was grown past both. Neither floor moved:
 
-- **A batch needs 20 snapshots to be worth a PSI.** Scoring ten assets produces ten rows, so every
-  run returns `{"status": "skipped", "reason": "batch too small (10 < 20)"}`. PSI over ten samples
-  moves on noise; the floor stays. The genuine readings in `drift_metrics` came from a batch of 50,
-  with PSI ranging to 0.4376 — the detector measures when given something to measure.
-- **Bias drift needs three units per category.** Ten units span nine categories and only Crane has
-  a second, so no category can reach three and the bias reference is empty. A HIGH-rate computed
-  across one or two machines is not a disparity statistic.
+- **A batch needs 20 snapshots to be worth a PSI.** Ten assets produced ten rows, so every run
+  returned `{"status": "skipped", "reason": "batch too small (10 < 20)"}`. PSI over ten samples
+  moves on noise, so the floor stays and the fleet changed instead: sixty scored assets clear it in
+  a single run. The genuine readings already in `drift_metrics` came from a batch of 50, with PSI
+  ranging to 0.4376 — the detector measures when given something to measure.
+- **Bias drift needs three units per category.** Ten units spanned nine categories with only Crane
+  holding a second, so no category could reach three and the bias reference stayed empty. Every
+  category now carries at least four. A HIGH-rate computed across one or two machines is not a
+  disparity statistic, which is why the answer was more machines rather than a lower floor.
 
-Feature references cover four of the five monitored features. `mean_time_between_failures` is
-non-null in 1 of 240 snapshots, so it cannot clear the 20-sample floor either. That one is
+The fleet was grown because ten units is not a plausible equipment rental yard, and every floor it
+failed is one ordinary use clears. What was *not* done is tuning the category mix until a disparity
+appeared: the proportions — twelve units in the HIGH tier, five past ten years, twelve lightly
+used — are held by assertion in `server/services/seed-fleet.test.ts` precisely so that a later edit
+cannot quietly reshape the data to flatter a chart.
+
+Feature references cover four of the five monitored features. Measured on the ten-asset seed,
+`mean_time_between_failures` was non-null in 1 of 240 snapshots, so it could not clear the
+20-sample floor either. The sixty-asset seed produces about 1,440 snapshots over the same span
+and has twelve assets old enough to draw multiple injected failures, so coverage should be
+materially better — but that figure has not been re-measured against a reseeded database, and is
+not claimed here until it has been. That one is
 arithmetic, not a defect: a mean needs two failures before the snapshot date, and 180 days of
 history gives most assets one or none. Only EQ-005 has two, 124 days apart, and only its final
 snapshot carries the value. The other 239 take the trainer's `COALESCE(…, 500)`, so this feature

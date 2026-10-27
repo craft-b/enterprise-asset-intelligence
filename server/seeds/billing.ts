@@ -117,14 +117,20 @@ export async function seedInvoices(cursorDate: Date): Promise<number> {
  * SAME category -- a rental is for a machine that does a job, and no yard sends
  * a tower crane to replace an excavator.
  *
- * That requirement is strict, and on this fleet it binds hard: ten units across
- * nine categories, so only Crane has a second unit. A rental of anything else
- * gets no swap, and that is the correct answer rather than a missing feature.
+ * That requirement is strict, and it used to bind hard: ten units across nine
+ * categories meant only Crane had a second unit, so a rental of anything else
+ * got no swap -- the correct answer rather than a missing feature, but it left
+ * the feature with almost nothing to show. At sixty units every category holds
+ * at least four, so the same strict rule now finds a plausible replacement
+ * instead of declining. Nothing here changed; the fleet did.
+ *
  * An earlier version preferred the same category and fell back to "any other
- * unit", which on this fleet meant the fallback fired every time -- it seeded a
- * Grader replaced by a Tower Crane and an Excavator replaced by the same crane.
- * The test asserted the preference existed in the code and passed while both
- * rows it produced were nonsense.
+ * unit", which on the ten-asset fleet meant the fallback fired every time -- it
+ * seeded a Grader replaced by a Tower Crane and an Excavator replaced by that
+ * same crane. The test asserted the preference existed in the code and passed
+ * while both rows it produced were nonsense. The fallback is still absent, and
+ * should stay absent: a bigger fleet hides that kind of bug rather than fixing
+ * it, so the rule has to be right on its own.
  */
 export async function seedEquipmentSwaps(): Promise<number> {
   const rentals = await completedRentals();

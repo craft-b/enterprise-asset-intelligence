@@ -42,20 +42,25 @@ database; it is no longer correct for this deployment.
 
 ## 2. What should be there
 
-Verified against the live database on 2026-10-21:
+Measured against the live database on 2026-10-21, when the seed built a
+ten-asset fleet. The seed now builds sixty, so **every count below is the old
+fleet's and has to be re-measured after the next reseed** — they are left here
+as the last figures actually observed rather than replaced with predictions.
+The right-hand column says what the sixty-asset seed should produce; nothing in
+it has been measured.
 
-| | |
-|---|---|
-| Equipment | 10 units across 9 categories (only Crane has two) |
-| Rentals / invoices / swaps | 15 / 10 / 2 |
-| Job sites / vendors | 6 / 4 |
-| Feature snapshots | 240 |
-| Maintenance events | 18 |
-| Risk queue | 10 scored — **HIGH 3, MEDIUM 6, LOW 1** |
-| Multi-horizon forecasts | 10 |
-| Model metrics | v1.17, 96 rows, **dataset_size 10,828** |
-| Simulation cursor | 2026-10-21, 90 days run |
-| Users | 2 (admin, viewer) |
+| | Measured (ten-asset seed) | Expected (sixty-asset seed, unmeasured) |
+|---|---|---|
+| Equipment | 10 units across 9 categories (only Crane has two) | 60 across the same 9, at least 4 each |
+| Rentals / invoices / swaps | 15 / 10 / 2 | 15 / 10 / more — a swap needs a same-category spare, and now every category has one |
+| Job sites / vendors | 6 / 4 | unchanged |
+| Feature snapshots | 240 | ~1,440 |
+| Maintenance events | 18 | ~68 (one pre-seed inspection per unit, plus injected failures) |
+| Risk queue | 10 scored — **HIGH 3, MEDIUM 6, LOW 1** | 60 scored, ~12 HIGH by fleet age |
+| Multi-horizon forecasts | 10 | 60 |
+| Model metrics | v1.17, 96 rows, **dataset_size 10,828** | unchanged unless training succeeds |
+| Simulation cursor | 2026-10-21, 90 days run | unchanged |
+| Users | 2 (admin, viewer) | unchanged |
 
 If the risk bands differ, something rescored the fleet — not necessarily
 wrong, but it means these numbers moved and the ones here are stale.
@@ -83,12 +88,17 @@ Every one of these is documented in the README's limitations section. The thing
 to check is **not** whether the panel has data; it is whether the panel
 **explains itself**.
 
+Three rows that used to live here have moved out of it. The ten-asset fleet
+could not reach the drift floors; sixty can, so those panels are no longer
+expected to be empty **once the database has been reseeded**. On a database
+still holding the old fleet they stay blank, and the cards say so themselves.
+
 | Panel | Why it is empty |
 |---|---|
-| Feature drift | Baseline present (4 features, 3 horizons, 0 bias categories). No PSI reading: a batch needs 20 snapshots and scoring 10 assets produces 10 rows. |
-| Prediction drift | Same 20-row floor, same 10-asset fleet. |
-| Bias drift | Needs 3 units in a category. Nine categories, at most two units in any. Impossible on this dataset, not merely unreached. |
-| "Train model" seed step | Reported **skipped, with a reason**. The data-quality gate refuses training below 500 labelled rows. Nothing is trained on demo data; the fleet is scored by the v1.17 champion baked into the ML image. |
+| Feature drift | Baseline present (4 features, 3 horizons). A PSI needs 20 snapshots in a batch — reached at 60 assets, not at 10. |
+| Prediction drift | Same floor. Populates after a scoring run on the sixty-asset fleet; blank on a stale ten-asset database. |
+| Bias drift | Needs 3 units in a category. Every category now has at least 4, so this populates after a scoring run — it was impossible, not merely unreached, on the old fleet. |
+| "Train model" seed step | Still expected to report **skipped, with a reason** — but a different reason. 1,380 labelled rows clear the 500-row data-quality gate, so it now attempts a real run and is expected to run out of memory on a 512MB instance. If it reports success, the metrics on the model page are a model trained here; read them as such. |
 | MLflow run | `MLFLOW_TRACKING_URI` unset — logging is a deliberate no-op. |
 | LLM recommendations | `GENAI_RECOMMENDATIONS=off`. Deterministic template only. |
 
