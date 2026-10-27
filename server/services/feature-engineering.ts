@@ -64,6 +64,69 @@ export interface FeatureSnapshot {
   sensorDegradationRate: number | null;
 }
 
+/** Assets built at once. The mysql2 pool defaults to ten connections. */
+export const DEFAULT_SNAPSHOT_CONCURRENCY = 6;
+
+/**
+ * How many assets to build at once, overridable per deployment.
+ *
+ * Read per call rather than at module load so a value set after import still
+ * applies -- the seed is the only caller that would want to tune it, and it
+ * runs long after this module is first imported.
+ */
+export function snapshotConcurrency(
+  env: Record<string, string | undefined> = process.env,
+): number {
+  const raw = env.SNAPSHOT_CONCURRENCY;
+  if (!raw) return DEFAULT_SNAPSHOT_CONCURRENCY;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    console.warn(
+      `[features] ignoring invalid SNAPSHOT_CONCURRENCY=${raw}; ` +
+      `using ${DEFAULT_SNAPSHOT_CONCURRENCY}`
+    );
+    return DEFAULT_SNAPSHOT_CONCURRENCY;
+  }
+  return parsed;
+}
+
+/**
+ * Map with at most `limit` promises in flight, preserving input order.
+ *
+ * Not Promise.all over the whole list: sixty concurrent callers against a
+ * ten-connection pool is queueing wearing concurrency's clothes, and it
+ * starves whatever else needs a connection -- here, the endpoint that reports
+ * seeding progress.
+ *
+ * Workers pull from a shared cursor rather than taking fixed slices, so one
+ * slow asset delays only itself. Fixed slices would leave five workers idle
+ * while the sixth finished its share.
+ */
+export async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  if (limit < 1) throw new Error(`concurrency must be at least 1, got ${limit}`);
+  if (items.length === 0) return [];
+
+  const out = new Array<R>(items.length);
+  let cursor = 0;
+
+  const worker = async () => {
+    while (true) {
+      const i = cursor++;
+      if (i >= items.length) return;
+      out[i] = await fn(items[i], i);
+    }
+  };
+
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, worker)
+  );
+  return out;
+}
+
 class FeatureEngineeringService {
   /**
    * Generate a feature snapshot for a specific equipment at a specific time
@@ -226,23 +289,51 @@ class FeatureEngineeringService {
   }
   
   /**
-   * Generate snapshots for ALL equipment at a specific time
+   * Generate snapshots for ALL equipment at a specific time.
+   *
+   * Runs assets concurrently, because this is where the seed's time goes.
+   * Building one snapshot issues about eleven sequential queries, and the
+   * loop here ran assets one after another: sixty assets across twenty-four
+   * backfill dates is on the order of 15,000 round trips taken strictly in
+   * series, against a hosted database where each one costs a network hop.
+   * Batching the writes that follow removed 1,400 of them; this is the other
+   * eight ninths.
+   *
+   * Only the scheduling changes. Each asset's queries are per-asset and
+   * independent, read the same committed state, and are bounded by the same
+   * snapshotTs, so nothing about what is computed moves -- which is what
+   * keeps this clear of the point-in-time correctness feature-engineering-pit
+   * covers. A snapshot still sees only data at or before its own timestamp.
+   *
+   * Bounded, not unleashed: the mysql2 pool defaults to ten connections and
+   * the API is still serving the seed's own status polling out of the same
+   * pool. Six leaves headroom. Raising it past the pool size does not buy
+   * concurrency, it buys queueing inside the driver plus the chance of
+   * starving the request that reports progress.
    */
   async generateSnapshotsForAllEquipment(snapshotTs: Date): Promise<FeatureSnapshot[]> {
     const allEquipment = await db.select({ id: equipment.id }).from(equipment);
-    
-    const snapshots: FeatureSnapshot[] = [];
-    
-    for (const equip of allEquipment) {
-      try {
-        const snapshot = await enhancedFeatureService.generateSnapshot(equip.id, snapshotTs);
-        snapshots.push(snapshot);
-      } catch (error) {
-        console.error(`Failed to generate snapshot for equipment ${equip.id}:`, error);
-      }
-    }
-    
-    return snapshots;
+
+    const results = await mapWithConcurrency(
+      allEquipment,
+      snapshotConcurrency(),
+      async equip => {
+        try {
+          return await enhancedFeatureService.generateSnapshot(equip.id, snapshotTs);
+        } catch (error) {
+          // Unchanged: a failed asset is logged and skipped rather than
+          // sinking the date. The caller counts what it got, so a short
+          // result is reported as a smaller number and not as success.
+          console.error(`Failed to generate snapshot for equipment ${equip.id}:`, error);
+          return undefined;
+        }
+      },
+    );
+
+    // Order follows allEquipment, as it did when this was a for loop --
+    // completion order would otherwise vary run to run and make two seeds of
+    // the same cursor harder to compare.
+    return results.filter((s): s is FeatureSnapshot => s !== undefined);
   }
   
   /**
