@@ -20,7 +20,7 @@ import { assetRiskPredictions } from "@shared/schema";
 import { enhancedFeatureService } from "./services/feature-engineering-enhanced";
 import { evaluatePMSchedule, generatePMDescription, samplePMCost, MaintenanceTypeKey } from "./services/pm-scheduler";
 import { startSeedJob, getSeedStatus, getLastSeedRun, getSystemStatus, resetSystem } from "./services/seed-orchestrator";
-import { mlFetch, describeMlFailure } from "./services/ml-client";
+import { mlFetch, describeMlFailure, ML_SLOW_TIMEOUT_MS } from "./services/ml-client";
 import { waitForMl, nudgeMlAwake, REQUEST_WAKE_BUDGET_MS, REQUEST_WAKE_PROBE_MS, RETRY_AFTER_SECONDS } from "./services/ml-wake";
 import { timingSafeEqual } from "crypto";
 import { registerTestLogin } from "./test-login";
@@ -2074,7 +2074,8 @@ export async function registerRoutes(
   // ── ML TRAINING PROXY ─────────────────────────────────────────────────────
   app.post("/api/ml/train", requireAdmin, async (req, res) => {
     try {
-      const mlRes = await mlFetch("/train", { method: "POST" }, { actorId: req.session.userId });
+      const mlRes = await mlFetch("/train", { method: "POST" },
+        { actorId: req.session.userId, timeoutMs: ML_SLOW_TIMEOUT_MS });
       if (!mlRes.ok) return res.status(mlRes.status).json({ message: await mlRes.text() });
       res.json(await mlRes.json());
     } catch (e: any) {
@@ -2143,7 +2144,8 @@ export async function registerRoutes(
 
   app.post("/api/ml/drift/compute-reference", requireAdmin, async (req, res) => {
     try {
-      const mlRes = await mlFetch("/drift/compute-reference", { method: "POST" }, { actorId: req.session.userId });
+      const mlRes = await mlFetch("/drift/compute-reference", { method: "POST" },
+        { actorId: req.session.userId, timeoutMs: ML_SLOW_TIMEOUT_MS });
       if (!mlRes.ok) return res.status(mlRes.status).json({ message: await mlRes.text() });
       res.json(await mlRes.json());
     } catch (e: any) {
@@ -2536,7 +2538,8 @@ export async function registerRoutes(
 
     if (action === "retrain") {
       try {
-        const mlRes = await mlFetch("/train", { method: "POST" }, { actorId: "agent" });
+        const mlRes = await mlFetch("/train", { method: "POST" },
+        { actorId: "agent", timeoutMs: ML_SLOW_TIMEOUT_MS });
         if (!mlRes.ok) return res.status(mlRes.status).json({ error: await mlRes.text() });
         return res.json({ action, status: "accepted", detail: await mlRes.json() });
       } catch (e: any) {
@@ -2546,7 +2549,8 @@ export async function registerRoutes(
 
     if (action === "compute_drift_reference") {
       try {
-        const mlRes = await mlFetch("/drift/compute-reference", { method: "POST" }, { actorId: "agent" });
+        const mlRes = await mlFetch("/drift/compute-reference", { method: "POST" },
+        { actorId: "agent", timeoutMs: ML_SLOW_TIMEOUT_MS });
         if (!mlRes.ok) return res.status(mlRes.status).json({ error: await mlRes.text() });
         return res.json({ action, status: "accepted", detail: await mlRes.json() });
       } catch (e: any) {

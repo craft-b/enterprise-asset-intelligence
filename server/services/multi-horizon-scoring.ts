@@ -21,7 +21,7 @@ import { db } from "../db";
 import { equipmentFailurePredictions } from "../../shared/schema";
 import { enhancedFeatureService } from "./feature-engineering-enhanced";
 import { isColdStart, coldStartMultiHorizon } from "./imputation";
-import { mlFetch, describeMlFailure } from "./ml-client";
+import { mlFetch, describeMlFailure, ML_SLOW_TIMEOUT_MS } from "./ml-client";
 // One assembly site, shared with the predict-all path. Re-exported because
 // routes.ts and index.ts have always imported it from here.
 import { toMlSnapshot } from "./ml-snapshot-payload";
@@ -134,11 +134,14 @@ export async function scoreFleetMultiHorizon(
   // suspended container to ask it nothing.
   if (toScore.length > 0) {
     try {
+      // Scoring the whole fleet in one request, so this takes the long
+      // budget rather than the default: sixty assets is more work than the
+      // default was sized for, and an abort here empties the risk queue.
       const res = await mlFetch("/predict/multi-horizon/batch", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ snapshots: toScore }),
-      });
+      }, { timeoutMs: ML_SLOW_TIMEOUT_MS });
 
       if (!res.ok) {
         const detail = await describeMlFailure(res, "/predict/multi-horizon/batch");

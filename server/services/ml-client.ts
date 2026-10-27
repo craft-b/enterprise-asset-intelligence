@@ -79,20 +79,92 @@ export function mlHeaders(opts?: { json?: boolean; actorId?: number | string | n
 }
 
 /**
+ * Read a millisecond budget from the environment.
+ *
+ * The right value is a property of the deployment rather than the code, and an
+ * unparseable one must not silently mean "no timeout" -- which is the state
+ * this module was in.
+ */
+export function envMs(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    console.warn(`[ML] ignoring invalid ${name}=${raw}; using ${fallback}ms`);
+    return fallback;
+  }
+  return parsed;
+}
+
+/**
+ * How long any ML request may take before Node gives up on it.
+ *
+ * This existed nowhere, and the absence was not visible as an error. Every
+ * call through here was a bare fetch(), so a suspended instance held the
+ * request open for as long as the host felt like holding it: the ML dashboard
+ * fired three drift queries, the browser waited, and because the client sets
+ * `retry: false` and `staleTime: Infinity` the query never settled and never
+ * retried. Observed at 1,350 seconds of spinner with the service in fact
+ * healthy and answering a direct probe in 62.
+ *
+ * Nothing reported a fault, because nothing had decided what too long was.
+ * The default is sized for the measured cold start (~62s) plus headroom, and
+ * every route's existing catch turns an expiry into "ML service unreachable",
+ * which the dashboard already renders as an error rather than as waiting.
+ */
+const ML_FETCH_TIMEOUT_MS = envMs("ML_FETCH_TIMEOUT_MS", 90_000);
+
+/**
+ * The budget for calls that are supposed to take a long time: fitting a model,
+ * recomputing a drift reference, scoring a whole fleet. Applied only where a
+ * call site asks for it, so the ordinary default stays tight enough to be a
+ * real signal.
+ */
+export const ML_SLOW_TIMEOUT_MS = envMs("ML_SLOW_TIMEOUT_MS", 300_000);
+
+/**
  * fetch() wrapper for the ML service. Prepends ML_SERVICE_URL and injects the
  * service token (+ optional actor id). Pass a relative path like "/train".
+ *
+ * Bounded by ML_FETCH_TIMEOUT_MS unless the caller passes `timeoutMs`, or
+ * brings its own `signal` -- ml-wake and the prediction path already manage
+ * their own deadlines, and taking those over would shorten budgets that were
+ * chosen deliberately.
  */
 export async function mlFetch(
   path: string,
   init: RequestInit = {},
-  opts?: { actorId?: number | string | null },
+  opts?: { actorId?: number | string | null; timeoutMs?: number },
 ): Promise<Response> {
   const hasBody = init.body !== undefined && init.body !== null;
   const headers = {
     ...mlHeaders({ json: hasBody, actorId: opts?.actorId }),
     ...(init.headers as Record<string, string> | undefined),
   };
-  return fetch(`${ML_SERVICE_URL}${path}`, { ...init, headers });
+  const url = `${ML_SERVICE_URL}${path}`;
+
+  if (init.signal) return fetch(url, { ...init, headers });
+
+  const budget = opts?.timeoutMs ?? ML_FETCH_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), budget);
+  try {
+    return await fetch(url, { ...init, headers, signal: controller.signal });
+  } catch (err: any) {
+    // An AbortError's own message is "This operation was aborted", which tells
+    // a reader nothing about which call gave up or how long it waited. The
+    // routes interpolate e.message into their response, so it has to say.
+    if (err?.name === "AbortError") {
+      throw new Error(
+        `ML request to ${path} exceeded ${budget}ms and was aborted. The ` +
+        `service may be suspended (a cold start measures ~60s) or the call ` +
+        `may need a longer budget via ML_FETCH_TIMEOUT_MS.`
+      );
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export { ML_SERVICE_URL };

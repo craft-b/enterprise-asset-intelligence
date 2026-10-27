@@ -26,7 +26,7 @@ import { seedInvoices, seedEquipmentSwaps } from "../seeds/billing";
 import { seedMaintenanceConfig } from "../seeds/maintenance-config";
 import { featureEngineeringService } from "./feature-engineering";
 import { predictiveMaintenanceService } from "./predictive-maintenance-fixed";
-import { mlFetch, describeMlFailure } from "./ml-client";
+import { mlFetch, describeMlFailure, ML_SLOW_TIMEOUT_MS } from "./ml-client";
 import { waitForMl, nudgeMlAwake } from "./ml-wake";
 import { registerChampionMetrics } from "./champion-metrics";
 import { scoreFleetMultiHorizon } from "./multi-horizon-scoring";
@@ -1099,7 +1099,8 @@ async function trainAndPoll(timeoutMs = 420_000): Promise<void> {
   // Give a suspended instance a chance to start before judging it.
   if (!(await waitForMlService(7, ML_WAKE_TIMEOUT_MS))) throw new Error(ML_ASLEEP);
 
-  const trainRes = await mlFetch("/train", { method: "POST" }, { actorId: "seed" });
+  const trainRes = await mlFetch("/train", { method: "POST" },
+    { actorId: "seed", timeoutMs: ML_SLOW_TIMEOUT_MS });
   if (!trainRes.ok) {
     // Not the raw body: a misdirected request returns an HTML page, and
     // interpolating it put an entire web page into the seeding dialog.
@@ -1151,7 +1152,8 @@ async function bootstrapDriftReference(): Promise<void> {
   // suspension gets a gateway error from the host, not from the service.
   if (!(await waitForMlService(9, ML_WAKE_TIMEOUT_MS))) throw new Error(ML_ASLEEP);
 
-  const res = await mlFetch("/drift/compute-reference", { method: "POST" }, { actorId: "seed" });
+  const res = await mlFetch("/drift/compute-reference", { method: "POST" },
+    { actorId: "seed", timeoutMs: ML_SLOW_TIMEOUT_MS });
   if (!res.ok) {
     // Not the raw body. This threw `${await res.text()}` until a sleeping
     // container answered with a full HTML 502 page, which was then rendered
