@@ -181,8 +181,9 @@ function DriftMonitorCard() {
                     {" "}{drift.reference.horizons} prediction horizon{drift.reference.horizons === 1 ? "" : "s"},
                     {" "}{drift.reference.bias_categories} bias categor{drift.reference.bias_categories === 1 ? "y" : "ies"}.
                     {" "}No PSI reading has been taken yet: a scoring batch needs at least{" "}
-                    {drift.min_batch_size ?? 20} snapshots, and a fleet smaller than that
-                    cannot reach it in one run.
+                    {drift.min_batch_size ?? 20} snapshots. The seeded fleet is sixty, so a
+                    scoring run clears that floor; a database still holding the earlier
+                    ten-asset yard cannot reach it at all.
                   </>
                 ) : (
                   <>

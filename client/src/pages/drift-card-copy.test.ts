@@ -103,11 +103,23 @@ describe("each empty state names its own reason", () => {
   });
 
   it("feature drift still distinguishes its three states", () => {
-    // This card was already correct. Guarding it so a future edit does not
-    // flatten the three cases back into one message.
+    // Guarding the branch so a future edit does not flatten the three cases
+    // back into one message.
     expect(CODE).toContain("No reference distribution loaded");
     expect(CODE).toContain("Baseline established");
     expect(CODE).toContain("No PSI reading has been taken yet");
+  });
+
+  it("feature drift does not still describe the fleet as too small", () => {
+    // This card was called "already correct" and left untouched while the
+    // other two were rewritten, because it states its floor dynamically from
+    // min_batch_size and reads as generic. The sentence after the floor was
+    // not generic -- "a fleet smaller than that cannot reach it in one run"
+    // is the same ten-asset claim, and it survived a grep for "ten assets"
+    // and "nine categories" by not containing either. It was caught in a
+    // screenshot rather than by a test.
+    expect(CODE).not.toContain("cannot reach it in one run");
+    expect(CODE).toContain("The seeded fleet is sixty, so a scoring run clears that floor");
   });
 });
 
