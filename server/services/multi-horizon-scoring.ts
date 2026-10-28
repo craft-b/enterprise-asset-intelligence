@@ -43,12 +43,24 @@ export interface MultiHorizonOutcome {
   attempted: number;
   /** False when the ML service could not be reached at all. */
   serviceAvailable: boolean;
+  /**
+   * True when the host's CDN shed the request rather than the service
+   * refusing it.
+   *
+   * Separate from serviceAvailable because the remedy is different and the
+   * wait is longer: nothing is starting up, there is nothing to nudge, and
+   * sending another request promptly is what keeps the limit in force.
+   */
+  rateLimited?: boolean;
   /** The first thing that went wrong, for reporting. */
   firstError?: string;
 }
 
 /** Gateway statuses mean the host answered, not the service. */
 const GATEWAY_STATUSES = new Set([502, 503, 504]);
+
+/** The CDN shedding load in front of the host. */
+const RATE_LIMITED = 429;
 
 /** Write one scored asset to equipment_failure_predictions. */
 async function store(result: MultiHorizonResult): Promise<void> {
@@ -86,7 +98,7 @@ export async function scoreFleetMultiHorizon(
 ): Promise<MultiHorizonOutcome> {
   const attempted = equipmentIds.length;
   if (attempted === 0) {
-    return { results: [], attempted: 0, serviceAvailable: true };
+    return { results: [], attempted: 0, serviceAvailable: true, rateLimited: false };
   }
 
   const snapshotDate = await getSimulationDate();
@@ -144,6 +156,7 @@ export async function scoreFleetMultiHorizon(
   async function finish(
     results: MultiHorizonResult[],
     serviceAvailable: boolean,
+    rateLimited = false,
   ): Promise<MultiHorizonOutcome> {
     for (const result of results) {
       try {
@@ -153,7 +166,7 @@ export async function scoreFleetMultiHorizon(
         firstError ??= `could not store equipment ${result.equipmentId}: ${err?.message ?? err}`;
       }
     }
-    return { results, attempted, serviceAvailable, firstError };
+    return { results, attempted, serviceAvailable, rateLimited, firstError };
   }
 
   let modelScored: MultiHorizonResult[] = [];
@@ -177,6 +190,11 @@ export async function scoreFleetMultiHorizon(
         firstError ??= detail;
         // A gateway status is the host saying the service is not up, which is
         // a different situation from the service rejecting the request.
+        // A 429 is not the service saying no -- it is the edge in front of it
+        // refusing to ask. Reported as unavailable so the caller retries
+        // rather than announcing "scored 0 of 60", which reads as the model
+        // having rejected the whole fleet.
+        if (res.status === RATE_LIMITED) return finish(ruleScored, false, true);
         return finish(ruleScored, !GATEWAY_STATUSES.has(res.status));
       }
 

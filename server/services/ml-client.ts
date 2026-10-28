@@ -204,6 +204,16 @@ export async function describeMlFailure(res: Response, path: string): Promise<st
           " — the ML service did not respond. It may be waking from idle," +
           " or it ran out of memory and restarted. Training in particular" +
           " needs more memory than a small instance has.";
+      } else if (res.status === 429) {
+        // Checked before the generic HTML branch, which would otherwise send
+        // someone to re-verify a correct ML_SERVICE_URL -- the same wrong
+        // advice the gateway statuses above were already fixed for. A 429
+        // arrives as a CDN challenge page, so it IS HTML and it IS from the
+        // right host; the address has nothing to do with it.
+        detail +=
+          " — the host's CDN is rate-limiting us, not the ML service. This is" +
+          " the free tier shedding load after too many requests in a short" +
+          " window. It clears on its own; the call is retried automatically.";
       } else if (contentType.includes("html")) {
         detail +=
           " — that is a web page, not the ML service. Check ML_SERVICE_URL" +

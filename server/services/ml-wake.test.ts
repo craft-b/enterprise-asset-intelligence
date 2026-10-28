@@ -137,31 +137,39 @@ describe("the nudge that holds a cold start open", () => {
 });
 
 describe("wakeAndWait", () => {
-  it("nudges before it probes", async () => {
-    // The ordering is the whole fix. Every request path probed for twenty
-    // seconds and only nudged once that failed -- and each probe aborts at
-    // eight seconds, tearing down the request holding the boot open. Two
-    // teardowns per request, five client retries, and a service that never
-    // comes up however long anyone waits.
-    mlFetch.mockResolvedValue({ ok: false });
-    await wakeAndWait(150, 50);
+  it("asks once and leaves an unbounded nudge holding the boot open", async () => {
+    // It used to probe for twenty seconds in eight-second slices and only
+    // nudge after that failed. The loop could not work: the wake is held open
+    // for 62.9s and then fails, so every probe inside the budget finds the
+    // same "not yet" -- while costing a request at an edge that answers a
+    // burst with 429 challenge pages.
+    mlFetch.mockResolvedValue({ ok: false, status: 503 });
+    await wakeAndWait(20_000, 8_000);
 
-    expect(mlFetch.mock.calls.length).toBeGreaterThanOrEqual(2);
-    const first = mlFetch.mock.calls[0] as [string, unknown, { timeoutMs?: number } | undefined];
-    // The first call is the unbounded nudge; the probes that follow carry a
-    // signal instead and must not be unbounded.
-    expect(first[2]?.timeoutMs).toBe(Infinity);
-    for (const call of mlFetch.mock.calls.slice(1)) {
-      expect((call[2] as { timeoutMs?: number } | undefined)?.timeoutMs).not.toBe(Infinity);
-    }
+    expect(mlFetch).toHaveBeenCalledTimes(2);
+    const [, , probeOpts] = mlFetch.mock.calls[0] as [string, unknown, { timeoutMs?: number } | undefined];
+    const [, , nudgeOpts] = mlFetch.mock.calls[1] as [string, unknown, { timeoutMs?: number } | undefined];
+    // The probe is bounded; the nudge that follows must not be, or it tears
+    // down the request the host is using to finish starting.
+    expect(probeOpts?.timeoutMs).not.toBe(Infinity);
+    expect(nudgeOpts?.timeoutMs).toBe(Infinity);
   });
 
-  it("still reports true when the service answers", async () => {
+  it("does not nudge into a rate limit", async () => {
+    // Nothing is booting, so there is nothing to help along, and another
+    // request now is exactly what keeps the limit in force.
+    mlFetch.mockResolvedValue({ ok: false, status: 429 });
+    await expect(wakeAndWait(20_000, 8_000)).resolves.toBe(false);
+    expect(mlFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not nudge a service that is already up", async () => {
     mlFetch.mockResolvedValue({ ok: true });
-    await expect(wakeAndWait(5_000, 1_000)).resolves.toBe(true);
+    await expect(wakeAndWait(20_000, 8_000)).resolves.toBe(true);
+    expect(mlFetch).toHaveBeenCalledTimes(1);
   });
 
-  it("reports false without throwing when the budget runs out", async () => {
+  it("reports false without throwing when the service is down", async () => {
     mlFetch.mockResolvedValue({ ok: false });
     await expect(wakeAndWait(150, 50)).resolves.toBe(false);
   });

@@ -21,7 +21,7 @@ import { enhancedFeatureService } from "./services/feature-engineering-enhanced"
 import { evaluatePMSchedule, generatePMDescription, samplePMCost, MaintenanceTypeKey } from "./services/pm-scheduler";
 import { startSeedJob, getSeedStatus, getLastSeedRun, getSystemStatus, resetSystem } from "./services/seed-orchestrator";
 import { mlFetch, describeMlFailure, ML_SLOW_TIMEOUT_MS } from "./services/ml-client";
-import { wakeAndWait, nudgeMlAwake, REQUEST_WAKE_BUDGET_MS, REQUEST_WAKE_PROBE_MS, RETRY_AFTER_SECONDS } from "./services/ml-wake";
+import { wakeAndWait, nudgeMlAwake, REQUEST_WAKE_BUDGET_MS, REQUEST_WAKE_PROBE_MS, RETRY_AFTER_SECONDS, RATE_LIMIT_RETRY_SECONDS } from "./services/ml-wake";
 import { timingSafeEqual } from "crypto";
 import { registerTestLogin } from "./test-login";
 import { getSimulationDate } from "./services/simulation-clock";
@@ -1160,13 +1160,19 @@ export async function registerRoutes(
       const outcome = await scoreFleetMultiHorizon(equipmentIds);
 
       if (!outcome.serviceAvailable) {
-        nudgeMlAwake();
+        // A rate limit is not a cold start. Nothing is booting, so there is
+        // nothing to nudge -- and another request now is precisely what keeps
+        // the limit in force. Say what it is and wait longer.
+        const limited = outcome.rateLimited === true;
+        if (!limited) nudgeMlAwake();
         return res.status(503).json({
-          message:
-            'The ML service is waking up — on free hosting it suspends when idle. ' +
-            'Retrying automatically.',
+          message: limited
+            ? 'The ML host is rate-limiting requests — free hosting sheds load ' +
+              'when it sees a burst. Waiting it out and retrying automatically.'
+            : 'The ML service is waking up — on free hosting it suspends when idle. ' +
+              'Retrying automatically.',
           waking: true,
-          retryAfterSeconds: RETRY_AFTER_SECONDS,
+          retryAfterSeconds: limited ? RATE_LIMIT_RETRY_SECONDS : RETRY_AFTER_SECONDS,
           // Assets a rule scored need no ML service, and they are stored even
           // on this path. Saying how many lets the client refresh rather than
           // leave forecasts sitting unread in the database until a reload.

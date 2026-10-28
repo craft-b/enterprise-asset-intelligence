@@ -54,6 +54,14 @@ export const REQUEST_WAKE_PROBE_MS = 8_000;
 /** Seconds a client should wait before retrying a "still waking" response. */
 export const RETRY_AFTER_SECONDS = 20;
 
+/**
+ * Seconds to wait out a rate limit.
+ *
+ * Longer than a cold-start retry, because the two are opposites: a waking
+ * service is helped along by a request, and a rate-limited one is not.
+ */
+export const RATE_LIMIT_RETRY_SECONDS = 60;
+
 /** First pause between probes on a short budget; it doubles from here. */
 const FIRST_GAP_MS = 1_500;
 
@@ -197,29 +205,43 @@ export function nudgeMlAwake(): void {
 }
 
 /**
- * Start the service waking, then wait a little for it.
+ * Decide whether the ML service can serve this request, and start it if not.
  *
- * The order is the point, and it was the wrong way round on every request
- * path: probe for twenty seconds, and only once that failed, nudge. Each
- * probe aborts at eight seconds, and an aborted probe tears down the request
- * the host was using to hold the cold start open -- the exact failure
- * documented in nudgeMlAwake, there at 120 seconds and here at 8. So a
- * suspended service got two teardowns per request, and with the client
- * retrying five times, ten or more boots each abandoned a few seconds in. A
- * service in that state never comes up, however long anyone waits, which is
- * what "the ML service is not starting up" was.
+ * One probe, then a nudge. It used to be a twenty-second loop, and the loop
+ * was waste built on a wrong assumption -- that polling makes a cold start
+ * arrive sooner. It does not. Measured against the deployed service, the wake
+ * is held open for 62.9 seconds and then fails with 502, and every request
+ * after that answers in under half a second. Nothing observable happens in
+ * between, so the five or so probes squeezed into the budget could only ever
+ * find the same "not yet" the first one found.
  *
- * Nudging first means one unbounded request is holding the boot open from the
- * first moment. The probes that follow come and go on their own connections
- * without disturbing it, so the budget here is just how long this request is
- * willing to wait before answering "still waking" -- and the boot carries on
- * either way, so the client's retry lands on a service that is genuinely
- * further along than when it started.
+ * They were not free. A suspended service fast-fails in 0.28s, so the budget
+ * filled with about a dozen probes, each client retry sent a dozen more, and
+ * the banner polled /api/ml/health alongside them -- roughly thirty requests
+ * a minute at one free-tier edge from a single open tab. The host's CDN
+ * answered that with 429 challenge pages, which the scoring request then
+ * reported as "Scored 0 of 60 assets". The wake machinery had become the
+ * thing standing between the fleet and its forecast.
+ *
+ * So: ask once, whether it is up. If it is, proceed. If it is not, leave one
+ * unbounded request holding the boot open and let the client come back. Two
+ * requests per attempt instead of thirteen.
+ *
+ * The budget parameter is kept so call sites and their tests read unchanged;
+ * there is no longer a loop for it to bound.
  */
 export async function wakeAndWait(
-  budgetMs: number = REQUEST_WAKE_BUDGET_MS,
+  _budgetMs: number = REQUEST_WAKE_BUDGET_MS,
   probeMs: number = REQUEST_WAKE_PROBE_MS,
 ): Promise<boolean> {
+  const result = await probe(probeMs);
+  if (result === "up") return true;
+
+  // Do not nudge into a rate limit. There is nothing booting to help along,
+  // and another request now is what keeps the limit in force.
+  if (result === "rate-limited") return false;
+
   nudgeMlAwake();
-  return waitForMl(budgetMs, probeMs);
+  return false;
 }
+

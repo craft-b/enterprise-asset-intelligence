@@ -165,7 +165,7 @@ describe("a healthy ML service", () => {
 
   it("stores nothing and calls nothing for an empty fleet", async () => {
     const outcome = await scoreFleetMultiHorizon([]);
-    expect(outcome).toEqual({ results: [], attempted: 0, serviceAvailable: true });
+    expect(outcome).toEqual({ results: [], attempted: 0, serviceAvailable: true, rateLimited: false });
     expect(mlFetch).not.toHaveBeenCalled();
     expect(inserted).toHaveLength(0);
   });
@@ -204,5 +204,45 @@ describe("snapshot generation", () => {
 
     expect(peak).toBeLessThanOrEqual(4);
     expect(inserted).toHaveLength(60);
+  });
+});
+
+describe("the host's CDN shedding load", () => {
+  it("is reported as retryable, not as the model rejecting the fleet", async () => {
+    // What a sixty-asset run actually produced: "Scored 0 of 60 assets.
+    // https://eai-ml.onrender.com/predict/multi-horizon/batch returned 429
+    // Too Many Requests (text/html)". A 429 is not the service answering --
+    // it is the edge in front of it declining to ask. Reported as a refusal
+    // it reads as the model having rejected all sixty, and the run stops
+    // instead of waiting out a limit that clears on its own.
+    const ids = mixedFleet();
+    mlFetch.mockResolvedValue({ ok: false, status: 429 });
+
+    const outcome = await scoreFleetMultiHorizon(ids);
+
+    expect(outcome.rateLimited).toBe(true);
+    expect(outcome.serviceAvailable).toBe(false);
+  });
+
+  it("is not confused with a suspended service", async () => {
+    // The remedies are opposite. A waking service is helped along by another
+    // request; a rate-limited one is not, so nothing nudges it and the wait
+    // is longer.
+    const ids = mixedFleet();
+    mlFetch.mockResolvedValue({ ok: false, status: 503 });
+
+    const outcome = await scoreFleetMultiHorizon(ids);
+
+    expect(outcome.serviceAvailable).toBe(false);
+    expect(outcome.rateLimited).toBe(false);
+  });
+
+  it("still keeps the forecasts it had already computed", async () => {
+    const ids = mixedFleet();
+    mlFetch.mockResolvedValue({ ok: false, status: 429 });
+
+    await scoreFleetMultiHorizon(ids);
+
+    expect(inserted.map(r => r.equipmentId).sort()).toEqual([3, 4]);
   });
 });
