@@ -195,7 +195,7 @@ async def health():
 
 
 @app.post("/predict/multi-horizon", tags=["Inference"])
-async def predict_multi_horizon(snapshot: SnapshotInput):
+def predict_multi_horizon(snapshot: SnapshotInput):
     """
     Multi-horizon failure prediction for a single equipment snapshot.
     Returns separate calibrated risk assessments for 10d, 30d, and 60d windows.
@@ -233,9 +233,33 @@ async def predict_multi_horizon(snapshot: SnapshotInput):
 
 
 @app.post("/predict/multi-horizon/batch", tags=["Inference"])
-async def predict_multi_horizon_batch(batch: BatchInput):
+def predict_multi_horizon_batch(batch: BatchInput):
     """
     Batch multi-horizon predictions for multiple equipment items.
+
+    `def`, deliberately, not `async def`.
+
+    FastAPI runs a non-async path operation in a threadpool and an async one
+    directly on the event loop. Every endpoint in this file was async, and
+    every one of them except the training trigger does blocking work and
+    awaits nothing -- so each held the loop for its whole duration.
+
+    This handler is the expensive one. Scoring is a sequential Python loop and
+    each asset costs three SHAP TreeExplainer calls, one per horizon, so
+    thirty assets is ninety of them, plus three drift checks, plus the same
+    again when a challenger is loaded for shadow scoring. While that ran,
+    nothing else in this process could be served -- including /health.
+
+    Which is how asking for a forecast took the service down. The host polls
+    /health to decide whether the container is alive; a batch that blocks the
+    loop past that timeout looks dead, so the container is restarted out from
+    under the request. The caller sees a 502, concludes the service is
+    suspended, waits, retries, and starts the whole cycle again. The service
+    was never suspended. It was killed, every time, for the crime of working.
+
+    trigger_training already knew this -- it hands its work to
+    run_in_executor. The lesson just had not reached the second-slowest
+    endpoint in the file.
     Runs all three drift checks post-prediction (non-blocking):
       - Feature drift (PSI on input distributions)
       - Prediction drift (PSI on output score distributions per horizon)
@@ -305,7 +329,7 @@ async def predict_multi_horizon_batch(batch: BatchInput):
 
 
 @app.post("/predict/project", tags=["Inference"])
-async def project_failure_trajectory(snapshot: SnapshotInput):
+def project_failure_trajectory(snapshot: SnapshotInput):
     """
     Forward projection — ages features analytically and returns a 60-day
     failure probability curve plus threshold crossing estimates.
@@ -328,7 +352,7 @@ async def project_failure_trajectory(snapshot: SnapshotInput):
 
 
 @app.get("/models/feature-importance", tags=["Model"])
-async def feature_importance():
+def feature_importance():
     """Returns feature importance and hyperparameters for the 30d model (canonical horizon)."""
     if not mh_predictor:
         raise HTTPException(status_code=503, detail="Multi-horizon model not loaded")
@@ -340,7 +364,7 @@ async def feature_importance():
 
 
 @app.get("/models/multi-horizon/metrics", tags=["Model"])
-async def multi_horizon_model_metrics():
+def multi_horizon_model_metrics():
     """
     The loaded models' own evaluation metadata, per horizon, verbatim.
 
@@ -364,7 +388,7 @@ async def multi_horizon_model_metrics():
 
 
 @app.get("/models/multi-horizon/info", tags=["Model"])
-async def multi_horizon_model_info():
+def multi_horizon_model_info():
     """Returns loaded model versions and performance metrics per horizon."""
     if not mh_predictor:
         raise HTTPException(status_code=503, detail="Multi-horizon model not loaded")
@@ -384,7 +408,7 @@ async def multi_horizon_model_info():
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.get("/drift/latest", tags=["Drift"])
-async def drift_latest():
+def drift_latest():
     """
     Returns the most recent PSI result per monitored feature.
     Use this to build a drift monitoring dashboard or alert feed.
@@ -418,7 +442,7 @@ async def drift_latest():
 
 
 @app.post("/drift/compute-reference", tags=["Drift"])
-async def drift_compute_reference():
+def drift_compute_reference():
     """
     Bootstrap all three drift reference distributions from current DB state:
       - Feature distribution from asset_feature_snapshots
@@ -435,7 +459,7 @@ async def drift_compute_reference():
 
 
 @app.get("/drift/prediction", tags=["Drift"])
-async def drift_prediction_latest():
+def drift_prediction_latest():
     """
     Latest prediction drift metrics per horizon (10d, 30d, 60d).
     PSI on output score distributions — detects shifts in model confidence
@@ -454,7 +478,7 @@ async def drift_prediction_latest():
 
 
 @app.get("/drift/bias", tags=["Drift"])
-async def drift_bias_latest():
+def drift_bias_latest():
     """
     Latest bias drift metrics per equipment category (30d horizon).
     Detects systematic over/under-prediction for specific asset types
@@ -472,7 +496,7 @@ async def drift_bias_latest():
 
 
 @app.get("/drift/summary", tags=["Drift"])
-async def drift_summary():
+def drift_summary():
     """
     Consolidated drift summary across all three layers:
       - data_drift:       feature PSI (covariate shift)
@@ -525,7 +549,7 @@ async def drift_summary():
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.get("/data-quality/report", tags=["Data Quality"])
-async def data_quality_report():
+def data_quality_report():
     """
     Run data quality checks against the current labeled training dataset in DB.
     Returns a structured report with per-check status (PASS / WARN / FAIL) and
@@ -560,7 +584,7 @@ async def data_quality_report():
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.get("/models/registry", tags=["Champion-Challenger"])
-async def models_registry():
+def models_registry():
     """
     Returns current champion/challenger state and the full promotion history.
     Champion = production model whose predictions are written to the DB.
@@ -578,7 +602,7 @@ async def models_registry():
 
 
 @app.get("/models/champion-challenger/compare", tags=["Champion-Challenger"])
-async def champion_challenger_compare():
+def champion_challenger_compare():
     """
     Side-by-side metric comparison between champion and challenger.
     Uses stored metadata from training (holdout ROC-AUC, recall, PR-AUC per horizon).
@@ -628,7 +652,7 @@ async def champion_challenger_compare():
 
 
 @app.post("/models/promote", tags=["Champion-Challenger"])
-async def promote_challenger_endpoint():
+def promote_challenger_endpoint():
     """
     Promote the current challenger to champion.
     - Old champion is retired (artifacts preserved in registry/).
@@ -780,7 +804,7 @@ async def trigger_training(background_tasks: BackgroundTasks):
 
 
 @app.get("/train/status", tags=["Training"])
-async def training_status():
+def training_status():
     """Poll for training progress. Returns log lines and running state."""
     return {
         "running":     _training_status["running"],
