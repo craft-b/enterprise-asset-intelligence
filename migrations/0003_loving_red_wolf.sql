@@ -2,7 +2,15 @@
 -- out of ml-service/registry/*.json and into the database. See the table's
 -- comment in shared/schema.ts for why a file could not hold it.
 --
--- Both CREATE TABLEs are IF NOT EXISTS, and so is the index.
+-- Both CREATE TABLEs are IF NOT EXISTS, which is standard MySQL.
+--
+-- The index is not, and that is why this file has only ever applied to
+-- TiDB. `CREATE INDEX IF NOT EXISTS` is a TiDB extension; stock MySQL
+-- rejects it with ER_PARSE_ERROR 1064. Nothing noticed, because the only
+-- database these migrations had ever run against was TiDB -- not CI, which
+-- had no database, and not docker-compose, which nobody had run. The
+-- guarded form below is the portable equivalent and keeps the idempotence
+-- this file deliberately has.
 --
 -- seed_runs appears here because it was created directly against the deployed
 -- database rather than through a migration, so it exists in production while
@@ -36,4 +44,19 @@ CREATE TABLE IF NOT EXISTS `seed_runs` (
 	CONSTRAINT `seed_runs_id` PRIMARY KEY(`id`)
 );
 --> statement-breakpoint
-CREATE INDEX IF NOT EXISTS `idx_computed_at` ON `drift_reference` (`computed_at`);
+SET @idx_exists := (
+	SELECT COUNT(*) FROM information_schema.STATISTICS
+	WHERE table_schema = DATABASE()
+	  AND table_name = 'drift_reference'
+	  AND index_name = 'idx_computed_at'
+);
+--> statement-breakpoint
+SET @idx_sql := IF(@idx_exists = 0,
+	'CREATE INDEX `idx_computed_at` ON `drift_reference` (`computed_at`)',
+	'DO 0');
+--> statement-breakpoint
+PREPARE create_idx FROM @idx_sql;
+--> statement-breakpoint
+EXECUTE create_idx;
+--> statement-breakpoint
+DEALLOCATE PREPARE create_idx;
