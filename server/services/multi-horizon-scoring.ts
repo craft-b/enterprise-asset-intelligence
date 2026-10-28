@@ -62,6 +62,69 @@ const GATEWAY_STATUSES = new Set([502, 503, 504]);
 /** The CDN shedding load in front of the host. */
 const RATE_LIMITED = 429;
 
+/**
+ * Largest group of assets sent to the ML service in one request.
+ *
+ * The service scores a batch in a sequential Python loop, and each asset
+ * costs three SHAP TreeExplainer calls -- one per horizon. Sixty assets is
+ * 180 of them, plus three drift checks, plus the same again if a challenger
+ * is loaded for shadow scoring. All of it synchronous inside an `async def`,
+ * so it blocks the event loop: while that batch runs, the service cannot
+ * answer /health, and a request long enough also meets the host's proxy
+ * timeout and comes back 502.
+ *
+ * Which is how "run the forecast" produced "the ML service is waking up".
+ * The service was neither asleep nor broken. It was busy doing exactly what
+ * had been asked of it, and every way we had of checking on it was a request
+ * it was too busy to answer.
+ */
+const MAX_SCORE_BATCH = Number(process.env.ML_SCORE_BATCH_SIZE ?? 30);
+
+/**
+ * The ML service's own floor: it skips every drift check below this.
+ *
+ * Mirrors MIN_BATCH_SIZE in ml-service/engine/drift_detector.py. Splitting a
+ * fleet without respecting it would quietly switch off the three drift cards
+ * this dashboard exists to show -- the request would succeed, the forecasts
+ * would store, and the only visible difference would be the cards going back
+ * to explaining themselves.
+ */
+const DRIFT_MIN_BATCH = Number(process.env.ML_DRIFT_MIN_BATCH ?? 20);
+
+/**
+ * Split into groups no larger than `maxSize`, as evenly as possible, and
+ * never into more groups than `minSize` allows.
+ *
+ * Evenly, rather than filling each group before starting the next: greedy
+ * chunking of fifty assets at thirty leaves a tail of twenty, and of
+ * forty-five a tail of fifteen, which the drift checks drop. Splitting
+ * evenly gives 25/25 and 23/22.
+ *
+ * `minSize` is the second constraint, and it wins. A thirty-five asset fleet
+ * split at thirty gives 18/17 -- two groups, both under the drift floor, so
+ * every card goes blank while both requests report success. When the two
+ * constraints cannot both hold, the fleet goes in one request: a batch that
+ * is slower than we would like still produces an answer, and one that is
+ * silently undrifted does not.
+ */
+export function chunkEvenly<T>(items: T[], maxSize: number, minSize = 0): T[][] {
+  if (items.length === 0) return [];
+  let groups = Math.ceil(items.length / Math.max(1, maxSize));
+  if (minSize > 0) {
+    groups = Math.min(groups, Math.max(1, Math.floor(items.length / minSize)));
+  }
+  const out: T[][] = [];
+  let start = 0;
+  for (let i = 0; i < groups; i++) {
+    // Hand the remainder to the earliest groups, so sizes differ by at most
+    // one and the last group is never the small one.
+    const size = Math.ceil((items.length - start) / (groups - i));
+    out.push(items.slice(start, start + size));
+    start += size;
+  }
+  return out;
+}
+
 /** Write one scored asset to equipment_failure_predictions. */
 async function store(result: MultiHorizonResult): Promise<void> {
   const p = result.predictions;
@@ -169,47 +232,64 @@ export async function scoreFleetMultiHorizon(
     return { results, attempted, serviceAvailable, rateLimited, firstError };
   }
 
-  let modelScored: MultiHorizonResult[] = [];
+  const modelScored: MultiHorizonResult[] = [];
 
   // Only call the service if it has something to score. The inline version
   // posted an empty batch when every asset was rule-scored, which woke a
   // suspended container to ask it nothing.
   if (toScore.length > 0) {
-    try {
-      // Scoring the whole fleet in one request, so this takes the long
-      // budget rather than the default: sixty assets is more work than the
-      // default was sized for, and an abort here empties the risk queue.
-      const res = await mlFetch("/predict/multi-horizon/batch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ snapshots: toScore }),
-      }, { timeoutMs: ML_SLOW_TIMEOUT_MS });
+    const groups = chunkEvenly(toScore, MAX_SCORE_BATCH, DRIFT_MIN_BATCH);
+    let offset = 0;
 
-      if (!res.ok) {
-        const detail = await describeMlFailure(res, "/predict/multi-horizon/batch");
-        firstError ??= detail;
-        // A gateway status is the host saying the service is not up, which is
-        // a different situation from the service rejecting the request.
-        // A 429 is not the service saying no -- it is the edge in front of it
-        // refusing to ask. Reported as unavailable so the caller retries
-        // rather than announcing "scored 0 of 60", which reads as the model
-        // having rejected the whole fleet.
-        if (res.status === RATE_LIMITED) return finish(ruleScored, false, true);
-        return finish(ruleScored, !GATEWAY_STATUSES.has(res.status));
+    for (const group of groups) {
+      const ids = toScoreIds.slice(offset, offset + group.length);
+      offset += group.length;
+
+      try {
+        // Still the long budget: a group is shorter than the whole fleet but
+        // it is not quick, and an abort here throws away work already done.
+        const res = await mlFetch("/predict/multi-horizon/batch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ snapshots: group }),
+        }, { timeoutMs: ML_SLOW_TIMEOUT_MS });
+
+        if (!res.ok) {
+          const detail = await describeMlFailure(res, "/predict/multi-horizon/batch");
+          firstError ??= detail;
+          // Whatever earlier groups scored is kept. Before the fleet was
+          // split this was all-or-nothing, so one bad response at any point
+          // meant the entire run produced nothing.
+          //
+          // A 429 is not the service saying no -- it is the edge in front of
+          // it refusing to ask. Reported as unavailable so the caller
+          // retries rather than announcing "scored 0 of 60", which reads as
+          // the model having rejected the whole fleet.
+          if (res.status === RATE_LIMITED) {
+            return finish([...modelScored, ...ruleScored], false, true);
+          }
+          return finish(
+            [...modelScored, ...ruleScored],
+            !GATEWAY_STATUSES.has(res.status),
+          );
+        }
+
+        const body = await res.json();
+        const preds = body.predictions ?? [];
+        preds.forEach((pred: any, i: number) => {
+          modelScored.push({
+            equipmentId:    ids[i],
+            modelVersion:   pred.model_version,
+            riskTrend:      pred.risk_trend,
+            predictions:    pred.predictions,
+            recommendation: pred.recommendation,
+          });
+        });
+      } catch (err: any) {
+        // Connection refused, DNS, abort — the service is not reachable.
+        firstError ??= err?.message ?? String(err);
+        return finish([...modelScored, ...ruleScored], false);
       }
-
-      const body = await res.json();
-      modelScored = (body.predictions ?? []).map((pred: any, i: number) => ({
-        equipmentId:    toScoreIds[i],
-        modelVersion:   pred.model_version,
-        riskTrend:      pred.risk_trend,
-        predictions:    pred.predictions,
-        recommendation: pred.recommendation,
-      }));
-    } catch (err: any) {
-      // Connection refused, DNS, abort — the service is not reachable.
-      firstError ??= err?.message ?? String(err);
-      return finish(ruleScored, false);
     }
   }
 
