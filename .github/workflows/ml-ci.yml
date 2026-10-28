@@ -276,20 +276,28 @@ jobs:
       # Seeding the two advertised accounts is the smallest thing that makes
       # the assumption true, and it is the same seeder the deployment uses, so
       # CI is not authenticating through a path production does not have.
+      # http-smoke.test.ts signs in through /api/test-login as userId 1, which
+      # assumes a database seeded at least once. A freshly migrated one has no
+      # users, so the bypass issued no session and nine endpoint checks failed
+      # as 401 with a single cause.
+      #
+      # A script rather than `tsx -e "..."`: the inline version failed with a
+      # bare exit code and nothing to read, and an eval string is an awkward
+      # place for an ESM import. Output is echoed into an annotation on
+      # failure, for the same reason the migration step does it -- job logs
+      # need admin rights to read through the API.
       - name: Seed the demo accounts
         env:
           SEED_DEMO_USERS: "true"
         run: |
-          npx tsx -e "
-            import { seedDemoUsers } from './server/seeds/demo-users.ts';
-            const r = await seedDemoUsers();
-            console.log('created:', r.created, 'skipped:', r.skipped);
-            if (r.created.length === 0 && r.skipped.length === 0) {
-              console.log('::error::demo user seed created nothing');
-              process.exit(1);
-            }
-            process.exit(0);
-          "
+          set +e
+          out=$(npx tsx scripts/seed-demo-users.ts 2>&1); code=$?
+          echo "$out"
+          if [ $code -ne 0 ]; then
+            msg=$(printf '%s' "$out" | tail -c 800 | tr -s '[:space:]' ' ' | sed 's/::/-/g')
+            echo "::error::demo user seed failed: $msg"
+            exit 1
+          fi
 
       - name: Run unit tests
         run: npm test
