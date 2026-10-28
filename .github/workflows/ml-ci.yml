@@ -188,7 +188,7 @@ jobs:
         image: mysql:8.4
         env:
           MYSQL_ROOT_PASSWORD: ci-root
-          MYSQL_DATABASE: eai_ci
+          MYSQL_DATABASE: eai_test
         ports:
           - 3306:3306
         # Without a health check the first migration races the server's
@@ -201,12 +201,17 @@ jobs:
           --health-start-period=30s
 
     env:
-      DATABASE_URL: mysql://root:ci-root@127.0.0.1:3306/eai_ci
+      DATABASE_URL: mysql://root:ci-root@127.0.0.1:3306/eai_test
       # http-write.test.ts deliberately keys on its own variable rather than
       # DATABASE_URL, so that pointing the write-path tests at a database is
       # always a conscious act and never an accident of inheriting the one the
       # app uses. Set explicitly here for the same reason.
-      TEST_DATABASE_URL: mysql://root:ci-root@127.0.0.1:3306/eai_ci
+      # Named eai_test, not eai_ci, and not arbitrarily: http-write.test.ts
+      # refuses to run unless the database name matches /test/i, because those
+      # tests insert, update and delete. That guard exists so nobody can point
+      # destructive tests at something real by setting one variable, and the
+      # right response to it is to satisfy it rather than loosen it.
+      TEST_DATABASE_URL: mysql://root:ci-root@127.0.0.1:3306/eai_test
 
     steps:
       - uses: actions/checkout@v4
