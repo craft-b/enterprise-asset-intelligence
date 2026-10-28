@@ -55,7 +55,8 @@ vi.mock("./ml-snapshot-payload", () => ({
 
 vi.mock("./simulation-clock", () => ({ getSimulationDate: async () => "2026-10-28" }));
 
-const { scoreFleetMultiHorizon, chunkEvenly } = await import("./multi-horizon-scoring");
+const { scoreFleetMultiHorizon, chunkEvenly, scoreBatchSize, DEFAULT_SCORE_BATCH } =
+  await import("./multi-horizon-scoring");
 
 /** A unit old enough that the model, not the rule, scores it. */
 const established = { assetAgeYears: 7, totalHoursLifetime: 9000, category: "Excavator" };
@@ -63,6 +64,7 @@ const established = { assetAgeYears: 7, totalHoursLifetime: 9000, category: "Exc
 const brandNew = { assetAgeYears: 0.1, totalHoursLifetime: 5, category: "Excavator" };
 
 beforeEach(() => {
+  vi.unstubAllEnvs();
   inserted.length = 0;
   generateSnapshot.mockReset();
   mlFetch.mockReset();
@@ -307,7 +309,10 @@ describe("chunkEvenly", () => {
 });
 
 describe("scoring the fleet in groups", () => {
-  it("sends more than one request for a sixty-asset fleet", async () => {
+  it("sends more than one request when the fleet exceeds the group size", async () => {
+    // Pinned rather than inherited: this tests the splitting, not whatever
+    // the default happens to be this week.
+    vi.stubEnv("ML_SCORE_BATCH_SIZE", "30");
     generateSnapshot.mockImplementation(async () => ({ ...established }));
     const horizon = {
       failure_probability: 0.4, risk_level: "MEDIUM",
@@ -339,6 +344,7 @@ describe("scoring the fleet in groups", () => {
   it("keeps what earlier groups scored when a later one fails", async () => {
     // This was all-or-nothing: one bad response at any point and the entire
     // run produced nothing, however much had already been scored.
+    vi.stubEnv("ML_SCORE_BATCH_SIZE", "30");
     generateSnapshot.mockImplementation(async () => ({ ...established }));
     const horizon = {
       failure_probability: 0.4, risk_level: "MEDIUM",
@@ -368,6 +374,7 @@ describe("scoring the fleet in groups", () => {
   });
 
   it("maps predictions to the right asset in the second group", async () => {
+    vi.stubEnv("ML_SCORE_BATCH_SIZE", "30");
     // The ids were sliced per group; an off-by-one here would file group
     // two's forecasts under group one's assets, which no assertion on counts
     // would notice.
@@ -398,5 +405,33 @@ describe("scoring the fleet in groups", () => {
     for (const row of inserted) {
       expect(row.modelVersion).toBe(`eq-${row.equipmentId}`);
     }
+  });
+});
+
+describe("scoreBatchSize", () => {
+  it("defaults to the whole demo fleet in one request", () => {
+    // Sixty, so the drift checks see the entire fleet. The ML service
+    // computes drift per request, so a split fleet yields a reading over
+    // part of it -- and the dashboard presents that as the whole.
+    expect(scoreBatchSize({} as NodeJS.ProcessEnv)).toBe(DEFAULT_SCORE_BATCH);
+    expect(DEFAULT_SCORE_BATCH).toBe(60);
+  });
+
+  it("can be lowered without a deploy", () => {
+    // The trade is resilience: one group means a failure loses the run,
+    // where two kept whatever the first one scored.
+    expect(scoreBatchSize({ ML_SCORE_BATCH_SIZE: "30" } as NodeJS.ProcessEnv)).toBe(30);
+  });
+
+  it("ignores a value that is not a usable size", () => {
+    for (const bad of ["", "nonsense", "0", "-5"]) {
+      expect(scoreBatchSize({ ML_SCORE_BATCH_SIZE: bad } as NodeJS.ProcessEnv))
+        .toBe(DEFAULT_SCORE_BATCH);
+    }
+  });
+
+  it("keeps a sixty-asset fleet in one group at the default", () => {
+    const ids = Array.from({ length: 60 }, (_, i) => i);
+    expect(chunkEvenly(ids, DEFAULT_SCORE_BATCH, 20)).toHaveLength(1);
   });
 });

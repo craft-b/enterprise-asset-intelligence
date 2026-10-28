@@ -77,8 +77,28 @@ const RATE_LIMITED = 429;
  * The service was neither asleep nor broken. It was busy doing exactly what
  * had been asked of it, and every way we had of checking on it was a request
  * it was too busy to answer.
+ *
+ * Sixty, raised from thirty once the handlers stopped blocking the event
+ * loop. Thirty was chosen while a long batch still got the container killed
+ * by its own liveness probe; that cause is gone, and the smaller group cost
+ * something real. The ML service computes drift per request, so a fleet
+ * split in two produced two drift readings over thirty assets each and the
+ * dashboard showed the later one -- half the fleet, described as though it
+ * were the whole. Bias drift suffered most: "Crane: 100% HIGH" over seven
+ * cranes in one chunk is a thin basis for a 63pp deviation.
+ *
+ * The trade is resilience. A single group means a failure loses the whole
+ * run, where two groups kept whatever the first one scored. Set
+ * ML_SCORE_BATCH_SIZE=30 to go back without a deploy; anything above the
+ * fleet size behaves the same as one group.
  */
-const MAX_SCORE_BATCH = Number(process.env.ML_SCORE_BATCH_SIZE ?? 30);
+export const DEFAULT_SCORE_BATCH = 60;
+
+/** Read per call, not at module load, so a test or a deploy can change it. */
+export function scoreBatchSize(env = process.env): number {
+  const raw = Number(env.ML_SCORE_BATCH_SIZE);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : DEFAULT_SCORE_BATCH;
+}
 
 /**
  * The ML service's own floor: it skips every drift check below this.
@@ -238,7 +258,7 @@ export async function scoreFleetMultiHorizon(
   // posted an empty batch when every asset was rule-scored, which woke a
   // suspended container to ask it nothing.
   if (toScore.length > 0) {
-    const groups = chunkEvenly(toScore, MAX_SCORE_BATCH, DRIFT_MIN_BATCH);
+    const groups = chunkEvenly(toScore, scoreBatchSize(), DRIFT_MIN_BATCH);
     let offset = 0;
 
     for (const group of groups) {
