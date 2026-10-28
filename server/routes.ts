@@ -23,6 +23,7 @@ import { startSeedJob, getSeedStatus, getLastSeedRun, getSystemStatus, resetSyst
 import { mlFetch, describeMlFailure, ML_SLOW_TIMEOUT_MS } from "./services/ml-client";
 import { wakeAndWait, nudgeMlAwake, REQUEST_WAKE_BUDGET_MS, REQUEST_WAKE_PROBE_MS, RETRY_AFTER_SECONDS, RATE_LIMIT_RETRY_SECONDS } from "./services/ml-wake";
 import { getMlHealth } from "./services/ml-health-cache";
+import { getModelStatus } from "./services/model-status";
 import { timingSafeEqual } from "crypto";
 import { registerTestLogin } from "./test-login";
 import { getSimulationDate } from "./services/simulation-clock";
@@ -1702,24 +1703,9 @@ export async function registerRoutes(
           newestDate: predictionDates?.newest,
         },
         readyForTraining: (Number(snapshotStats?.labeled) || 0) > 100,
-        modelStatus: await (async () => {
-          try {
-            const fs = await import('fs');
-            const path = await import('path');
-            const registryPath = path.join(process.cwd(), 'ml-service', 'registry');
-            const files = fs.readdirSync(registryPath).filter((f: string) => f.startsWith('rf_30d_') && f.endsWith('.pkl'));
-            if (files.length === 0) return 'rule-based';
-            // Numeric sort to get true latest version
-            const sorted = files.sort((a, b) => {
-              const ma = a.match(/v(\d+)\.(\d+)/);
-              const mb = b.match(/v(\d+)\.(\d+)/);
-              if (!ma || !mb) return 0;
-              return (parseInt(ma[1]) * 1000 + parseInt(ma[2])) - (parseInt(mb[1]) * 1000 + parseInt(mb[2]));
-            });
-            const match = sorted[sorted.length - 1].match(/rf_30d_(v[\d.]+)\.pkl/);
-            return match ? `ml-${match[1]}` : 'ml';
-          } catch { return 'rule-based'; }
-        })(),
+        // Asked of the ML service, not of the filesystem. See
+        // services/model-status.ts for what the filesystem was answering.
+        modelStatus: await getModelStatus(),
       });
     } catch (error) {
       res.status(500).json({ message: 'Failed to get pipeline status' });
