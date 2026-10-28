@@ -17,10 +17,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const mlFetch = vi.fn();
 vi.mock("./ml-client", () => ({ mlFetch: (...args: unknown[]) => mlFetch(...args) }));
 
-const { waitForMl, wakeAndWait, nudgeMlAwake, REQUEST_WAKE_BUDGET_MS, REQUEST_WAKE_PROBE_MS, RETRY_AFTER_SECONDS } =
+const { waitForMl, wakeAndWait, nudgeMlAwake, resetNudgeState, REQUEST_WAKE_BUDGET_MS, REQUEST_WAKE_PROBE_MS, RETRY_AFTER_SECONDS } =
   await import("./ml-wake");
 
-beforeEach(() => { mlFetch.mockReset(); });
+beforeEach(() => { mlFetch.mockReset(); resetNudgeState(); });
 
 describe("waiting for the ML service", () => {
   it("returns as soon as it answers", async () => {
@@ -211,4 +211,41 @@ describe("the gap between probes", () => {
     await waitForMl(20_000, 500);
     expect(mlFetch.mock.calls.length).toBeLessThanOrEqual(8);
   }, 30_000);
+});
+
+describe("nudges do not stack up", () => {
+  it("sends one request while a nudge is outstanding", async () => {
+    // Nothing waits on a nudge, so nothing noticed that they accumulated.
+    // The batch route nudges on every "waking" answer and the client retries
+    // five times, so one cold start could have half a dozen unbounded
+    // requests against /health open at once -- no faster a boot, just more
+    // load at the edge that answers load with 429 pages.
+    let release!: (v: unknown) => void;
+    mlFetch.mockImplementation(() => new Promise(res => { release = res; }));
+
+    for (let i = 0; i < 6; i++) nudgeMlAwake();
+    expect(mlFetch).toHaveBeenCalledTimes(1);
+
+    release({ ok: true });
+    await new Promise(resolve => setImmediate(resolve));
+  });
+
+  it("allows a fresh nudge once the previous one settles", async () => {
+    mlFetch.mockResolvedValue({ ok: true });
+    nudgeMlAwake();
+    await new Promise(resolve => setImmediate(resolve));
+    nudgeMlAwake();
+    expect(mlFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("clears the guard when the nudge fails", async () => {
+    // A rejected nudge that left the flag set would silence every later one
+    // for the lifetime of the process.
+    mlFetch.mockRejectedValue(new Error("socket hang up"));
+    nudgeMlAwake();
+    await new Promise(resolve => setImmediate(resolve));
+    await new Promise(resolve => setImmediate(resolve));
+    nudgeMlAwake();
+    expect(mlFetch).toHaveBeenCalledTimes(2);
+  });
 });

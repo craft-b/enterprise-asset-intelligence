@@ -22,6 +22,7 @@ import { evaluatePMSchedule, generatePMDescription, samplePMCost, MaintenanceTyp
 import { startSeedJob, getSeedStatus, getLastSeedRun, getSystemStatus, resetSystem } from "./services/seed-orchestrator";
 import { mlFetch, describeMlFailure, ML_SLOW_TIMEOUT_MS } from "./services/ml-client";
 import { wakeAndWait, nudgeMlAwake, REQUEST_WAKE_BUDGET_MS, REQUEST_WAKE_PROBE_MS, RETRY_AFTER_SECONDS, RATE_LIMIT_RETRY_SECONDS } from "./services/ml-wake";
+import { getMlHealth } from "./services/ml-health-cache";
 import { timingSafeEqual } from "crypto";
 import { registerTestLogin } from "./test-login";
 import { getSimulationDate } from "./services/simulation-clock";
@@ -2120,28 +2121,19 @@ export async function registerRoutes(
   // the point -- the answer wanted here is "is it up right now", not "wait for
   // it", because waiting is the caller's decision to make.
   app.get("/api/ml/health", requireAuth, async (req, res) => {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 4_000);
+    // Served from a short-lived cache, and concurrent callers share one
+    // upstream probe. The route used to send a request at the ML service for
+    // every poll from every open tab, each aborted at four seconds -- so the
+    // banner saying "the ML service is starting up" was repeatedly tearing
+    // down the start it was reporting on. See services/ml-health-cache.ts.
     try {
-      const mlRes = await mlFetch("/health", { signal: controller.signal });
-      if (!mlRes.ok) {
-        return res.json({ reachable: false, reason: `returned ${mlRes.status}` });
-      }
-      const body = await mlRes.json().catch(() => ({}));
-      res.json({
-        reachable: true,
-        modelVersion: (body as any)?.model_version ?? null,
-        modelLoaded: (body as any)?.model_loaded ?? null,
-      });
+      res.json(await getMlHealth());
     } catch (err: any) {
-      // An abort or a refused connection both mean "not up yet", which is a
-      // normal state on free hosting rather than an error to surface as 500.
-      res.json({
-        reachable: false,
-        reason: err?.name === "AbortError" ? "no answer within 4s" : "unreachable",
-      });
-    } finally {
-      clearTimeout(timer);
+      // getMlHealth is written not to throw -- every failure mode is folded
+      // into `reachable: false`. Guarded anyway: an unguarded await in a
+      // handler takes the process down with it, and "the cache module can
+      // never throw" is the kind of claim that stops being true quietly.
+      res.json({ reachable: false, reason: "health check failed" });
     }
   });
 

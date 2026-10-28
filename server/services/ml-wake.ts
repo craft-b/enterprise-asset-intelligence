@@ -199,9 +199,29 @@ export function nudgeMlAwake(): void {
   // aborted at 90s for the whole time the comment above claimed it never was.
   // The measured cold starts reach 72.5s, and one after hours idle has to pull
   // the image first, so 90s lands inside the range this exists to cover.
-  mlFetch("/health", {}, { timeoutMs: Infinity }).catch(() => {
-    /* a nudge that fails has still asked the container to start */
-  });
+  // One at a time.
+  //
+  // Nothing waits on a nudge, so nothing noticed that they stacked up: the
+  // batch route nudges on every "waking" answer and the client retries five
+  // times, so a single cold start could have half a dozen unbounded requests
+  // against /health outstanding at once. They do not make the container boot
+  // faster -- one request already holds it open -- they just add load to the
+  // edge that answers load with 429 challenge pages.
+  if (nudgeInFlight) return;
+  nudgeInFlight = true;
+  mlFetch("/health", {}, { timeoutMs: Infinity })
+    .catch(() => {
+      /* a nudge that fails has still asked the container to start */
+    })
+    .finally(() => { nudgeInFlight = false; });
+}
+
+/** True while a nudge is outstanding; see nudgeMlAwake. */
+let nudgeInFlight = false;
+
+/** Test seam: forget any outstanding nudge. */
+export function resetNudgeState(): void {
+  nudgeInFlight = false;
 }
 
 /**
