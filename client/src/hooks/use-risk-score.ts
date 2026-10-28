@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@shared/routes";
 import { apiError } from "@/lib/api-error";
+import { useToast } from "@/hooks/use-toast";
 import { retryWhileWaking, wakeRetryDelay } from "@/lib/wake-retry";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -30,6 +31,8 @@ export interface MultiHorizonResult {
 
 export function useMultiHorizonRiskScores() {
   const [scores, setScores] = useState<MultiHorizonResult[]>([]);
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
 
   const mutation = useMutation({
     mutationFn: async (equipmentIds: number[]) => {
@@ -47,6 +50,44 @@ export function useMultiHorizonRiskScores() {
     retryDelay: wakeRetryDelay,
     onSuccess: (data) => {
       setScores(data);
+
+      // This used to be the whole handler, and the run looked like it had done
+      // nothing. The batch writes stored predictions and all three drift
+      // layers, but every view of them is a cached query: the drift hooks hold
+      // results for two minutes and the client sets refetchOnWindowFocus and
+      // refetchInterval to false globally. So the scoring happened, the rows
+      // landed, and the dashboard kept rendering the state from before the
+      // click until someone reloaded the page.
+      //
+      // The sibling that fills the risk queue, useScoreRiskQueue, has always
+      // invalidated its two queries, and use-maintenance.ts invalidates
+      // multi-horizon/latest around the same endpoint. This call site was the
+      // one that did not.
+      for (const key of [
+        ["/api/risk-score/multi-horizon/latest"],
+        ["/api/ml/drift/latest"],
+        ["/api/ml/drift/prediction"],
+        ["/api/ml/drift/bias"],
+      ]) {
+        queryClient.invalidateQueries({ queryKey: key });
+      }
+
+      // And say so. A long-running action that completes in silence is
+      // indistinguishable from one that failed quietly, which is the thing
+      // this dashboard keeps being caught doing.
+      toast({
+        title: "Multi-horizon forecast complete",
+        description: `Scored ${data.length} asset${data.length === 1 ? "" : "s"} at 10, 30 and 60 days.`,
+      });
+    },
+    onError: (err: unknown) => {
+      // Only reached once the wake retries are exhausted; a service still
+      // booting is a wait, not a failure.
+      toast({
+        title: "Multi-horizon forecast failed",
+        description: err instanceof Error ? err.message : "Failed to score the fleet",
+        variant: "destructive",
+      });
     },
   });
 
