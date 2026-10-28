@@ -22,8 +22,21 @@ import { Moon, Loader2 } from "lucide-react";
 /** Matches the gate's measured figure; both describe the same host behaviour. */
 const TYPICAL_COLD_START_SECONDS = 60;
 
-/** Gap between checks while waiting. */
-const POLL_MS = 5_000;
+/**
+ * First gap between checks; it widens from here.
+ *
+ * A flat five seconds assumed the check costs something. It does while the
+ * host holds a suspended request open, but a suspended service also answers
+ * 503 in under a third of a second -- so this banner put twelve requests a
+ * minute at the ML edge for as long as it was shown, alongside the wake
+ * probes the scoring request was already making. A cold start is about sixty
+ * seconds and nobody is reading the counter that closely, so the first few
+ * checks stay prompt and the rest spread out.
+ */
+const FIRST_POLL_MS = 5_000;
+
+/** Ceiling on the widening, so a service that comes up is still noticed. */
+const MAX_POLL_MS = 20_000;
 
 interface MlHealth {
   reachable: boolean;
@@ -55,6 +68,7 @@ export function MlServiceNotice() {
     const controller = new AbortController();
     let stopped = false;
     let timer: ReturnType<typeof setTimeout>;
+    let poll = FIRST_POLL_MS;
     const startedAt = Date.now();
 
     const tick = async () => {
@@ -68,7 +82,8 @@ export function MlServiceNotice() {
 
       setWaking(true);
       setSeconds(Math.floor((Date.now() - startedAt) / 1000));
-      timer = setTimeout(tick, POLL_MS);
+      poll = Math.min(Math.round(poll * 1.5), MAX_POLL_MS);
+      timer = setTimeout(tick, poll);
     };
 
     tick();

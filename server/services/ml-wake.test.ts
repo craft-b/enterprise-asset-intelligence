@@ -166,3 +166,41 @@ describe("wakeAndWait", () => {
     await expect(wakeAndWait(150, 50)).resolves.toBe(false);
   });
 });
+
+describe("a rate limit from the edge", () => {
+  it("is not read as 'still booting'", async () => {
+    // The CDN in front of the host answers 429 with a challenge page when it
+    // sees too many requests. probe() only checked res.ok, so that was
+    // indistinguishable from a container still starting -- and the response
+    // to "still starting" is to poll again, which is the one thing that keeps
+    // a rate limit in force. Observed: twelve requests in seven seconds was
+    // enough to earn one.
+    mlFetch.mockResolvedValue({ ok: false, status: 429 });
+    const started = Date.now();
+    await expect(waitForMl(3_000, 200)).resolves.toBe(false);
+
+    // Backing off hard means few attempts in the window, not many.
+    expect(mlFetch.mock.calls.length).toBeLessThanOrEqual(2);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(2_000);
+  }, 15_000);
+
+  it("still returns true if the service answers after one", async () => {
+    mlFetch
+      .mockResolvedValueOnce({ ok: false, status: 429 })
+      .mockResolvedValue({ ok: true });
+    await expect(waitForMl(30_000, 1_000)).resolves.toBe(true);
+    expect(mlFetch).toHaveBeenCalledTimes(2);
+  }, 25_000);
+});
+
+describe("the gap between probes", () => {
+  it("sends fewer probes than a flat gap would", async () => {
+    // The flat 1.5s gap sent twelve probes into this budget against a fast
+    // 503. The backoff roughly halves that on its own; the larger reductions
+    // come from the rate-limit case above and from the banner, which polled
+    // alongside it. Pinned as a ceiling so the gap cannot quietly go flat.
+    mlFetch.mockResolvedValue({ ok: false, status: 503 });
+    await waitForMl(20_000, 500);
+    expect(mlFetch.mock.calls.length).toBeLessThanOrEqual(8);
+  }, 30_000);
+});

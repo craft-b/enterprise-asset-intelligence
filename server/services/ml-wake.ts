@@ -54,6 +54,16 @@ export const REQUEST_WAKE_PROBE_MS = 8_000;
 /** Seconds a client should wait before retrying a "still waking" response. */
 export const RETRY_AFTER_SECONDS = 20;
 
+/** First pause between probes on a short budget; it doubles from here. */
+const FIRST_GAP_MS = 1_500;
+
+/** Ceiling on the doubling, so a long budget still checks periodically. */
+const MAX_GAP_MS = 8_000;
+
+/** A rate limit is answered by backing off hard, not by trying again sooner. */
+const RATE_LIMIT_BACKOFF = 4;
+const RATE_LIMIT_MIN_GAP_MS = 10_000;
+
 /**
  * One bounded health probe. True only if the service answered OK.
  *
@@ -62,20 +72,29 @@ export const RETRY_AFTER_SECONDS = 20;
  * function is that the bound holds — a probe that outlives its budget turns a
  * retry loop into a single attempt.
  */
-async function probe(timeoutMs: number): Promise<boolean> {
+export type ProbeResult = "up" | "not-yet" | "rate-limited";
+
+/** The edge's answer when it is shedding load rather than the service's. */
+const RATE_LIMITED_STATUSES = new Set([429]);
+
+async function probe(timeoutMs: number): Promise<ProbeResult> {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const expired = new Promise<false>(resolve => {
-    timer = setTimeout(() => { controller.abort(); resolve(false); }, timeoutMs);
+  const expired = new Promise<ProbeResult>(resolve => {
+    timer = setTimeout(() => { controller.abort(); resolve("not-yet"); }, timeoutMs);
   });
-  const attempt = (async () => {
+  const attempt = (async (): Promise<ProbeResult> => {
     try {
       const res = await mlFetch("/health", { signal: controller.signal });
-      return res.ok;
+      if (res.ok) return "up";
+      // A 429 is the CDN in front of the host, not the container. Reading it
+      // as "still booting" is what made this loop answer a rate limit by
+      // polling harder, which is the one response guaranteed to extend it.
+      return RATE_LIMITED_STATUSES.has(res.status) ? "rate-limited" : "not-yet";
     } catch {
       // Not up yet. The container keeps booting whether or not we wait on it,
       // which is the whole reason a later retry succeeds.
-      return false;
+      return "not-yet";
     }
   })();
   try {
@@ -98,23 +117,55 @@ export async function waitForMl(
 ): Promise<boolean> {
   const deadline = Date.now() + budgetMs;
   let attempt = 0;
+  let gap = budgetMs <= 30_000 ? FIRST_GAP_MS : 5_000;
+
   while (Date.now() < deadline) {
     attempt++;
     // Never let a probe outlive the budget: the caller asked for a bound and
     // a 120s probe inside a 20s budget is not one.
     const remaining = Math.max(0, deadline - Date.now());
-    if (await probe(Math.min(probeMs, remaining || probeMs))) return true;
+    const result = await probe(Math.min(probeMs, remaining || probeMs));
+    if (result === "up") return true;
     if (Date.now() >= deadline) break;
     onAttempt?.(attempt, Math.max(0, Math.round((deadline - Date.now()) / 1000)));
-    // Back off less on a short budget, or the pause eats the attempts.
-    const gap = Math.min(budgetMs <= 30_000 ? 1_500 : 5_000, Math.max(0, deadline - Date.now()));
-    await sleep(gap);
+
+    // Back off, rather than keeping a fixed gap.
+    //
+    // The gap was 1.5s flat, which assumed a probe costs something. It does
+    // when the host holds a suspended request open -- but it also fast-fails:
+    // a suspended service was measured answering 503 in 0.28s, and at that
+    // cost a 20s budget is twelve probes, every client retry is twelve more,
+    // and the banner polls /api/ml/health alongside them. That is tens of
+    // requests a minute at one free-tier edge, from one open tab.
+    //
+    // A rate limit backs off much harder, because continuing to poll through
+    // one is what keeps it in force.
+    if (result === "rate-limited") {
+      console.warn("[ML] health probe was rate-limited; backing off");
+      gap = Math.max(gap * RATE_LIMIT_BACKOFF, RATE_LIMIT_MIN_GAP_MS);
+    } else {
+      gap = Math.min(gap * 2, MAX_GAP_MS);
+    }
+
+    await sleep(Math.min(gap, Math.max(0, deadline - Date.now())));
   }
   return false;
 }
 
 /**
  * Start the service waking and return immediately.
+ *
+ * Measured, against the deployed service: the request that performs the wake
+ * is held open for the whole cold start and then FAILS -- 62.9 seconds, then
+ * 502. Every request after it succeeds in under half a second. So the wake
+ * costs one request, that request is the one that does not get an answer, and
+ * nothing is wrong when it comes back empty-handed.
+ *
+ * Two things follow. The nudge is the right caller to spend that failure,
+ * because nothing is waiting on its result. And a 502 from this service is
+ * not evidence that anything is broken -- it is what a successful wake looks
+ * like from the inside, which is why the client retries rather than reporting
+ * it.
  *
  * Used when a request has decided to answer "still waking": the point is that
  * something is poking /health so the container is actually booting while the
