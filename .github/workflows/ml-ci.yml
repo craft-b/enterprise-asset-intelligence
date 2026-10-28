@@ -152,6 +152,48 @@ jobs:
   node-unit-tests:
     name: Node unit tests (vitest)
     runs-on: ubuntu-latest
+
+    # The database-backed suites key on DATABASE_URL:
+    #   const RUN = !!process.env.DATABASE_URL
+    #   const suite = RUN ? describe : describe.skip
+    #
+    # Without one they skip, and a skip is green. 48 tests were skipping here
+    # on every run -- among them feature-engineering-pit.test.ts, which is the
+    # suite that holds the point-in-time guarantee: that a snapshot sees only
+    # data at or before its own timestamp. That is the most safety-critical
+    # property in the feature pipeline and the hardest to reason about by
+    # eye, and it was being verified in no environment at all. It did not run
+    # locally either, because a developer's DATABASE_URL points at a database
+    # that is usually not running, which turns the skip into a red error
+    # nobody reads.
+    #
+    # A service container costs about thirty seconds and converts 48 silent
+    # skips into 48 assertions.
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: ci-root
+          MYSQL_DATABASE: eai_ci
+        ports:
+          - 3306:3306
+        # Without a health check the first migration races the server's
+        # startup and fails with ECONNREFUSED on a cold runner.
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pci-root"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+          --health-start-period=30s
+
+    env:
+      DATABASE_URL: mysql://root:ci-root@127.0.0.1:3306/eai_ci
+      # http-write.test.ts deliberately keys on its own variable rather than
+      # DATABASE_URL, so that pointing the write-path tests at a database is
+      # always a conscious act and never an accident of inheriting the one the
+      # app uses. Set explicitly here for the same reason.
+      TEST_DATABASE_URL: mysql://root:ci-root@127.0.0.1:3306/eai_ci
+
     steps:
       - uses: actions/checkout@v4
 
@@ -163,5 +205,32 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Drizzle owns the schema (ARCH-1), so the test database is built the
+      # same way the deployed one is rather than from a fixture that can
+      # drift away from the migrations.
+      - name: Apply migrations
+        run: npm run db:migrate
+
       - name: Run unit tests
         run: npm test
+
+      # The point of the service container is that these stop skipping. If a
+      # future change drops the database from this job the suite returns to
+      # being green and empty, which is the state it was in before and the one
+      # thing a test job must not do quietly.
+      #
+      # Asserted on the reporter's own count rather than by grepping output
+      # for the word "skipped", which matches test names and reporter chrome.
+      - name: Fail if the point-in-time suite did not actually run
+        run: |
+          npx vitest run server/services/feature-engineering-pit.test.ts             --reporter=json --outputFile=/tmp/pit.json
+          node -e '
+            const r = require("/tmp/pit.json");
+            const passed = r.numPassedTests ?? 0;
+            const skipped = (r.numPendingTests ?? 0) + (r.numTodoTests ?? 0);
+            console.log(`point-in-time suite: ${passed} passed, ${skipped} skipped`);
+            if (skipped > 0 || passed === 0) {
+              console.error("::error::the point-in-time suite did not run — the database is not reaching it");
+              process.exit(1);
+            }
+          '
