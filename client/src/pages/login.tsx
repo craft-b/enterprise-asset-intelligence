@@ -33,6 +33,33 @@ export default function Login() {
 
   const isPending = loginMutation.isPending || registerMutation.isPending;
 
+  // Seconds the current attempt has been in flight.
+  //
+  // The button said "Authenticating..." for as long as the request took, which
+  // on this deployment is about thirty seconds the first time anyone signs in
+  // after a quiet period -- and for most of that it is not authenticating
+  // anything. The API is on a free tier that suspends when idle, so the
+  // request is still waiting for a host to start. A spinner that names a step
+  // the system has not reached is the same defect as a progress bar that
+  // invents its stages: it is indistinguishable from the system working, right
+  // up until the visitor closes the tab.
+  //
+  // Ticks rather than a clock read, because Date.now() during render is an
+  // impure call and the only use for this number is a threshold.
+  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    if (!isPending) {
+      setElapsed(0);
+      return;
+    }
+    const t = setInterval(() => setElapsed(e => e + 1), 1000);
+    return () => clearInterval(t);
+  }, [isPending]);
+
+  // A warm sign-in answers in well under this.
+  const likelyColdStart = isPending && elapsed >= 6;
+
   return (
     <div className="min-h-screen grid lg:grid-cols-2">
       {/* Left: Brand panel */}
@@ -142,6 +169,18 @@ export default function Login() {
                   isRegister ? "Register" : "Sign In"
                 )}
               </Button>
+
+              {likelyColdStart && (
+                <p
+                  className="text-xs text-muted-foreground text-center"
+                  data-testid="text-cold-start"
+                >
+                  Still waiting after {elapsed}s. The demo API is on free hosting
+                  and suspends when idle — the first sign-in after a quiet period
+                  spends about 30 seconds waking it. Nothing is wrong; it has not
+                  reached the server yet.
+                </p>
+              )}
               <Button
                 type="button"
                 variant="ghost"
