@@ -135,7 +135,40 @@ export function nudgeMlAwake(): void {
   // A cold start after hours idle is slower than one after thirty minutes:
   // the image may need pulling again. The nudge has nowhere to be, so it waits
   // as long as the host takes.
-  mlFetch("/health").catch(() => {
+  // Infinity, not "no argument". Passing nothing does not mean unbounded --
+  // mlFetch applies ML_FETCH_TIMEOUT_MS, 90 seconds, so this nudge was being
+  // aborted at 90s for the whole time the comment above claimed it never was.
+  // The measured cold starts reach 72.5s, and one after hours idle has to pull
+  // the image first, so 90s lands inside the range this exists to cover.
+  mlFetch("/health", {}, { timeoutMs: Infinity }).catch(() => {
     /* a nudge that fails has still asked the container to start */
   });
+}
+
+/**
+ * Start the service waking, then wait a little for it.
+ *
+ * The order is the point, and it was the wrong way round on every request
+ * path: probe for twenty seconds, and only once that failed, nudge. Each
+ * probe aborts at eight seconds, and an aborted probe tears down the request
+ * the host was using to hold the cold start open -- the exact failure
+ * documented in nudgeMlAwake, there at 120 seconds and here at 8. So a
+ * suspended service got two teardowns per request, and with the client
+ * retrying five times, ten or more boots each abandoned a few seconds in. A
+ * service in that state never comes up, however long anyone waits, which is
+ * what "the ML service is not starting up" was.
+ *
+ * Nudging first means one unbounded request is holding the boot open from the
+ * first moment. The probes that follow come and go on their own connections
+ * without disturbing it, so the budget here is just how long this request is
+ * willing to wait before answering "still waking" -- and the boot carries on
+ * either way, so the client's retry lands on a service that is genuinely
+ * further along than when it started.
+ */
+export async function wakeAndWait(
+  budgetMs: number = REQUEST_WAKE_BUDGET_MS,
+  probeMs: number = REQUEST_WAKE_PROBE_MS,
+): Promise<boolean> {
+  nudgeMlAwake();
+  return waitForMl(budgetMs, probeMs);
 }

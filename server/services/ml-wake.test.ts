@@ -17,7 +17,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const mlFetch = vi.fn();
 vi.mock("./ml-client", () => ({ mlFetch: (...args: unknown[]) => mlFetch(...args) }));
 
-const { waitForMl, nudgeMlAwake, REQUEST_WAKE_BUDGET_MS, REQUEST_WAKE_PROBE_MS, RETRY_AFTER_SECONDS } =
+const { waitForMl, wakeAndWait, nudgeMlAwake, REQUEST_WAKE_BUDGET_MS, REQUEST_WAKE_PROBE_MS, RETRY_AFTER_SECONDS } =
   await import("./ml-wake");
 
 beforeEach(() => { mlFetch.mockReset(); });
@@ -108,5 +108,61 @@ describe("nudging it awake", () => {
     await new Promise(r => setTimeout(r, 10));
     const init = mlFetch.mock.calls[0]?.[1] as { signal?: unknown } | undefined;
     expect(init?.signal, "the nudge passed an abort signal").toBeUndefined();
+  });
+});
+
+describe("the nudge that holds a cold start open", () => {
+  it("asks for no deadline at all", async () => {
+    // It had asked by passing nothing, and nothing means
+    // ML_FETCH_TIMEOUT_MS -- 90 seconds. Its own comment said "No abort, no
+    // timeout", and the reason given was that aborting tears down the request
+    // the host uses to hold a boot open, so a container needing longer than
+    // the bound never finishes starting. Measured cold starts reach 72.5s and
+    // one after hours idle has an image to pull first, so 90s sits inside the
+    // range this is here to cover.
+    mlFetch.mockResolvedValue({ ok: true });
+    nudgeMlAwake();
+    expect(mlFetch).toHaveBeenCalledTimes(1);
+    const [path, , opts] = mlFetch.mock.calls[0] as [string, unknown, { timeoutMs?: number }];
+    expect(path).toBe("/health");
+    expect(opts?.timeoutMs).toBe(Infinity);
+  });
+
+  it("does not reject when the nudge fails", async () => {
+    // An escaping rejection exits the process.
+    mlFetch.mockRejectedValue(new Error("socket hang up"));
+    expect(() => nudgeMlAwake()).not.toThrow();
+    await new Promise(resolve => setImmediate(resolve));
+  });
+});
+
+describe("wakeAndWait", () => {
+  it("nudges before it probes", async () => {
+    // The ordering is the whole fix. Every request path probed for twenty
+    // seconds and only nudged once that failed -- and each probe aborts at
+    // eight seconds, tearing down the request holding the boot open. Two
+    // teardowns per request, five client retries, and a service that never
+    // comes up however long anyone waits.
+    mlFetch.mockResolvedValue({ ok: false });
+    await wakeAndWait(150, 50);
+
+    expect(mlFetch.mock.calls.length).toBeGreaterThanOrEqual(2);
+    const first = mlFetch.mock.calls[0] as [string, unknown, { timeoutMs?: number } | undefined];
+    // The first call is the unbounded nudge; the probes that follow carry a
+    // signal instead and must not be unbounded.
+    expect(first[2]?.timeoutMs).toBe(Infinity);
+    for (const call of mlFetch.mock.calls.slice(1)) {
+      expect((call[2] as { timeoutMs?: number } | undefined)?.timeoutMs).not.toBe(Infinity);
+    }
+  });
+
+  it("still reports true when the service answers", async () => {
+    mlFetch.mockResolvedValue({ ok: true });
+    await expect(wakeAndWait(5_000, 1_000)).resolves.toBe(true);
+  });
+
+  it("reports false without throwing when the budget runs out", async () => {
+    mlFetch.mockResolvedValue({ ok: false });
+    await expect(wakeAndWait(150, 50)).resolves.toBe(false);
   });
 });

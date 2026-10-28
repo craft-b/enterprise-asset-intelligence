@@ -21,7 +21,7 @@ import { enhancedFeatureService } from "./services/feature-engineering-enhanced"
 import { evaluatePMSchedule, generatePMDescription, samplePMCost, MaintenanceTypeKey } from "./services/pm-scheduler";
 import { startSeedJob, getSeedStatus, getLastSeedRun, getSystemStatus, resetSystem } from "./services/seed-orchestrator";
 import { mlFetch, describeMlFailure, ML_SLOW_TIMEOUT_MS } from "./services/ml-client";
-import { waitForMl, nudgeMlAwake, REQUEST_WAKE_BUDGET_MS, REQUEST_WAKE_PROBE_MS, RETRY_AFTER_SECONDS } from "./services/ml-wake";
+import { wakeAndWait, nudgeMlAwake, REQUEST_WAKE_BUDGET_MS, REQUEST_WAKE_PROBE_MS, RETRY_AFTER_SECONDS } from "./services/ml-wake";
 import { timingSafeEqual } from "crypto";
 import { registerTestLogin } from "./test-login";
 import { getSimulationDate } from "./services/simulation-clock";
@@ -1142,13 +1142,15 @@ export async function registerRoutes(
     try {
       const { equipmentIds } = api.riskScore.batch.input.parse(req.body);
 
-      // Free-tier suspension is an ordinary condition, not a failure. Give the
-      // service a short bounded chance to come up before answering: a warm or
-      // nearly-warm one simply works, and nothing is held open long enough to
-      // trouble a proxy. A genuine cold start takes 40-75s, which is covered
-      // by the client retrying against the `waking` flag below rather than by
-      // this request waiting that long.
-      await waitForMl(REQUEST_WAKE_BUDGET_MS, REQUEST_WAKE_PROBE_MS);
+      // Free-tier suspension is an ordinary condition, not a failure. Start
+      // the container booting and give it a short bounded chance to answer: a
+      // warm or nearly-warm one simply works, and nothing is held open long
+      // enough to trouble a proxy. A genuine cold start takes 40-75s, which is
+      // covered by the client retrying against the `waking` flag below rather
+      // than by this request waiting that long.
+      //
+      // wakeAndWait, not waitForMl: the nudge has to come first. See ml-wake.
+      await wakeAndWait(REQUEST_WAKE_BUDGET_MS, REQUEST_WAKE_PROBE_MS);
 
       // The work lives in services/multi-horizon-scoring.ts so the seed can
       // run it too. While it was inline here, the only way to populate
@@ -1165,6 +1167,10 @@ export async function registerRoutes(
             'Retrying automatically.',
           waking: true,
           retryAfterSeconds: RETRY_AFTER_SECONDS,
+          // Assets a rule scored need no ML service, and they are stored even
+          // on this path. Saying how many lets the client refresh rather than
+          // leave forecasts sitting unread in the database until a reload.
+          stored: outcome.results.length,
           detail: outcome.firstError,
         });
       }
@@ -1362,13 +1368,15 @@ export async function registerRoutes(
 
   app.post('/api/predictive-maintenance/predict-all', requireAdmin, async (req, res) => {
     try {
-      // Free-tier suspension is an ordinary condition, not a failure. Give the
-      // service a short bounded chance to come up before answering: a warm or
-      // nearly-warm one simply works, and nothing is held open long enough to
-      // trouble a proxy. A genuine cold start takes 40-75s, which is covered
-      // by the client retrying against the `waking` flag below rather than by
-      // this request waiting that long.
-      await waitForMl(REQUEST_WAKE_BUDGET_MS, REQUEST_WAKE_PROBE_MS);
+      // Free-tier suspension is an ordinary condition, not a failure. Start
+      // the container booting and give it a short bounded chance to answer: a
+      // warm or nearly-warm one simply works, and nothing is held open long
+      // enough to trouble a proxy. A genuine cold start takes 40-75s, which is
+      // covered by the client retrying against the `waking` flag below rather
+      // than by this request waiting that long.
+      //
+      // wakeAndWait, not waitForMl: the nudge has to come first. See ml-wake.
+      await wakeAndWait(REQUEST_WAKE_BUDGET_MS, REQUEST_WAKE_PROBE_MS);
 
       const outcome = await predictiveMaintenanceService.predictAllEquipmentWithOutcome();
       const { predictions, attempted, serviceAvailable, firstError } = outcome;

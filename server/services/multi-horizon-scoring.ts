@@ -20,6 +20,7 @@
 import { db } from "../db";
 import { equipmentFailurePredictions } from "../../shared/schema";
 import { enhancedFeatureService } from "./feature-engineering-enhanced";
+import { mapWithConcurrency, snapshotConcurrency } from "./feature-engineering";
 import { isColdStart, coldStartMultiHorizon } from "./imputation";
 import { mlFetch, describeMlFailure, ML_SLOW_TIMEOUT_MS } from "./ml-client";
 // One assembly site, shared with the predict-all path. Re-exported because
@@ -91,17 +92,20 @@ export async function scoreFleetMultiHorizon(
   const snapshotDate = await getSimulationDate();
   let firstError: string | undefined;
 
-  const snapshots = await Promise.all(
-    equipmentIds.map(async id => {
-      try {
-        return { equipmentId: id, snapshot: await enhancedFeatureService.generateSnapshot(id, snapshotDate) };
-      } catch (err: any) {
-        console.error(`[MH-BATCH] Failed snapshot for EQ-${id}:`, err);
-        firstError ??= `snapshot failed for equipment ${id}: ${err?.message ?? err}`;
-        return null;
-      }
-    })
-  );
+  // Bounded, not Promise.all. Each snapshot is a handful of queries, so a
+  // sixty-asset fleet opened sixty of those at once against a serverless
+  // database and a pool that defaults to ten connections -- the same
+  // unbounded fan-out that was already bounded in the backfill path, left
+  // behind here because this one used to run over ten assets.
+  const snapshots = await mapWithConcurrency(equipmentIds, snapshotConcurrency(), async id => {
+    try {
+      return { equipmentId: id, snapshot: await enhancedFeatureService.generateSnapshot(id, snapshotDate) };
+    } catch (err: any) {
+      console.error(`[MH-BATCH] Failed snapshot for EQ-${id}:`, err);
+      firstError ??= `snapshot failed for equipment ${id}: ${err?.message ?? err}`;
+      return null;
+    }
+  });
 
   const valid = snapshots.filter(Boolean) as { equipmentId: number; snapshot: any }[];
 
@@ -127,6 +131,31 @@ export async function scoreFleetMultiHorizon(
     }
   }
 
+  /**
+   * The one way out of here, because storing used to be skipped on the way.
+   *
+   * Both ML-failure returns sat above the storage loop, so a cold start threw
+   * away the rule-scored assets it had already computed -- and those need no
+   * ML service at all. On the sixty-unit fleet that is a dozen forecasts
+   * discarded for a reason that did not apply to them, which is why a fleet
+   * with a suspended service showed no predictions whatsoever rather than the
+   * ones it could still account for.
+   */
+  async function finish(
+    results: MultiHorizonResult[],
+    serviceAvailable: boolean,
+  ): Promise<MultiHorizonOutcome> {
+    for (const result of results) {
+      try {
+        await store(result);
+      } catch (err: any) {
+        console.error(`[MH-BATCH] Failed to store EQ-${result.equipmentId}:`, err);
+        firstError ??= `could not store equipment ${result.equipmentId}: ${err?.message ?? err}`;
+      }
+    }
+    return { results, attempted, serviceAvailable, firstError };
+  }
+
   let modelScored: MultiHorizonResult[] = [];
 
   // Only call the service if it has something to score. The inline version
@@ -148,12 +177,7 @@ export async function scoreFleetMultiHorizon(
         firstError ??= detail;
         // A gateway status is the host saying the service is not up, which is
         // a different situation from the service rejecting the request.
-        return {
-          results: ruleScored,
-          attempted,
-          serviceAvailable: !GATEWAY_STATUSES.has(res.status),
-          firstError,
-        };
+        return finish(ruleScored, !GATEWAY_STATUSES.has(res.status));
       }
 
       const body = await res.json();
@@ -167,20 +191,9 @@ export async function scoreFleetMultiHorizon(
     } catch (err: any) {
       // Connection refused, DNS, abort — the service is not reachable.
       firstError ??= err?.message ?? String(err);
-      return { results: ruleScored, attempted, serviceAvailable: false, firstError };
+      return finish(ruleScored, false);
     }
   }
 
-  const results = [...modelScored, ...ruleScored];
-
-  for (const result of results) {
-    try {
-      await store(result);
-    } catch (err: any) {
-      console.error(`[MH-BATCH] Failed to store EQ-${result.equipmentId}:`, err);
-      firstError ??= `could not store equipment ${result.equipmentId}: ${err?.message ?? err}`;
-    }
-  }
-
-  return { results, attempted, serviceAvailable: true, firstError };
+  return finish([...modelScored, ...ruleScored], true);
 }

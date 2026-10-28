@@ -130,6 +130,12 @@ export const ML_SLOW_TIMEOUT_MS = envMs("ML_SLOW_TIMEOUT_MS", 300_000);
  * brings its own `signal` -- ml-wake and the prediction path already manage
  * their own deadlines, and taking those over would shorten budgets that were
  * chosen deliberately.
+ *
+ * `timeoutMs: Infinity` means no deadline at all, for the one caller that has
+ * nothing waiting on it and must not tear down the request holding a cold
+ * start open. It had been asking for that by passing nothing -- which is how
+ * it got the 90s default instead, and 90s is inside the range a slow cold
+ * start can take.
  */
 export async function mlFetch(
   path: string,
@@ -144,6 +150,7 @@ export async function mlFetch(
   const url = `${ML_SERVICE_URL}${path}`;
 
   if (init.signal) return fetch(url, { ...init, headers });
+  if (opts?.timeoutMs === Infinity) return fetch(url, { ...init, headers });
 
   const budget = opts?.timeoutMs ?? ML_FETCH_TIMEOUT_MS;
   const controller = new AbortController();

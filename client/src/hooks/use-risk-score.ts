@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@shared/routes";
-import { apiError } from "@/lib/api-error";
+import { apiError, type ApiError } from "@/lib/api-error";
 import { useToast } from "@/hooks/use-toast";
 import { retryWhileWaking, wakeRetryDelay } from "@/lib/wake-retry";
 
@@ -34,6 +34,23 @@ export function useMultiHorizonRiskScores() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
+  /**
+   * Refresh everything the batch writes.
+   *
+   * Called from both outcomes rather than only from success, because a run
+   * that ends in a waking error can still have stored the rule-scored assets.
+   */
+  function refreshDependentViews(): void {
+    for (const key of [
+      ["/api/risk-score/multi-horizon/latest"],
+      ["/api/ml/drift/latest"],
+      ["/api/ml/drift/prediction"],
+      ["/api/ml/drift/bias"],
+    ]) {
+      queryClient.invalidateQueries({ queryKey: key });
+    }
+  }
+
   const mutation = useMutation({
     mutationFn: async (equipmentIds: number[]) => {
       const res = await fetch("/api/risk-score/multi-horizon/batch", {
@@ -63,14 +80,7 @@ export function useMultiHorizonRiskScores() {
       // invalidated its two queries, and use-maintenance.ts invalidates
       // multi-horizon/latest around the same endpoint. This call site was the
       // one that did not.
-      for (const key of [
-        ["/api/risk-score/multi-horizon/latest"],
-        ["/api/ml/drift/latest"],
-        ["/api/ml/drift/prediction"],
-        ["/api/ml/drift/bias"],
-      ]) {
-        queryClient.invalidateQueries({ queryKey: key });
-      }
+      refreshDependentViews();
 
       // And say so. A long-running action that completes in silence is
       // indistinguishable from one that failed quietly, which is the thing
@@ -83,9 +93,22 @@ export function useMultiHorizonRiskScores() {
     onError: (err: unknown) => {
       // Only reached once the wake retries are exhausted; a service still
       // booting is a wait, not a failure.
+      //
+      // Even then the run is not necessarily empty. Assets a rule scores need
+      // no ML service and are stored regardless, so a fleet that gave up
+      // waiting can still have left a dozen forecasts in the database. Those
+      // have to be shown, or the failure toast is telling the user there is
+      // nothing to see while there is.
+      const stored = (err as ApiError)?.stored ?? 0;
+      if (stored > 0) refreshDependentViews();
+
       toast({
-        title: "Multi-horizon forecast failed",
-        description: err instanceof Error ? err.message : "Failed to score the fleet",
+        title: stored > 0 ? "Multi-horizon forecast incomplete" : "Multi-horizon forecast failed",
+        description:
+          (err instanceof Error ? err.message : "Failed to score the fleet") +
+          (stored > 0
+            ? ` ${stored} asset${stored === 1 ? "" : "s"} scored without the model and were saved.`
+            : ""),
         variant: "destructive",
       });
     },

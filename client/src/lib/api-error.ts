@@ -33,6 +33,15 @@ export interface ApiError extends Error {
   status?: number;
   waking?: boolean;
   retryAfterSeconds?: number;
+  /**
+   * How many rows a partially-successful call did store.
+   *
+   * A fleet scoring run can account for some assets by rule and need the ML
+   * service only for the rest, so "the service is waking" and "nothing was
+   * written" are not the same answer. The caller refreshes its views when
+   * this is non-zero instead of leaving the work unread.
+   */
+  stored?: number;
 }
 
 /**
@@ -52,6 +61,7 @@ export async function apiError(res: Response, fallback: string): Promise<ApiErro
     err.waking = true;
     err.retryAfterSeconds = body.retryAfterSeconds;
   }
+  if (typeof body?.stored === "number") err.stored = body.stored;
   return err;
 }
 
@@ -59,6 +69,7 @@ type ParsedBody = {
   message: string | null;
   waking: boolean;
   retryAfterSeconds?: number;
+  stored?: number;
 };
 
 async function readBody(res: Response): Promise<ParsedBody | null> {
@@ -86,6 +97,7 @@ async function readBody(res: Response): Promise<ParsedBody | null> {
       waking: body?.waking === true,
       retryAfterSeconds:
         typeof body?.retryAfterSeconds === "number" ? body.retryAfterSeconds : undefined,
+      stored: typeof body?.stored === "number" ? body.stored : undefined,
     };
   } catch {
     // Unreadable body, already-consumed stream, malformed JSON: the caller's
