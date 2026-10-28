@@ -8,6 +8,13 @@ on:
       - "server/**"
       - "client/**"
       - "shared/**"
+      # migrations/ and drizzle.config.ts were missing, and the gap only
+      # became visible once this workflow started applying migrations to a
+      # real database: the commit that fixed a migration could not trigger the
+      # job that would have checked it. Drizzle owns the schema (ARCH-1), so a
+      # change here is exactly the kind that needs the suite run.
+      - "migrations/**"
+      - "drizzle.config.ts"
       - "package.json"
       - "package-lock.json"
       - "tsconfig.json"
@@ -20,6 +27,13 @@ on:
       - "server/**"
       - "client/**"
       - "shared/**"
+      # migrations/ and drizzle.config.ts were missing, and the gap only
+      # became visible once this workflow started applying migrations to a
+      # real database: the commit that fixed a migration could not trigger the
+      # job that would have checked it. Drizzle owns the schema (ARCH-1), so a
+      # change here is exactly the kind that needs the suite run.
+      - "migrations/**"
+      - "drizzle.config.ts"
       - "package.json"
       - "package-lock.json"
       - "tsconfig.json"
