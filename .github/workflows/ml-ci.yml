@@ -205,11 +205,51 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Prove the database is reachable before blaming the migrations for
+      # anything. A service container reported healthy and a driver able to
+      # authenticate against it are different claims, and MySQL 8.4 defaults
+      # to caching_sha2_password, which is the usual reason the second fails
+      # while the first succeeded.
+      - name: Check the database is reachable
+        run: |
+          node -e '
+            const mysql = require("mysql2/promise");
+            (async () => {
+              for (let i = 1; i <= 20; i++) {
+                try {
+                  const c = await mysql.createConnection(process.env.DATABASE_URL);
+                  const [rows] = await c.query("SELECT VERSION() AS v");
+                  console.log("connected to MySQL", rows[0].v);
+                  await c.end();
+                  return;
+                } catch (e) {
+                  console.log(`attempt ${i}: ${e.code || e.message}`);
+                  await new Promise(r => setTimeout(r, 2000));
+                }
+              }
+              console.log("::error::CI database unreachable from the runner");
+              process.exit(1);
+            })();
+          '
+
       # Drizzle owns the schema (ARCH-1), so the test database is built the
       # same way the deployed one is rather than from a fixture that can
       # drift away from the migrations.
+      #
+      # The output is echoed into an ::error:: annotation on failure. Job logs
+      # need admin rights to read through the API, so a bare non-zero exit is
+      # a failure nobody outside the repo can diagnose -- including whoever is
+      # asked to fix it.
       - name: Apply migrations
-        run: npm run db:migrate
+        run: |
+          set +e
+          out=$(npm run db:migrate 2>&1); code=$?
+          echo "$out"
+          if [ $code -ne 0 ]; then
+            msg=$(printf '%s' "$out" | tail -c 800 | tr -s '[:space:]' ' ' | sed 's/::/-/g')
+            echo "::error::db:migrate failed: $msg"
+            exit 1
+          fi
 
       - name: Run unit tests
         run: npm test
