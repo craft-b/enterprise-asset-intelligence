@@ -265,6 +265,32 @@ jobs:
             exit 1
           fi
 
+      # http-smoke.test.ts authenticates through /api/test-login as userId 1.
+      # A freshly migrated database has no users at all, so the bypass issued
+      # no session and every endpoint it then checked returned 401 -- nine
+      # assertion failures with one cause. The suite was written against a
+      # database that had been seeded at least once, which was true of every
+      # environment it had ever run in, because until now it had only ever run
+      # where someone had already seeded.
+      #
+      # Seeding the two advertised accounts is the smallest thing that makes
+      # the assumption true, and it is the same seeder the deployment uses, so
+      # CI is not authenticating through a path production does not have.
+      - name: Seed the demo accounts
+        env:
+          SEED_DEMO_USERS: "true"
+        run: |
+          npx tsx -e "
+            import { seedDemoUsers } from './server/seeds/demo-users.ts';
+            const r = await seedDemoUsers();
+            console.log('created:', r.created, 'skipped:', r.skipped);
+            if (r.created.length === 0 && r.skipped.length === 0) {
+              console.log('::error::demo user seed created nothing');
+              process.exit(1);
+            }
+            process.exit(0);
+          "
+
       - name: Run unit tests
         run: npm test
 
