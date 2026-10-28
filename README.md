@@ -298,7 +298,7 @@ A discrete-event simulator advances a cursor date day by day:
 │   │   └── genai_advisor.py           # Groq recommendation generation
 │   ├── training/
 │   │   └── train_model_multihorizon.py  # Training pipeline — TimeSeriesSplit CV + MLflow logging + DQ gate
-│   ├── tests/                     # 115 tests total (pytest)
+│   ├── tests/                     # 193 tests total (pytest)
 │   │   ├── test_ml_engine.py          # inference, monotonicity, risk ordering, batch, schema
 │   │   ├── test_train_smoke.py        # full training pipeline on synthetic data
 │   │   ├── test_data_quality.py       # all 8 DQ checks + report structure
@@ -388,7 +388,8 @@ Authenticated with `Authorization: Bearer <AGENT_API_KEY>`. Designed for program
 cd ml-service
 pytest tests/ -v
 
-# Node/TypeScript — server + shared client logic (596 tests across 45 files)
+# Node/TypeScript — server + shared client logic (53 files: 631 pass with no
+# database; 48 more need DATABASE_URL pointed at a live one and skip without it)
 npm test
 
 # TypeScript type-check
@@ -610,8 +611,10 @@ the deployed instance loads artifacts baked into its image rather than training 
 ~$33/mo configuration that removes the cold starts is documented in
 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Docker Compose (`docker-compose.yml`) runs all three
 services locally, and [Quickstart](#quickstart) seeds a full fleet — two of its steps wait on the
-ML service's cold start. The ten-asset fleet took two to five minutes; sixty units multiply the
-sensor and snapshot passes by six, so expect tens of minutes rather than minutes.
+ML service's cold start. The ten-asset fleet took two to five minutes. Sixty units is six times
+the data, but the passes that carry it are no longer serial (below), so the honest answer is
+several minutes plus two ML cold starts, and that it has not been measured against a sixty-asset
+reseed. An estimate stated more precisely than that would be invented.
 
 Two things carry that cost. Snapshot writes are batched a hundred rows to a statement, removing
 about 1,400 round trips; and snapshot *generation*, which is the larger share — roughly eleven

@@ -195,9 +195,9 @@ export default function SetupPage() {
             <CardTitle>Loading Demo Data</CardTitle>
             <CardDescription>
               Seeding equipment, sensors, maintenance history, then scoring the fleet.
-              Allow ten to thirty minutes for sixty units: the snapshot pass is linear
-              in fleet size, and the ML service suspends when idle on free hosting, so
-              two of the steps wait for it to start.
+              Usually several minutes for sixty units — snapshot writes are batched and
+              generation runs six assets at a time. The ML service suspends when idle on
+              free hosting, so two of the steps additionally wait for it to start.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
