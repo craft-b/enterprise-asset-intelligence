@@ -22,6 +22,7 @@ from api.schemas.prediction import (
     HealthResponse,
 )
 
+from api.build_info import BUILD_COMMIT, BOOTED_AT, uptime_seconds
 from engine.genai_advisor import is_available, LLM_PROVIDER, generate_recommendation
 from engine.predictor_multihorizon import MultiHorizonPredictor
 from engine.projector import project as project_trajectory
@@ -191,6 +192,11 @@ async def health():
         model_loaded=mh_predictor is not None,
         llm_provider=LLM_PROVIDER,
         llm_available=is_available(),
+        # Module constants, not work: this endpoint decides whether the host
+        # keeps the container alive. See api/build_info.py.
+        commit=BUILD_COMMIT,
+        booted_at=BOOTED_AT.isoformat(),
+        uptime_seconds=uptime_seconds(),
     )
 
 

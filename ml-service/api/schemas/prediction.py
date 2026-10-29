@@ -141,6 +141,11 @@ class HealthResponse(BaseModel):
     model_loaded: bool
     llm_provider: str
     llm_available: bool
+    # Which commit built this container, and how long it has been serving.
+    # Unauthenticated on purpose: see api/build_info.py.
+    commit: str
+    booted_at: str
+    uptime_seconds: float
 
 
 class ModelInfoResponse(BaseModel):

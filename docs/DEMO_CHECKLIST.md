@@ -45,6 +45,19 @@ it in 71.9. The app no longer does that — one unbounded request holds the boot
 and everything else waits on it — but a terminal still can, so let the curl
 finish rather than Ctrl-C'ing and retrying.
 
+**What is deployed, in three unauthenticated requests.** All three tiers answer
+in the same vocabulary, so a mismatch is visible without logging in:
+
+```bash
+curl -s https://eai-api-q3u3.onrender.com/api/health | grep -o '"commit":"[^"]*"'
+curl -s https://eai-ml.onrender.com/health | grep -o '"commit":"[^"]*"'
+curl -s https://enterprise-asset-intelligence.vercel.app/ | grep -o 'build-commit" content="[^"]*"'
+```
+
+Three different commits is not necessarily wrong — Render's build filters mean
+a client-only change never rebuilds the ML service — but it is the first thing
+to check when behaviour does not match the code you just read.
+
 There is deliberately no keep-alive pinger: free instance hours are pooled
 across the account, so warming both continuously would exhaust the monthly
 allowance. See `render.yaml`.
