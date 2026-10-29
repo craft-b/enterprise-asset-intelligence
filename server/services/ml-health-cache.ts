@@ -16,9 +16,20 @@
 // one for deciding whether to show a banner, and an in-flight probe is shared
 // rather than duplicated: ten simultaneous callers get one upstream request
 // between them.
+//
+// Caching alone was not enough, and the reason is worth keeping. It cut the
+// rate of aborted probes without removing them: one every ten seconds instead
+// of one every five. A cold start is about seventy seconds, so a single tab
+// still tore the boot down seven times per attempt, and the banner was again
+// reporting on a wake it was preventing -- 640 seconds in one observed tab,
+// while a plain curl against the same service woke it in 71.9.
+//
+// So while a nudge is outstanding, this probes nothing at all. The nudge is
+// one unbounded request already holding the boot open, and it reports when it
+// settles. One request per cold start, total.
 
 import { mlFetch } from "./ml-client";
-import { nudgeMlAwake } from "./ml-wake";
+import { nudgeMlAwake, nudgeHoldingSince } from "./ml-wake";
 
 export interface MlHealth {
   reachable: boolean;
@@ -38,6 +49,17 @@ export const HEALTH_TTL_MS = Number(process.env.ML_HEALTH_TTL_MS ?? 10_000);
 
 /** How long a single probe may take before we call it "not up". */
 const PROBE_MS = Number(process.env.ML_HEALTH_PROBE_MS ?? 4_000);
+
+/**
+ * How long a nudge may hold off probing.
+ *
+ * Deferring to the nudge is right while it is genuinely waiting on a boot,
+ * and wrong if it never comes back -- it has no timeout, so a host that
+ * accepts the connection and goes quiet would silence health checks for the
+ * life of the process. Well past the slowest measured cold start (72.5s) plus
+ * an image pull, so a real wake is never cut short by it.
+ */
+const MAX_NUDGE_TRUST_MS = Number(process.env.ML_NUDGE_TRUST_MS ?? 180_000);
 
 let cached: { at: number; value: MlHealth } | null = null;
 let inFlight: Promise<MlHealth> | null = null;
@@ -88,6 +110,15 @@ export async function getMlHealth(now: number = Date.now()): Promise<MlHealth> {
   if (cached && now - cached.at < HEALTH_TTL_MS) return cached.value;
   if (inFlight) return inFlight;
 
+  // A nudge is holding a cold start open. Answer from what we already know
+  // rather than opening a second connection and aborting it at PROBE_MS --
+  // that abort is the teardown this whole module exists to stop. The nudge
+  // drops the cache when it settles, so the next poll finds out for real.
+  const holdingSince = nudgeHoldingSince();
+  if (holdingSince !== null && now - holdingSince < MAX_NUDGE_TRUST_MS) {
+    return { reachable: false, reason: "starting up" };
+  }
+
   inFlight = (async () => {
     const value = await probeOnce();
     cached = { at: Date.now(), value };
@@ -96,7 +127,7 @@ export async function getMlHealth(now: number = Date.now()): Promise<MlHealth> {
     // own nudges did -- and it is skipped under a rate limit, where another
     // request is the one thing that keeps the limit in force.
     if (!value.reachable && value.reason !== "rate-limited by the host") {
-      nudgeMlAwake();
+      nudgeMlAwake(() => { cached = null; });
     }
     return value;
   })();

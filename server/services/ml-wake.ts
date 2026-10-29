@@ -180,7 +180,7 @@ export async function waitForMl(
  * client counts down to its retry. The rejection is swallowed here rather than
  * escaping as an unhandled one, which this process exits on.
  */
-export function nudgeMlAwake(): void {
+export function nudgeMlAwake(onSettled?: () => void): void {
   // No abort, no timeout, nothing waiting on it.
   //
   // Every other call here is bounded because something is waiting. This one
@@ -209,19 +209,42 @@ export function nudgeMlAwake(): void {
   // edge that answers load with 429 challenge pages.
   if (nudgeInFlight) return;
   nudgeInFlight = true;
+  nudgeStartedAt = Date.now();
   mlFetch("/health", {}, { timeoutMs: Infinity })
     .catch(() => {
       /* a nudge that fails has still asked the container to start */
     })
-    .finally(() => { nudgeInFlight = false; });
+    .finally(() => {
+      nudgeInFlight = false;
+      nudgeStartedAt = null;
+      // A 502 is what a successful wake looks like from the inside, so a
+      // settled nudge either way means the container's state has changed and
+      // whatever was cached about it is stale.
+      onSettled?.();
+    });
 }
 
 /** True while a nudge is outstanding; see nudgeMlAwake. */
 let nudgeInFlight = false;
+let nudgeStartedAt: number | null = null;
+
+/**
+ * When the outstanding nudge started, or null if there is none.
+ *
+ * Callers use this to stay off the service entirely while a nudge is holding
+ * a cold start open. A probe during that window is not a free observation:
+ * it opens a second connection and aborts it, which is the teardown that
+ * stops the boot finishing. The timestamp is exposed rather than a bare
+ * boolean so a nudge that never settles cannot silence probing forever.
+ */
+export function nudgeHoldingSince(): number | null {
+  return nudgeInFlight ? nudgeStartedAt : null;
+}
 
 /** Test seam: forget any outstanding nudge. */
 export function resetNudgeState(): void {
   nudgeInFlight = false;
+  nudgeStartedAt = null;
 }
 
 /**
@@ -254,6 +277,13 @@ export async function wakeAndWait(
   _budgetMs: number = REQUEST_WAKE_BUDGET_MS,
   probeMs: number = REQUEST_WAKE_PROBE_MS,
 ): Promise<boolean> {
+  // A nudge already holding a boot open has the service covered, and probing
+  // past it is worse than useless: the probe is bounded, so it aborts, and an
+  // abort is what tears the cold start down. A client retrying every twenty
+  // seconds through a seventy-second boot used to land three or four of these
+  // on a container that was trying to start.
+  if (nudgeHoldingSince() !== null) return false;
+
   const result = await probe(probeMs);
   if (result === "up") return true;
 

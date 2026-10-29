@@ -16,8 +16,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const mlFetch = vi.fn();
 const nudgeMlAwake = vi.fn();
+let holdingSince: number | null = null;
 vi.mock("./ml-client", () => ({ mlFetch: (...a: unknown[]) => mlFetch(...a) }));
-vi.mock("./ml-wake", () => ({ nudgeMlAwake: () => nudgeMlAwake() }));
+vi.mock("./ml-wake", () => ({
+  nudgeMlAwake: (onSettled?: () => void) => nudgeMlAwake(onSettled),
+  nudgeHoldingSince: () => holdingSince,
+}));
 
 const { getMlHealth, resetMlHealthCache, HEALTH_TTL_MS } = await import("./ml-health-cache");
 
@@ -30,6 +34,7 @@ const healthy = () => ({
 beforeEach(() => {
   mlFetch.mockReset();
   nudgeMlAwake.mockReset();
+  holdingSince = null;
   resetMlHealthCache();
 });
 
@@ -143,5 +148,81 @@ describe("nudging", () => {
     mlFetch.mockRejectedValue(new Error("ECONNREFUSED"));
     await Promise.all(Array.from({ length: 8 }, () => getMlHealth()));
     expect(nudgeMlAwake).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("while a nudge is holding a cold start open", () => {
+  // The defect this covers survived the cache. Caching cut the rate of
+  // aborted probes from one per five seconds to one per ten, and a
+  // seventy-second boot interrupted every ten seconds is a boot that never
+  // finishes: one tab watched the counter reach 640 seconds while a plain
+  // curl against the same service woke it in 71.9.
+
+  it("does not probe at all", async () => {
+    mlFetch.mockResolvedValue(healthy());
+    holdingSince = Date.now();
+
+    const health = await getMlHealth();
+
+    expect(health.reachable).toBe(false);
+    expect(mlFetch, "probed a service that was already being woken").not.toHaveBeenCalled();
+  });
+
+  it("says it is starting up rather than unreachable", async () => {
+    // The banner distinguishes the two, and "unreachable" during a wake that
+    // is underway is both wrong and the more alarming of the two readings.
+    holdingSince = Date.now();
+    await expect(getMlHealth()).resolves.toEqual({
+      reachable: false, reason: "starting up",
+    });
+  });
+
+  it("does not start a second nudge", async () => {
+    holdingSince = Date.now();
+    await getMlHealth();
+    expect(nudgeMlAwake).not.toHaveBeenCalled();
+  });
+
+  it("probes again once a stuck nudge outlives its trust", async () => {
+    // The nudge has no timeout by design, so a host that accepts the
+    // connection and goes quiet would otherwise silence health checks for the
+    // life of the process.
+    mlFetch.mockResolvedValue(healthy());
+    holdingSince = 0;
+    await expect(getMlHealth(200_000)).resolves.toMatchObject({ reachable: true });
+    expect(mlFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("serves a fresh cached reading in preference to deferring", async () => {
+    // Order matters: a service that just answered is up, whatever a nudge
+    // left over from before is doing.
+    mlFetch.mockResolvedValue(healthy());
+    await getMlHealth(0);
+    holdingSince = 1;
+    await expect(getMlHealth(1)).resolves.toMatchObject({ reachable: true });
+    expect(mlFetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("the nudge reports back", () => {
+  it("drops the cache when it settles, so the next poll finds out for real", async () => {
+    // A 502 is what a successful wake looks like from the inside, so the
+    // nudge settling either way means the container's state has changed and
+    // the cached failure is stale. Without this the banner would keep
+    // serving "not up" from cache for the rest of the TTL after the service
+    // had actually come up.
+    mlFetch.mockRejectedValueOnce(new Error("ECONNREFUSED"));
+    await expect(getMlHealth(0)).resolves.toMatchObject({ reachable: false });
+
+    const onSettled = nudgeMlAwake.mock.calls[0]?.[0] as (() => void) | undefined;
+    expect(onSettled, "the nudge was given no way to report back").toBeTypeOf("function");
+
+    mlFetch.mockResolvedValue(healthy());
+    onSettled!();
+
+    // Same instant, well inside the TTL: only the invalidation can explain
+    // a fresh probe here.
+    await expect(getMlHealth(0)).resolves.toMatchObject({ reachable: true });
+    expect(mlFetch).toHaveBeenCalledTimes(2);
   });
 });
