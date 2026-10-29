@@ -69,7 +69,9 @@ export function MlServiceNotice() {
     let stopped = false;
     let timer: ReturnType<typeof setTimeout>;
     let poll = FIRST_POLL_MS;
-    const startedAt = Date.now();
+    // Set on the first failed check and cleared when the service answers, so
+    // a tab that outlives several suspensions times each one separately.
+    let wakeStartedAt: number | null = null;
 
     const tick = async () => {
       const up = await checkMlHealth(controller.signal);
@@ -77,11 +79,21 @@ export function MlServiceNotice() {
 
       if (up) {
         setWaking(false);
+        wakeStartedAt = null;
         return; // answered — stop polling entirely
       }
 
+      // Count from the first failed check, not from mount. These differ
+      // whenever the component outlives a wake, which is most of the time: a
+      // tab left open watches the service go down and come up repeatedly, and
+      // a counter anchored to mount reports the age of the tab. One read
+      // "2300s elapsed" for a service that was simply asleep and had never
+      // been asked to start — a number with no bearing on any cold start,
+      // presented beside a sentence about cold starts.
+      if (wakeStartedAt === null) wakeStartedAt = Date.now();
+
       setWaking(true);
-      setSeconds(Math.floor((Date.now() - startedAt) / 1000));
+      setSeconds(Math.floor((Date.now() - wakeStartedAt) / 1000));
       poll = Math.min(Math.round(poll * 1.5), MAX_POLL_MS);
       timer = setTimeout(tick, poll);
     };

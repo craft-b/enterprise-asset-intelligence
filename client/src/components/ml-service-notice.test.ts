@@ -94,3 +94,50 @@ describe("the advertised cold start", () => {
     expect(read("./api-gate.tsx")).toBeGreaterThanOrEqual(55);
   });
 });
+
+// ── What the counter counts ──────────────────────────────────────────────────
+//
+// The banner reads "{seconds}s elapsed" directly beneath a sentence promising
+// the wait is about sixty seconds, so the number is read as the age of a cold
+// start. It was the age of the component. A tab left open on an ML page while
+// its reader did something else reported "2300s elapsed" for a service that
+// was merely asleep — thirty-eight minutes being how long the tab had been
+// open, and no cold start having been attempted at all.
+//
+// Anchoring to the first FAILED check is what makes the figure mean what the
+// sentence beside it claims. No DOM here, so this is asserted against source.
+describe("the elapsed counter is anchored to the wake, not to the mount", () => {
+  const SRC = readFileSync(join(__dirname, "ml-service-notice.tsx"), "utf8");
+
+  it("does not anchor the counter to mount time", () => {
+    // `const startedAt = Date.now()` in the effect body is the defect: with []
+    // deps it is fixed at mount and never reset.
+    expect(
+      /const\s+startedAt\s*=\s*Date\.now\(\)/.test(SRC),
+      "counter re-anchored to mount; it will report the age of the tab",
+    ).toBe(false);
+  });
+
+  it("starts the clock on the first failed check", () => {
+    expect(SRC).toMatch(/if\s*\(\s*wakeStartedAt\s*===\s*null\s*\)\s*wakeStartedAt\s*=\s*Date\.now\(\)/);
+    expect(SRC).toMatch(/setSeconds\(Math\.floor\(\(Date\.now\(\)\s*-\s*wakeStartedAt\)\s*\/\s*1000\)\)/);
+  });
+
+  it("clears the anchor when the service answers, so a second wake is timed fresh", () => {
+    // Without this, a tab that watches the service suspend and recover reports
+    // the second wait as though it had been running since the first.
+    const upBranch = SRC.slice(SRC.indexOf("if (up) {"), SRC.indexOf("// Count from the first failed check"));
+    expect(upBranch, "the success branch must reset the anchor").toMatch(/wakeStartedAt\s*=\s*null/);
+  });
+
+  it("still promises a figure the counter can plausibly reach", () => {
+    // The prose says ~60s. If that constant drifts far from the measured cold
+    // start the banner misleads again, in the other direction.
+    const m = SRC.match(/TYPICAL_COLD_START_SECONDS\s*=\s*(\d+)/);
+    expect(m, "the stated figure went missing").not.toBeNull();
+    const stated = Number(m![1]);
+    // Measured range across ten observations: 42s - 72.5s.
+    expect(stated).toBeGreaterThanOrEqual(42);
+    expect(stated).toBeLessThanOrEqual(90);
+  });
+});
