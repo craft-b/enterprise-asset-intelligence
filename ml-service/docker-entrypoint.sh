@@ -31,6 +31,20 @@ REGISTRY="${REGISTRY_DIR:-/app/ml-service/registry}"
 FETCH_TIMEOUT="${MODEL_FETCH_TIMEOUT:-30}"
 FETCH_RETRIES="${MODEL_FETCH_RETRIES:-3}"
 
+# A bundle committed in the image beats one fetched over the network, and
+# fetch-models.py already prefers MODEL_BUNDLE_FILE -- this just passes it.
+#
+# Two cases need it. The compose stack mounts the host registry over the baked
+# one, so a build-time bake is invisible at runtime and a fresh clone would
+# otherwise start with no model at all. And on a host with no persistent disk,
+# a registry that ends up empty can now be repaired offline rather than
+# depending on GitHub's CDN, which 502s requests from shared cloud egress
+# addresses -- the reason the bundle was committed in the first place.
+BUNDLE_DIR="${MODEL_BUNDLE_DIR:-/app/ml-service/models}"
+if [ -z "$MODEL_BUNDLE_FILE" ]; then
+    MODEL_BUNDLE_FILE="$(find "$BUNDLE_DIR" -maxdepth 1 -name '*.tar.gz' -print -quit 2>/dev/null)"
+fi
+
 have_models() {
     # A glob that matches nothing exits non-zero, hence find rather than ls.
     [ -n "$(find "$REGISTRY" -maxdepth 1 -name 'rf_*.pkl' -print -quit 2>/dev/null)" ]
@@ -39,16 +53,21 @@ have_models() {
 # One implementation, used by the Dockerfile too, so build-time and runtime
 # behaviour cannot drift apart. See fetch-models.py.
 fetch_bundle() {
-    REGISTRY_DIR="$REGISTRY"     MODEL_BUNDLE_URL="$MODEL_BUNDLE_URL"     MODEL_BUNDLE_SHA256="$MODEL_BUNDLE_SHA256"     MODEL_FETCH_TIMEOUT="$FETCH_TIMEOUT"     MODEL_FETCH_RETRIES="$FETCH_RETRIES"     python /app/ml-service/fetch-models.py
+    REGISTRY_DIR="$REGISTRY"     MODEL_BUNDLE_FILE="$MODEL_BUNDLE_FILE"     MODEL_BUNDLE_URL="$MODEL_BUNDLE_URL"     MODEL_BUNDLE_SHA256="$MODEL_BUNDLE_SHA256"     MODEL_FETCH_TIMEOUT="$FETCH_TIMEOUT"     MODEL_FETCH_RETRIES="$FETCH_RETRIES"     python /app/ml-service/fetch-models.py
 }
 
 if have_models; then
     echo "[ENTRYPOINT] registry already has model artifacts — no download"
-elif [ -z "$MODEL_BUNDLE_URL" ]; then
-    echo "[ENTRYPOINT] registry is empty and MODEL_BUNDLE_URL is unset."
+elif [ -z "$MODEL_BUNDLE_FILE" ] && [ -z "$MODEL_BUNDLE_URL" ]; then
+    echo "[ENTRYPOINT] registry is empty, no bundle in $BUNDLE_DIR and"
+    echo "[ENTRYPOINT] MODEL_BUNDLE_URL is unset."
     echo "[ENTRYPOINT] Starting without a predictor — POST /train to create one."
 else
-    echo "[ENTRYPOINT] registry is empty — fetching model bundle"
+    if [ -n "$MODEL_BUNDLE_FILE" ]; then
+        echo "[ENTRYPOINT] registry is empty — extracting $MODEL_BUNDLE_FILE"
+    else
+        echo "[ENTRYPOINT] registry is empty — fetching model bundle"
+    fi
 
     # Outside `set -e` on purpose: a failed fetch must not kill the container.
     if fetch_bundle; then
@@ -63,4 +82,7 @@ else
     fi
 fi
 
-exec uvicorn api.main:app --host 0.0.0.0 --port "${PORT:-8000}"
+# PORT first: the platform sets it and has final say. ML_SERVICE_PORT is
+# what docker-compose.yml declares, and it was previously read by nobody,
+# so setting it moved nothing and left no clue why.
+exec uvicorn api.main:app --host 0.0.0.0 --port "${PORT:-${ML_SERVICE_PORT:-8000}}"

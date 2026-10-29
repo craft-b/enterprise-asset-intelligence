@@ -22,6 +22,7 @@
 
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
+import { createHash } from "crypto";
 import { join } from "path";
 
 const ROOT = join(__dirname, "..");
@@ -138,5 +139,70 @@ describe("neither image carries the ML registry", () => {
     const code = lines.join(" ");
     expect(code).not.toMatch(/readdirSync|existsSync/);
     expect(code).not.toContain("ml-service/registry");
+  });
+});
+
+// ── The two ML images ────────────────────────────────────────────────────────
+//
+// The compose ML image shipped with no models and no way to get any. Its
+// comment claimed they were "baked into the image at build time", but nothing
+// baked them: registry/*.pkl is gitignored, so a fresh clone has only JSON,
+// and `docker compose up --build` produced a service reporting
+// model_loaded=false with every prediction failing. The production image has
+// always extracted the committed bundle.
+//
+// Same root cause as the server images: two Dockerfiles for one service, only
+// one of them exercised by a deployment.
+
+const ML_PROD = read("ml-service", "Dockerfile");
+const ML_COMPOSE = read("infrastructure", "docker", "Dockerfile.ml-service");
+
+const shaArg = (dockerfile: string): string | null => {
+  const m = dockerfile.match(/ARG MODEL_BUNDLE_SHA256="([a-f0-9]{64})"/);
+  return m ? m[1] : null;
+};
+
+describe("both ML images can obtain a model", () => {
+  it("each extracts the bundle at build time", () => {
+    for (const [name, df] of [["production", ML_PROD], ["compose", ML_COMPOSE]] as const) {
+      expect(df, `${name} ML image does not run fetch-models.py`).toContain("fetch-models.py");
+      expect(df, `${name} ML image does not look for a committed bundle`).toContain("MODEL_BUNDLE_FILE");
+    }
+  });
+
+  it("each runs the shared entrypoint", () => {
+    // The entrypoint repairs an empty registry before starting uvicorn, which
+    // is the case the compose volume mount creates: it shadows the baked
+    // registry, so the build-time bake alone is invisible at runtime.
+    for (const [name, df] of [["production", ML_PROD], ["compose", ML_COMPOSE]] as const) {
+      expect(df, `${name} ML image bypasses the entrypoint`)
+        .toMatch(/ENTRYPOINT\s*\[\s*"\/usr\/local\/bin\/docker-entrypoint\.sh"\s*\]/);
+    }
+  });
+
+  it("neither leaves a CMD the entrypoint ignores", () => {
+    expect(ML_COMPOSE).not.toMatch(/^CMD /m);
+    expect(ML_PROD).not.toMatch(/^CMD /m);
+  });
+
+  it("pins the same bundle checksum in both", () => {
+    // Different checksums would mean the two images can ship different models
+    // while every other signal says they are the same service.
+    const prod = shaArg(ML_PROD);
+    const compose = shaArg(ML_COMPOSE);
+    expect(prod, "production ML image pins no bundle checksum").toBeTruthy();
+    expect(compose).toBe(prod);
+  });
+});
+
+describe("the committed bundle matches its pinned checksum", () => {
+  it("hashes to the value both Dockerfiles expect", () => {
+    // The check that makes the pin mean something. Replacing the bundle
+    // without updating the ARG would otherwise fail inside a Docker build --
+    // the slowest, least informative place to discover it, and on the compose
+    // path, one nobody runs.
+    const bundle = readFileSync(join(ROOT, "ml-service", "models", "eai-models-v1.17.tar.gz"));
+    const actual = createHash("sha256").update(bundle).digest("hex");
+    expect(actual).toBe(shaArg(ML_PROD));
   });
 });

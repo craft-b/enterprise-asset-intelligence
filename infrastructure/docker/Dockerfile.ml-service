@@ -20,11 +20,30 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy ML service source
 COPY ml-service/ .
 
-# Model artifacts are in registry/ — baked into the image at build time.
-# No retraining occurs on container start; train locally and rebuild to ship
-# a new model version.
-# (The volume mount in docker-compose.yml overrides this in local dev,
-#  allowing hot-swap of the registry without rebuilding the image.)
+# ---- Models ----------------------------------------------------------------
+# This image shipped with no models and no way to get any. The comment here
+# claimed they were "baked into the image at build time", but nothing baked
+# them: registry/*.pkl is gitignored, so a fresh clone has only JSON, and
+# `docker compose up --build` produced an ML service reporting
+# model_loaded=false with every prediction failing. The production image
+# (ml-service/Dockerfile) has always extracted the committed bundle here.
+#
+# Two layers, because the compose file mounts the host registry over this one:
+#
+#   1. The bake below, for a build with no volume mount.
+#   2. The entrypoint, which extracts the same bundle when it finds the
+#      registry empty at runtime -- which is what the mount makes it on a
+#      fresh clone. It writes into the mount, so the host keeps the result
+#      and later starts skip the work.
+#
+# Offline either way: the bundle is committed at ml-service/models, which is a
+# deliberate reversal of fetching it from a GitHub release. That CDN answers
+# requests from cloud egress addresses with 502 while the same URL fetches in
+# two seconds from a laptop. MODEL_BUNDLE_URL still works as an override.
+ARG MODEL_BUNDLE_URL=""
+ARG MODEL_BUNDLE_SHA256="2ac9c74f87ce7610229fdb9c31fbd9fef1a9c5439d0337d8615fc09cc3900ed4"
+ARG SKIP_MODEL_BAKE=""
+RUN if [ -n "$SKIP_MODEL_BAKE" ]; then         echo '[BUILD] SKIP_MODEL_BAKE set - entrypoint will extract at startup';     else         MODEL_BUNDLE_FILE="$(find models -maxdepth 1 -name "*.tar.gz" | head -1)"         MODEL_BUNDLE_URL="$MODEL_BUNDLE_URL"         MODEL_BUNDLE_SHA256="$MODEL_BUNDLE_SHA256"         REGISTRY_DIR=/app/ml-service/registry         python fetch-models.py;     fi
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -32,8 +51,11 @@ ENV PYTHONUNBUFFERED=1 \
 
 EXPOSE 8000
 
-# docker-compose.yml sets ML_SERVICE_PORT, so read that first: this line
-# read only PORT, which compose never sets, and agreed with the compose
-# file only because both defaults were 8000. Changing ML_SERVICE_PORT
-# would have moved nothing and left no clue why.
-CMD ["sh", "-c", "uvicorn api.main:app --host 0.0.0.0 --port ${ML_SERVICE_PORT:-${PORT:-8000}}"]
+# The same entrypoint the production image uses: it repairs an empty registry
+# before starting uvicorn, and resolves the port from PORT then
+# ML_SERVICE_PORT. One implementation, so build-time and runtime behaviour
+# here cannot drift from the deployed service.
+COPY ml-service/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
