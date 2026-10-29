@@ -32,8 +32,25 @@ COPY --from=builder /app/package.json ./
 # ml-service/registry is needed by routes.ts to read feature importance files
 COPY --from=builder /app/ml-service/registry ./ml-service/registry
 
+# drizzle-kit migrate reads the config, the migration files and the schema
+# they point at, so all three have to be in the RUNTIME image -- not just the
+# build stage. This image had none of them and no entrypoint either, so the
+# migrations docker-compose.yml promises on boot were never applied and the
+# server came up against a database with no tables. The root Dockerfile, which
+# is the image actually running in production, has had this right all along;
+# this one had silently diverged from it. See dockerfile-parity.test.ts.
+COPY --from=builder /app/migrations ./migrations
+COPY --from=builder /app/shared ./shared
+COPY --from=builder /app/drizzle.config.ts ./
+COPY --from=builder /app/tsconfig.json ./
+
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
 ENV NODE_ENV=production
 
 EXPOSE 5000
 
-CMD ["node", "dist/index.cjs"]
+# The entrypoint applies migrations and then execs the server. Setting CMD as
+# well would be dead configuration: ENTRYPOINT ignores it here.
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

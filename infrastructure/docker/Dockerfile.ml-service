@@ -32,4 +32,8 @@ ENV PYTHONUNBUFFERED=1 \
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "uvicorn api.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# docker-compose.yml sets ML_SERVICE_PORT, so read that first: this line
+# read only PORT, which compose never sets, and agreed with the compose
+# file only because both defaults were 8000. Changing ML_SERVICE_PORT
+# would have moved nothing and left no clue why.
+CMD ["sh", "-c", "uvicorn api.main:app --host 0.0.0.0 --port ${ML_SERVICE_PORT:-${PORT:-8000}}"]
