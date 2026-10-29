@@ -30,41 +30,51 @@ export const RISK_HOVER: Record<RiskLevel, string> = {
   LOW:    "hover:bg-risk-low/[0.06]",
 };
 
-// Plain-language fallback dictionary. The ML service already emits descriptive
-// phrases ("Asset age: 13.4 years …"); this dictionary only kicks in if a raw
-// snake_case feature key ever reaches the UI, so nothing shows as "wear_rate".
+// Plain-language names for model feature keys. Every SHAP attribution bar goes
+// through this map: `shap_attribution` is keyed by the pipeline's raw column
+// names, so nothing shows as "wear_rate". (`top_risk_drivers` is a different
+// path — the ML service emits finished prose there, which humanizeDriver passes
+// through untouched.)
+//
+// These name the QUANTITY, never a direction. A label like "Short time between
+// failures" is a bug: MTBF is a duration where high is good, and when SHAP
+// correctly reports it as protective the row reads "Short time between failures
+// — 22% protective", i.e. that frequent failures protect the asset. The sign
+// and the colour carry direction — that is what the card legend promises — and
+// expanding a row shows the unit's value against the fleet average.
 export const DRIVER_LABELS: Record<string, string> = {
-  wear_rate:                   "Wear rate accelerating",
-  wear_rate_velocity:          "Wear accelerating faster",
-  mechanical_wear_score:       "High mechanical wear",
-  days_since_last_maintenance: "Overdue for service",
+  wear_rate:                   "Wear rate",
+  wear_rate_velocity:          "Wear rate acceleration",
+  mechanical_wear_score:       "Mechanical wear",
+  days_since_last_maintenance: "Days since last service",
+  // A 0/1 indicator: "overdue" is the name of the flag, not an asserted direction.
   maint_overdue:               "Maintenance overdue",
-  maintenance_events_90d:      "Frequent recent repairs",
-  maint_frequency_trend:       "Repairs trending up",
-  maintenance_cost_180d:       "Rising maintenance cost",
-  maint_burden:                "Heavy maintenance burden",
-  cost_per_event:              "Costly repairs",
-  cost_trend:                  "Repair costs climbing",
-  avg_downtime_per_event:      "Long downtime per repair",
-  mean_time_between_failures:  "Short time between failures",
-  usage_intensity:             "Intense duty cycle",
-  usage_trend:                 "Usage trending up",
-  hours_used_30d:              "Heavy recent hours",
-  hours_used_90d:              "Sustained heavy use",
-  hours_velocity:              "Hours accumulating fast",
-  utilization_vs_expected:     "Over-utilized vs. plan",
-  total_hours_lifetime:        "High lifetime hours",
-  asset_age_years:             "Aging asset",
-  aging_factor:                "Age-related risk",
-  abuse_score:                 "Signs of hard use",
-  neglect_score:               "Signs of neglect",
-  neglect_acceleration:        "Neglect worsening",
-  jobsite_risk_score:          "Harsh jobsite conditions",
-  vendor_reliability_score:    "Lower-reliability vendor",
-  sensor_degradation_rate:     "Sensor degradation detected",
-  avg_rental_duration:         "Long rental exposure",
-  rental_days_30d:             "High recent rental days",
-  rental_days_90d:             "Sustained rental exposure",
+  maintenance_events_90d:      "Maintenance events (90d)",
+  maint_frequency_trend:       "Maintenance frequency trend",
+  maintenance_cost_180d:       "Maintenance cost (180d)",
+  maint_burden:                "Maintenance burden",
+  cost_per_event:              "Cost per repair",
+  cost_trend:                  "Repair cost trend",
+  avg_downtime_per_event:      "Downtime per repair",
+  mean_time_between_failures:  "Time between failures",
+  usage_intensity:             "Duty cycle intensity",
+  usage_trend:                 "Usage trend",
+  hours_used_30d:              "Hours used (30d)",
+  hours_used_90d:              "Hours used (90d)",
+  hours_velocity:              "Hours accumulation rate",
+  utilization_vs_expected:     "Utilization vs. plan",
+  total_hours_lifetime:        "Lifetime hours",
+  asset_age_years:             "Asset age",
+  aging_factor:                "Aging factor",
+  abuse_score:                 "Hard-use score",
+  neglect_score:               "Neglect score",
+  neglect_acceleration:        "Neglect acceleration",
+  jobsite_risk_score:          "Jobsite risk score",
+  vendor_reliability_score:    "Vendor reliability",
+  sensor_degradation_rate:     "Sensor degradation rate",
+  avg_rental_duration:         "Average rental duration",
+  rental_days_30d:             "Rental days (30d)",
+  rental_days_90d:             "Rental days (90d)",
 };
 
 /** Turn a driver token into a clean, mechanic-facing phrase. */

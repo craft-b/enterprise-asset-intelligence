@@ -276,8 +276,10 @@ Decisions:
    calibrated probability + trend arrow + projection sparkline with HIGH-crossing marker) →
    **explanation panel** → maintenance/rental timeline (event-source badges) → sensor trends.
 3. **Explainability surface (trust-critical):** SHAP already computed per prediction — surface it as
-   a horizontal contribution bar chart: signed bars ("+21% Wear rate accelerating", "−8% Recently
-   serviced"), each expandable to the raw feature value vs. fleet baseline. Kill the current dual
+   a horizontal contribution bar chart: signed bars ("+21% Wear rate", "−8% Days since last
+   service"), each expandable to the raw feature value vs. fleet baseline. Bar labels name the
+   quantity and never a direction — the sign and colour carry that, and a label that presumes
+   one ("Short time between failures") contradicts the bar whenever SHAP reports it protective. Kill the current dual
    system where heuristic "drivers" (hardcoded thresholds) masquerade as model attribution (ML-9
    adjacent): one attribution source (SHAP), one phrase dictionary mapping features → mechanic
    language. Confidence & provenance line under every score: "v1.15 · trained 2026-03-14 ·
