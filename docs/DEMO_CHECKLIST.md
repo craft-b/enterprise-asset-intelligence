@@ -21,10 +21,19 @@ curl -s -o /dev/null -w "ml  %{http_code} in %{time_total}s\n" --max-time 150 ht
 Both at once, so you pay one wait instead of two. Wait for both lines, then
 open the app.
 
-**Measured, not estimated.** ML cold starts, seven observations across several
-days: **42, 51, 61.5, 62, 62.9, 63.1, 71.9 seconds** — so budget 75s and do
-not conclude anything is broken before then. A cold start after hours idle
+**Measured, not estimated.** ML cold starts, eight observations across several
+days: **42, 51, 61.5, 61.5, 62, 62.9, 63.1, 71.9 seconds** — so budget 75s and
+do not conclude anything is broken before then. A cold start after hours idle
 sits at the top of that range because the image may need pulling again.
+
+What those seconds are, from one wake measured against the build stamp: a
+request at 02:49:44 reached a container whose process started at 02:50:06 and
+answered 38.7s later. So **~22s of host-side scheduling and image pull before
+Python runs at all, then ~39s of application boot** — loading three models,
+the encoder and the clip thresholds. Neither half is a hang, and the first
+half is not something the service can report on, because it is not running
+yet. That split only became visible once /health carried `booted_at` and
+`uptime_seconds`; before `3aab1c5` the whole interval was one opaque wait.
 
 Warm, once both are up — three samples each, 2026-10-28:
 
@@ -97,6 +106,7 @@ this table went stale without anyone noticing.
 | Drift batch size | **batch of 60** | drift card header, after `a2bb7c4` |
 | Drift monitors | all three populated | first run to clear `MIN_BATCH_SIZE = 20` |
 | Cold-start banner | clears unaided at **~70s** | after `7a67e5c` |
+| Model page | feature importance and hyperparameters render | confirmed after `8b926d7` removed `ml-service/registry` from the API image; the data comes over HTTP from the ML service |
 
 **Last observed on the ten-asset seed, 2026-10-21 — not re-measured.** Kept
 because a stale observation is still a fact about a known past state, where a
