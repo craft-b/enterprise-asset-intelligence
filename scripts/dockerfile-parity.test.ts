@@ -100,3 +100,43 @@ describe("the migrations compose promises actually run", () => {
     expect(pkg.scripts["db:migrate"]).toBeTruthy();
   });
 });
+
+const NEWLINE = /\r?\n/;
+
+describe("neither image carries the ML registry", () => {
+  // It was copied into both under the comment "needed by routes.ts to read
+  // feature importance files". Feature importance comes over HTTP from the ML
+  // service, and the last filesystem read of the directory -- the modelStatus
+  // probe -- was removed in 4342e72 precisely because it could only ever fail
+  // in a container that has never had the path.
+  //
+  // Checked because the cost is invisible and the mistake is easy to repeat.
+  // From a git clone it is ~1.7MB of superseded JSON; from a working tree that
+  // has trained locally it is 431MB of pickles, because .dockerignore does not
+  // exclude registry/*.pkl. Either way nothing reads it.
+
+  it("does not copy it into the production image", () => {
+    expect(runtimeCopies(PROD)).not.toContain("ml-service/registry");
+  });
+
+  it("does not copy it into the compose image", () => {
+    expect(runtimeCopies(COMPOSE_SERVER)).not.toContain("ml-service/registry");
+  });
+
+  it("has no server code that would need it back", () => {
+    // The guard that gives the two above their meaning: if a filesystem read
+    // of the registry ever returns to the API, this fails and says why,
+    // rather than someone re-adding the COPY to fix it and the directory
+    // silently shipping again. mlFetch to the ML service is the route.
+    const lines = ["routes.ts", "services/model-status.ts"]
+      .flatMap(f => read("server", f).split(NEWLINE))
+      .filter(line => {
+        const t = line.trim();
+        return !t.startsWith("//") && !t.startsWith("*");
+      });
+
+    const code = lines.join(" ");
+    expect(code).not.toMatch(/readdirSync|existsSync/);
+    expect(code).not.toContain("ml-service/registry");
+  });
+});
