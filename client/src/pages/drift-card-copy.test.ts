@@ -138,3 +138,67 @@ describe("the interface and the document agree", () => {
     expect(CODE).not.toContain("this dataset cannot produce one");
   });
 });
+
+describe("a populated card explains why it is alerting", () => {
+  // A reviewer meeting three red cards reads "broken model" before they read
+  // "working monitor", and on this fleet the second one is the true reading:
+  // the seed is deliberately weighted toward aged, high-duty units, so the
+  // distributions genuinely differ from the training sample. That context
+  // lived only in the author's head, which made the project's strongest
+  // ML-maturity signal look like its biggest defect.
+
+  it("puts a note on all three cards", () => {
+    expect(CODE.match(/<DriftContextNote>/g) ?? []).toHaveLength(3);
+  });
+
+  it("shows each note only when something is actually alerting", () => {
+    // The point of the guard. Explaining an alert that is not on screen is an
+    // excuse offered before anyone asked for one, and it reads worse than the
+    // alert it was meant to explain -- so every note must sit behind a test
+    // for a non-stable status.
+    const uses = [...CODE.matchAll(/<DriftContextNote>/g)];
+    expect(uses).toHaveLength(3);
+    for (const use of uses) {
+      const preceding = CODE.slice(Math.max(0, use.index! - 220), use.index!);
+      expect(
+        preceding,
+        "a drift note is rendered unconditionally; it must be guarded by an alerting status"
+      ).toMatch(/\.some\(/);
+    }
+  });
+
+  it("names the cause rather than asserting the model is fine", () => {
+    // The note has to earn its place by explaining a mechanism. "Older,
+    // harder-worked machines than the training sample" is a claim a reader
+    // can check against the seed; "the model is fine" is not.
+    expect(CODE).toContain("older, harder-worked machines");
+    expect(CODE).toContain("the detector reporting that correctly");
+  });
+
+  it("says what the same reading would mean in production", () => {
+    // Without this the note is special pleading. With it, it is the thing
+    // worth demonstrating: the monitor is wired to a decision.
+    expect(CODE).toContain("the trigger to retrain against current data");
+  });
+
+  it("does not tell the viewer to disregard the alert", () => {
+    // The failure mode of this kind of copy. Explaining a reading is the
+    // opposite of dismissing it, and a monitor whose own interface waves its
+    // findings away is worth less than no monitor.
+    for (const phrase of [
+      "false positive", "safe to ignore", "can be ignored",
+      "nothing to worry about", "not a real", "disregard",
+    ]) {
+      expect(CODE.toLowerCase()).not.toContain(phrase);
+    }
+  });
+
+  it("keeps the small-sample caveat on bias, where the categories are small", () => {
+    // Bias drift divides sixty assets across nine categories, so a single
+    // aged machine moves a percentage a long way. That is a different
+    // argument from the fleet-level one and the card should make it, not
+    // repeat the other two.
+    expect(CODE).toContain("a single aged machine moves the percentage");
+    expect(CODE).toContain("not yet a verdict on it");
+  });
+});

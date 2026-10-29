@@ -90,6 +90,31 @@ function statusTextClass(status: string) {
 }
 
 /**
+ * Why a drift monitor on this fleet reports drift.
+ *
+ * A reviewer meeting three red cards reads "broken model" before they read
+ * "working monitor", and on this demo the second one is the true reading. The
+ * seeded fleet is deliberately weighted toward aged, high-duty units -- that
+ * is what gives the risk queue anything to rank -- so it genuinely differs
+ * from the distribution the champion was trained on. The detectors are
+ * measuring a real difference and saying so.
+ *
+ * Shown only when something is actually alerting. On a card that is all
+ * stable this would be an excuse offered before anyone asked for one, which
+ * reads worse than the alert it was meant to explain.
+ */
+function DriftContextNote({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="rounded-md border-l-2 border-slate-300 bg-slate-50 px-3 py-2">
+      <p className="text-xs leading-relaxed text-slate-600">
+        <span className="font-medium text-slate-700">Why this is alerting: </span>
+        {children}
+      </p>
+    </div>
+  );
+}
+
+/**
  * Re-score the fleet on demand.
  *
  * The mutation behind this existed and nothing rendered it, so when a seed run
@@ -268,6 +293,16 @@ function DriftMonitorCard() {
               <span><span className="font-medium text-risk-medium">Warning</span> 0.10 – 0.20</span>
               <span><span className="font-medium text-risk-high">Alert</span> &gt; 0.20 → retrain recommended</span>
             </div>
+
+            {drift.features.some(f => f.status === "ALERT" || f.status === "WARNING") && (
+              <DriftContextNote>
+                The demo fleet is seeded toward older, harder-worked machines
+                than the training sample, so its input features really are
+                distributed differently — a high PSI here is the detector
+                reporting that correctly. On a production fleet the same
+                reading is the trigger to retrain against current data.
+              </DriftContextNote>
+            )}
           </div>
         )}
       </CardContent>
@@ -376,6 +411,16 @@ function PredictionDriftCard() {
               <span><span className="font-medium text-risk-medium">Warning</span> 0.10 – 0.20</span>
               <span><span className="font-medium text-risk-high">Alert</span> &gt; 0.20 → investigate</span>
             </div>
+
+            {data.horizons.some(h => h.score_status === "ALERT" || h.score_status === "WARNING") && (
+              <DriftContextNote>
+                An older fleet scores higher, so a HIGH share above the
+                training baseline is the expected consequence of the seed
+                rather than a miscalibrated model. What would be worth
+                investigating on a real fleet is this gap widening between
+                runs on a fleet that had not changed.
+              </DriftContextNote>
+            )}
           </div>
         )}
       </CardContent>
@@ -484,6 +529,17 @@ function BiasDriftCard() {
               Alerts when any category's HIGH% deviates &gt;15pp from its training baseline —
               indicates the model may be systematically mis-scoring a specific asset type.
             </p>
+
+            {data.categories.some(c => Boolean(c.alert)) && (
+              <DriftContextNote>
+                Each category is measured over however many units of that type
+                the fleet holds — four to a dozen here, not thousands — so a
+                single aged machine moves the percentage a long way. A
+                deviation on this fleet is worth reading as a question about
+                that asset type, not yet a verdict on it; the same reading
+                over a few hundred units would be.
+              </DriftContextNote>
+            )}
           </div>
         )}
       </CardContent>
