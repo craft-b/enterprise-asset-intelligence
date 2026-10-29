@@ -644,6 +644,10 @@ takes, and each persists to its own table. The reference distributions live in t
 disk — and because the loader's glob previously matched the committed per-version files but never
 the one the compute step wrote, so a freshly computed reference was not the one in use.
 
+Confirmed end to end on 2026-10-28: a scoring run over sixty assets populated all three layers in
+one pass, with the drift cards reporting a batch of 60. Before that the claim here was only that the
+fleet *could* exercise it.
+
 Two sample minimums used to stop it, and the fleet was grown past both. Neither floor moved:
 
 - **A batch needs 20 snapshots to be worth a PSI.** Ten assets produced ten rows, so every run
