@@ -69,8 +69,13 @@ export const DRIVER_LABELS: Record<string, string> = {
   abuse_score:                 "Hard-use score",
   neglect_score:               "Neglect score",
   neglect_acceleration:        "Neglect acceleration",
-  jobsite_risk_score:          "Jobsite risk score",
-  vendor_reliability_score:    "Vendor reliability",
+  // Named for a vendor and a job site, but neither reads those tables. See
+  // feature-engineering-enhanced.ts:401-413 — vendor_reliability_score is this
+  // unit's own failure rate, and jobsite_risk_score is a linear combination of
+  // utilization_vs_expected and usage_trend, both already model inputs. The
+  // labels name what is measured; the column names are a known defect.
+  jobsite_risk_score:          "Utilization exposure index",
+  vendor_reliability_score:    "Maintenance frequency index",
   sensor_degradation_rate:     "Sensor degradation rate",
   avg_rental_duration:         "Average rental duration",
   rental_days_30d:             "Rental days (30d)",

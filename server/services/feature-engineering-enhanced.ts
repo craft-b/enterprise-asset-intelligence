@@ -398,16 +398,32 @@ class EnhancedFeatureEngineeringService {
     const neglectScore = computeNeglectScore(daysSinceLastMaintenance, maintOverdue);
 
     // ── Dynamic context scores (v2) ────────────────────────────────────────
-    // vendorReliabilityScore: inverse of maintenance frequency relative to age
-    // More failures per year = less reliable vendor/equipment combination
+    // NAMING DEFECT, known and deliberate for now: neither of these reads the
+    // vendors or jobSites table. Both names claim an external cause the data
+    // cannot support, which matters because they surface on the SHAP panel —
+    // "Lower-reliability vendor, 29% of this score" told a reader the supplier
+    // was responsible for a number computed entirely from the asset itself.
+    // The display labels now name what is measured (risk-format.ts); the column
+    // names are left alone because the champion was trained on them and
+    // renaming would force a retrain. See docs/ML_KNOWN_WORK.md.
+
+    // vendorReliabilityScore: this unit's own maintenance events per year,
+    // inverted and scaled. Largely redundant with maintenance_events_90d,
+    // maint_frequency_trend and mean_time_between_failures, all model inputs.
     const failuresPerYear = allMaint.length > 0 && assetAgeYears > 0
       ? allMaint.length / assetAgeYears
       : 0;
-    // Baseline: 4 events/year = perfectly reliable (0.80), 12+/yr = poor (0.40)
+    // Calibration, as the formula actually behaves: 4 events/yr -> 0.95 (the
+    // ceiling), 12/yr -> 0.63, and the 0.40 floor is not reached until ~17.75/yr.
+    // A previous comment here stated 0.80 and 0.40 for those first two points;
+    // both were wrong, and the floor was unreachable at the rate claimed.
     const vendorReliabilityScore = Math.max(0.40, Math.min(0.95, 0.95 - (failuresPerYear - 4) * 0.04));
 
-    // jobSiteRiskScore: based on rental activity intensity
-    // High utilization + high usage trend = higher jobsite risk exposure
+    // jobSiteRiskScore: a deterministic linear combination of two features the
+    // model already receives separately, so it is collinear with them by
+    // construction. It carries no information they do not, and it splits SHAP
+    // attribution with its own components. It should be dropped and the model
+    // retrained; that is a scored change, not a rename. See ML_KNOWN_WORK.md.
     const jobSiteRiskScore = Math.min(0.95, Math.max(0.20,
       0.30 + (utilizationVsExpected * 0.30) + (Math.min(usageTrend, 3) - 1) * 0.15
     ));
