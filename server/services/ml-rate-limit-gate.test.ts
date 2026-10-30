@@ -22,7 +22,7 @@ const fetchMock = vi.fn();
 process.env.ML_SERVICE_URL = "https://ml.example.test";
 const {
   mlFetch, rateLimitRemaining, resetRateLimitGate, rateLimitState,
-  cooldownFor, RATE_LIMIT_COOLDOWN_MS, RATE_LIMIT_MAX_COOLDOWN_MS,
+  cooldownFor, probeHostDirectly, RATE_LIMIT_COOLDOWN_MS, RATE_LIMIT_MAX_COOLDOWN_MS,
 } = await import("./ml-client");
 
 const reply = (status: number) =>
@@ -191,5 +191,37 @@ describe("cooldownFor", () => {
     await mlFetch("/health");
     expect(rateLimitState().lastRetryAfter).toBe("300");
     expect(rateLimitState().remainingMs).toBeGreaterThan(290_000);
+  });
+});
+
+describe("probeHostDirectly", () => {
+  it("goes out even while the gate is holding", async () => {
+    fetchMock.mockResolvedValue(reply(429));
+    await mlFetch("/health");
+    expect(rateLimitRemaining()).toBeGreaterThan(0);
+
+    fetchMock.mockClear();
+    fetchMock.mockResolvedValue(reply(200));
+    const res = await probeHostDirectly(1_000);
+
+    expect(res.status).toBe(200);
+    expect(fetchMock, "the diagnostic must reach the host, not the gate").toHaveBeenCalledTimes(1);
+  });
+
+  it("does not disturb the gate it is reporting on", async () => {
+    fetchMock.mockResolvedValue(reply(429));
+    await mlFetch("/health");
+    const before = rateLimitState();
+
+    // Neither a refusal nor a success through the diagnostic should move the
+    // strike count or the cooldown -- it is an observation, not a caller.
+    fetchMock.mockResolvedValue(reply(429));
+    await probeHostDirectly(1_000);
+    expect(rateLimitState().consecutive429).toBe(before.consecutive429);
+
+    fetchMock.mockResolvedValue(reply(200));
+    await probeHostDirectly(1_000);
+    expect(rateLimitState().consecutive429).toBe(before.consecutive429);
+    expect(rateLimitRemaining()).toBeGreaterThan(0);
   });
 });

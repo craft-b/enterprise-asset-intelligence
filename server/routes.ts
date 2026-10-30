@@ -20,7 +20,7 @@ import { assetRiskPredictions } from "@shared/schema";
 import { enhancedFeatureService } from "./services/feature-engineering-enhanced";
 import { evaluatePMSchedule, generatePMDescription, samplePMCost, MaintenanceTypeKey } from "./services/pm-scheduler";
 import { startSeedJob, getSeedStatus, getLastSeedRun, getSystemStatus, resetSystem } from "./services/seed-orchestrator";
-import { mlFetch, describeMlFailure, ML_SLOW_TIMEOUT_MS, ML_SERVICE_URL, rateLimitState } from "./services/ml-client";
+import { mlFetch, describeMlFailure, ML_SLOW_TIMEOUT_MS, ML_SERVICE_URL, rateLimitState, probeHostDirectly } from "./services/ml-client";
 import { wakeAndWait, nudgeMlAwake, nudgeHoldingSince, REQUEST_WAKE_BUDGET_MS, REQUEST_WAKE_PROBE_MS, RETRY_AFTER_SECONDS, RATE_LIMIT_RETRY_SECONDS } from "./services/ml-wake";
 import { getMlHealth } from "./services/ml-health-cache";
 import { getModelStatus } from "./services/model-status";
@@ -2132,7 +2132,9 @@ export async function registerRoutes(
     const started = Date.now();
     let probe: Record<string, unknown>;
     try {
-      const r = await mlFetch("/health", {}, { timeoutMs: 10_000 });
+      // Past the gate on purpose: see probeHostDirectly. A gated probe
+      // reports our own 429 in a millisecond and says nothing about Render.
+      const r = await probeHostDirectly(10_000);
       probe = {
         status: r.status,
         ms: Date.now() - started,

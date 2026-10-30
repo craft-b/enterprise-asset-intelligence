@@ -245,6 +245,33 @@ function recordOutcome(res: Response): void {
   }
 }
 
+/**
+ * One request that ignores the gate and does not touch it.
+ *
+ * For the admin diagnostic only. The gate is shared and silent by design, so
+ * every ordinary caller is short-circuited during a cooldown -- including the
+ * diagnostic, which then reported our own synthetic 429 with ms:1 and told us
+ * nothing about the host. An instrument that cannot see past the thing it is
+ * measuring is the same fault as the banner that reported on a cold start it
+ * was preventing.
+ *
+ * It is deliberately read-only: a 429 here does not count as a strike and a
+ * success does not clear one. An observation that moves what it observes is
+ * worse than none, and this is one manual request by one admin.
+ */
+export async function probeHostDirectly(timeoutMs = 10_000): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(`${ML_SERVICE_URL}/health`, {
+      headers: mlHeaders({ json: false }),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function mlFetch(
   path: string,
   init: RequestInit = {},
