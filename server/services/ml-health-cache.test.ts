@@ -23,7 +23,8 @@ vi.mock("./ml-wake", () => ({
   nudgeHoldingSince: () => holdingSince,
 }));
 
-const { getMlHealth, resetMlHealthCache, HEALTH_TTL_MS } = await import("./ml-health-cache");
+const { getMlHealth, resetMlHealthCache, HEALTH_TTL_MS, RATE_LIMIT_TTL_MS, RATE_LIMITED_REASON } =
+  await import("./ml-health-cache");
 
 const healthy = () => ({
   ok: true,
@@ -223,6 +224,77 @@ describe("the nudge reports back", () => {
     // Same instant, well inside the TTL: only the invalidation can explain
     // a fresh probe here.
     await expect(getMlHealth(0)).resolves.toMatchObject({ reachable: true });
+    expect(mlFetch).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ── Getting out of a rate limit ──────────────────────────────────────────────
+//
+// Observed in production, and the reason this block exists: an API that had
+// been probing a sleeping ML service every ten seconds earned a 429 from the
+// host's edge. From that point the system could not recover on its own.
+//
+// The probe drew a 429. The 429 suppressed the nudge, correctly — another
+// request is the one thing that keeps a limit in force. But suppressing the
+// nudge was only half a rule: the probes kept their ten-second TTL and went
+// on asking six times a minute, which kept the limit alive, which kept the
+// nudge suppressed. No nudge meant nothing ever asked the container to start.
+//
+// A banner counted past 2300 seconds against a service that was merely
+// asleep and that answered every other address in the world normally. The
+// API had locked itself out and had no path back in.
+describe("a rate limit has to decay", () => {
+  const limited = () => ({ ok: false, status: 429, json: async () => ({}) });
+
+  it("does not nudge into a rate limit", async () => {
+    mlFetch.mockResolvedValue(limited());
+    const health = await getMlHealth();
+    expect(health).toEqual({ reachable: false, reason: RATE_LIMITED_REASON });
+    expect(nudgeMlAwake).not.toHaveBeenCalled();
+  });
+
+  it("holds a rate-limited reading far longer than an ordinary one", async () => {
+    // The whole fix. At the ordinary TTL the API keeps asking six times a
+    // minute and the limit never lapses.
+    expect(RATE_LIMIT_TTL_MS).toBeGreaterThan(HEALTH_TTL_MS * 4);
+  });
+
+  it("does not re-probe while the rate-limited reading is still held", async () => {
+    mlFetch.mockResolvedValue(limited());
+    await getMlHealth();
+    // Well past the ordinary TTL, which is where the old code probed again.
+    await getMlHealth(Date.now() + HEALTH_TTL_MS * 3);
+    expect(mlFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("probes again once the rate-limited reading expires", async () => {
+    mlFetch.mockResolvedValue(limited());
+    await getMlHealth();
+    await getMlHealth(Date.now() + RATE_LIMIT_TTL_MS + 1);
+    expect(mlFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("escapes: once the limit lifts, the next probe nudges the service awake", async () => {
+    // The exit this deadlock had no way to reach. A probe that gets past the
+    // edge reads "not yet", and a "not yet" is allowed to nudge.
+    mlFetch.mockResolvedValue(limited());
+    await getMlHealth();
+    expect(nudgeMlAwake).not.toHaveBeenCalled();
+
+    mlFetch.mockRejectedValue(new Error("socket hang up"));
+    const after = await getMlHealth(Date.now() + RATE_LIMIT_TTL_MS + 1);
+
+    expect(after.reachable).toBe(false);
+    expect(after.reason).not.toBe(RATE_LIMITED_REASON);
+    expect(nudgeMlAwake).toHaveBeenCalledTimes(1);
+  });
+
+  it("a healthy reading still uses the ordinary TTL", async () => {
+    // The long hold is for rate limits only. Applying it to a good reading
+    // would make a service that came up take a minute to be noticed.
+    mlFetch.mockResolvedValue(healthy());
+    await getMlHealth();
+    await getMlHealth(Date.now() + HEALTH_TTL_MS + 1);
     expect(mlFetch).toHaveBeenCalledTimes(2);
   });
 });

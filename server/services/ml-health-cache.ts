@@ -27,6 +27,19 @@
 // So while a nudge is outstanding, this probes nothing at all. The nudge is
 // one unbounded request already holding the boot open, and it reports when it
 // settles. One request per cold start, total.
+//
+// That still left a way to lock the service out entirely, and it took a third
+// production failure to find. Not nudging under a rate limit is right -- but
+// it was only half a rule, because the probes kept their ten-second TTL and
+// went on asking six times a minute. The 429 suppressed the nudge, the probes
+// kept the 429 alive, and with no nudge nothing ever asked the container to
+// start. A banner counted past 2300 seconds against a service that was merely
+// asleep and that answered every other address normally; this API had earned
+// its own rate limit by polling and had no path back out of it.
+//
+// A rate-limited reading is therefore held for a minute rather than ten
+// seconds. The limit lapses, the next probe reads "not yet", and a "not yet"
+// is allowed to nudge. The exit exists now.
 
 import { mlFetch } from "./ml-client";
 import { nudgeMlAwake, nudgeHoldingSince } from "./ml-wake";
@@ -46,6 +59,36 @@ export interface MlHealth {
  * promptly -- a cold start is ~60s, so this costs at most a sixth of one.
  */
 export const HEALTH_TTL_MS = Number(process.env.ML_HEALTH_TTL_MS ?? 10_000);
+
+/**
+ * How long a rate-limited reading stays good.
+ *
+ * Much longer, because a 429 is the one answer that probing again makes
+ * worse. Suppressing the nudge under a rate limit was half the rule; the
+ * other half is that the probes have to slow down too, and they did not --
+ * they kept their ten-second TTL, so a rate-limited API went on asking six
+ * times a minute.
+ *
+ * That is a closed loop with no exit. The probe draws a 429, the 429 cancels
+ * the nudge, no nudge means the container is never asked to start, and the
+ * probe that runs ten seconds later keeps the limit alive. Observed in
+ * production: a banner counting past 2300 seconds against a service that was
+ * simply asleep, while the same service answered requests from every other
+ * address normally. The rate limit was earned by this API's own polling.
+ *
+ * At one probe a minute the limit lapses, the next probe reads "not yet", and
+ * the nudge that follows wakes the service. Matches ml-wake's
+ * RATE_LIMIT_RETRY_SECONDS, which is the same judgement for the same reason.
+ */
+export const RATE_LIMIT_TTL_MS = Number(process.env.ML_RATE_LIMIT_TTL_MS ?? 60_000);
+
+/** The reason string that means the edge is shedding load, not the service. */
+export const RATE_LIMITED_REASON = "rate-limited by the host";
+
+/** A rate-limited reading is held far longer than an ordinary one. */
+export function ttlFor(value: MlHealth): number {
+  return value.reason === RATE_LIMITED_REASON ? RATE_LIMIT_TTL_MS : HEALTH_TTL_MS;
+}
 
 /** How long a single probe may take before we call it "not up". */
 const PROBE_MS = Number(process.env.ML_HEALTH_PROBE_MS ?? 4_000);
@@ -80,7 +123,7 @@ async function probeOnce(): Promise<MlHealth> {
       // so matters: the remedy is to ask less often, and nudging here would
       // be asking again immediately.
       if (res.status === 429) {
-        return { reachable: false, reason: "rate-limited by the host" };
+        return { reachable: false, reason: RATE_LIMITED_REASON };
       }
       return { reachable: false, reason: `returned ${res.status}` };
     }
@@ -107,7 +150,7 @@ async function probeOnce(): Promise<MlHealth> {
  * starting another.
  */
 export async function getMlHealth(now: number = Date.now()): Promise<MlHealth> {
-  if (cached && now - cached.at < HEALTH_TTL_MS) return cached.value;
+  if (cached && now - cached.at < ttlFor(cached.value)) return cached.value;
   if (inFlight) return inFlight;
 
   // A nudge is holding a cold start open. Answer from what we already know
@@ -126,7 +169,7 @@ export async function getMlHealth(now: number = Date.now()): Promise<MlHealth> {
     // nudgeMlAwake is deduped, so this cannot stack up the way the route's
     // own nudges did -- and it is skipped under a rate limit, where another
     // request is the one thing that keeps the limit in force.
-    if (!value.reachable && value.reason !== "rate-limited by the host") {
+    if (!value.reachable && value.reason !== RATE_LIMITED_REASON) {
       nudgeMlAwake(() => { cached = null; });
     }
     return value;
