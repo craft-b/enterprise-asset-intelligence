@@ -137,6 +137,55 @@ export const ML_SLOW_TIMEOUT_MS = envMs("ML_SLOW_TIMEOUT_MS", 300_000);
  * it got the 90s default instead, and 90s is inside the range a slow cold
  * start can take.
  */
+/**
+ * How long to stay off the host after it rate-limits us.
+ *
+ * A 429 from the free tier's CDN is not about one route. It is the edge
+ * refusing this API's address, and every request sent during it both fails and
+ * extends it. So the gate is shared: one 429 anywhere stops all of them.
+ */
+export const RATE_LIMIT_COOLDOWN_MS = Number(process.env.ML_RATE_LIMIT_COOLDOWN_MS ?? 60_000);
+
+let rateLimitedUntil = 0;
+
+/** Milliseconds left on the shared cooldown, or 0 when there is none. */
+export function rateLimitRemaining(now: number = Date.now()): number {
+  return Math.max(0, rateLimitedUntil - now);
+}
+
+/** Test seam: forget any cooldown. */
+export function resetRateLimitGate(): void {
+  rateLimitedUntil = 0;
+}
+
+/**
+ * The 429 a caller gets without a request being sent.
+ *
+ * A real Response, so the fourteen call sites that already branch on
+ * `res.status === 429` keep working unchanged. Nothing had to learn about the
+ * gate for it to protect them.
+ */
+function syntheticRateLimit(): Response {
+  return new Response(
+    JSON.stringify({ detail: "rate-limited by the host; request not sent" }),
+    { status: 429, headers: { "content-type": "application/json" } },
+  );
+}
+
+/**
+ * Note what the host just told us.
+ *
+ * A 429 starts the cooldown. Any answer the service itself gave ends it --
+ * the limit is on reaching the edge, so getting through means it has lifted.
+ */
+function recordOutcome(status: number): void {
+  if (status === 429) {
+    rateLimitedUntil = Date.now() + RATE_LIMIT_COOLDOWN_MS;
+  } else if (status < 500) {
+    rateLimitedUntil = 0;
+  }
+}
+
 export async function mlFetch(
   path: string,
   init: RequestInit = {},
@@ -149,14 +198,36 @@ export async function mlFetch(
   };
   const url = `${ML_SERVICE_URL}${path}`;
 
-  if (init.signal) return fetch(url, { ...init, headers });
-  if (opts?.timeoutMs === Infinity) return fetch(url, { ...init, headers });
+  // Shared cooldown, checked before anything is sent.
+  //
+  // The health path learned to back off under a 429 and the other fourteen
+  // call sites did not, so a single dashboard load kept firing eight requests
+  // at an edge that was already refusing this address -- which is what kept
+  // the limit in force and left the container asleep for 650 seconds while
+  // the throttled health probe waited politely beside it.
+  //
+  // Backing off per-caller cannot work: the limit is on the address, so it is
+  // the address that has to go quiet. One gate, every caller.
+  if (rateLimitRemaining() > 0) return syntheticRateLimit();
+
+  if (init.signal) {
+    const res = await fetch(url, { ...init, headers });
+    recordOutcome(res.status);
+    return res;
+  }
+  if (opts?.timeoutMs === Infinity) {
+    const res = await fetch(url, { ...init, headers });
+    recordOutcome(res.status);
+    return res;
+  }
 
   const budget = opts?.timeoutMs ?? ML_FETCH_TIMEOUT_MS;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), budget);
   try {
-    return await fetch(url, { ...init, headers, signal: controller.signal });
+    const res = await fetch(url, { ...init, headers, signal: controller.signal });
+    recordOutcome(res.status);
+    return res;
   } catch (err: any) {
     // An AbortError's own message is "This operation was aborted", which tells
     // a reader nothing about which call gave up or how long it waited. The
