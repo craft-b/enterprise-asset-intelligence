@@ -2166,7 +2166,10 @@ export async function registerRoutes(
 
     const bounded = (url: string, headers?: Record<string, string>) => () => {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 10_000);
+      // Internal addresses resolve at once or not at all; do not spend ten
+      // seconds discovering that a hostname does not exist.
+      const controllerMs = url.startsWith("http://") ? 4_000 : 10_000;
+      const timer = setTimeout(() => controller.abort(), controllerMs);
       return fetch(url, { headers, signal: controller.signal }).finally(() => clearTimeout(timer));
     };
 
@@ -2174,11 +2177,33 @@ export async function registerRoutes(
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
       "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
+    // Render's private network, if it reaches a free instance at all.
+    //
+    // The public path egresses through a shared NAT address that other
+    // free-tier tenants also use -- confirmed by the neutral probe, which drew
+    // GitHub's unauthenticated limit (60/hour/IP) on this instance's FIRST
+    // request. That address is what Render's edge is refusing, so no amount of
+    // politeness from this service can recover it.
+    //
+    // The private network bypasses both the NAT and the public edge. The open
+    // question is the port: Render assigns PORT (usually 10000) and the
+    // entrypoint falls back to 8000, so try both and the bare name.
+    //
+    // Short timeouts: an internal address either resolves immediately or does
+    // not exist. A suspended instance is the real unknown -- wake is handled
+    // by the public load balancer, so a private request may well find nothing
+    // listening even when the service is healthy.
+    const internal = (hostPort: string) =>
+      timed(`internal:${hostPort}`, bounded(`http://${hostPort}/health`));
+
     const results = Object.fromEntries(await Promise.all([
       timed("neutral", bounded("https://api.github.com/zen")),
       timed("ml", () => probeHostDirectly(10_000)),
       timed("mlBare", bounded(`${ML_SERVICE_URL}/health`)),
       timed("mlBrowserUA", bounded(`${ML_SERVICE_URL}/health`, { "user-agent": BROWSER_UA })),
+      internal("eai-ml:10000"),
+      internal("eai-ml:8000"),
+      internal("eai-ml"),
     ]));
     res.json({
       mlServiceUrl: ML_SERVICE_URL,
