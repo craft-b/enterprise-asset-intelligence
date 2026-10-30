@@ -46,6 +46,23 @@ COPY --from=builder /app/package.json ./
 # a build from a working tree that has trained locally copies every pickle in
 # it: 431MB measured, none of it read.
 
+# Two families of registry JSON, and nothing else from that directory.
+#
+# This reverses part of the note above, deliberately. Feature importance and
+# hyperparameters are properties of a pinned model version -- they do not
+# change between requests -- and fetching them over HTTP made a static fact
+# depend on another service being awake. On 2026-10-29 the host began
+# answering this API's requests to that service with a Cloudflare challenge,
+# and two panels on the model page went blank over values committed in this
+# repository. services/model-card.ts now reads them here when the service
+# cannot be reached.
+#
+# Scoped to these two globs rather than the directory, which keeps the cost
+# the note above warns about from coming back: no *.pkl can match, so a build
+# from a working tree that has trained locally cannot drag 431MB of pickles
+# into the image. These are a few dozen KB of JSON.
+COPY --from=builder /app/ml-service/registry/metadata_30d_*.json      /app/ml-service/registry/feature_importance_30d_*.json      ./ml-service/registry/
+
 # Migrations are applied at start by the entrypoint, so the migration files,
 # the drizzle config and the schema it points at must all be in the runtime
 # image -- not just the build stage.

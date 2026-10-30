@@ -54,6 +54,11 @@ COPY --from=builder /app/package.json ./
 # server came up against a database with no tables. The root Dockerfile, which
 # is the image actually running in production, has had this right all along;
 # this one had silently diverged from it. See dockerfile-parity.test.ts.
+# Mirrors the production image: the two registry JSON families the model page
+# falls back to when the ML service cannot be reached. Scoped to these globs so
+# no *.pkl can match. See Dockerfile and services/model-card.ts.
+COPY --from=builder /app/ml-service/registry/metadata_30d_*.json      /app/ml-service/registry/feature_importance_30d_*.json      ./ml-service/registry/
+
 COPY --from=builder /app/migrations ./migrations
 COPY --from=builder /app/shared ./shared
 COPY --from=builder /app/drizzle.config.ts ./

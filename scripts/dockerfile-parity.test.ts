@@ -42,8 +42,17 @@ const COMPOSE = read("docker-compose.yml");
 function runtimeCopies(dockerfile: string): string[] {
   const stages = dockerfile.split(/^FROM /m);
   const final = stages[stages.length - 1];
-  return [...final.matchAll(/^COPY --from=builder\s+(\S+)/gm)]
-    .map(m => m[1].replace("/app/", ""))
+  // Join backslash continuations first: a COPY may list several sources
+  // across lines, and reading only the first silently under-reports what the
+  // image carries -- which is exactly the kind of gap this file exists to
+  // close. The last token is the destination, so it is dropped.
+  const joined = final.replace(/\\\r?\n\s*/g, " ");
+  return [...joined.matchAll(/^COPY --from=builder\s+(.+)$/gm)]
+    .flatMap(m => {
+      const parts = m[1].trim().split(/\s+/);
+      return parts.slice(0, -1);
+    })
+    .map(p => p.replace("/app/", ""))
     .sort();
 }
 
@@ -104,41 +113,59 @@ describe("the migrations compose promises actually run", () => {
 
 const NEWLINE = /\r?\n/;
 
-describe("neither image carries the ML registry", () => {
-  // It was copied into both under the comment "needed by routes.ts to read
-  // feature importance files". Feature importance comes over HTTP from the ML
-  // service, and the last filesystem read of the directory -- the modelStatus
-  // probe -- was removed in 4342e72 precisely because it could only ever fail
-  // in a container that has never had the path.
+describe("the images carry two registry globs, not the registry", () => {
+  // The whole directory was copied into both under the comment "needed by
+  // routes.ts to read feature importance files", then removed when that
+  // stopped being true -- feature importance came over HTTP instead.
   //
-  // Checked because the cost is invisible and the mistake is easy to repeat.
-  // From a git clone it is ~1.7MB of superseded JSON; from a working tree that
-  // has trained locally it is 431MB of pickles, because .dockerignore does not
-  // exclude registry/*.pkl. Either way nothing reads it.
+  // It is partly true again, and for a reason worth recording. Feature
+  // importance and hyperparameters are properties of a pinned model version;
+  // they do not change between requests. Fetching them over HTTP made a static
+  // fact depend on a service being awake, and on 2026-10-29 the host began
+  // answering this API's requests to that service with a Cloudflare challenge.
+  // Two panels went blank over values committed in this repository.
+  //
+  // So services/model-card.ts reads them from disk as a fallback, and the
+  // images ship exactly two globs. The scoping is the point: the directory
+  // from a git clone is ~1.7MB of superseded JSON, and from a working tree
+  // that has trained locally it is 431MB of pickles, because .dockerignore
+  // does not exclude registry/*.pkl. Neither glob can match a pickle.
 
-  it("does not copy it into the production image", () => {
-    expect(runtimeCopies(PROD)).not.toContain("ml-service/registry");
-  });
+  const GLOBS = [
+    "ml-service/registry/metadata_30d_*.json",
+    "ml-service/registry/feature_importance_30d_*.json",
+  ];
 
-  it("does not copy it into the compose image", () => {
-    expect(runtimeCopies(COMPOSE_SERVER)).not.toContain("ml-service/registry");
-  });
+  for (const [label, dockerfile] of [["production", PROD], ["compose", COMPOSE_SERVER]] as const) {
+    it(`${label} copies both globs and not the bare directory`, () => {
+      const copies = runtimeCopies(dockerfile);
+      for (const glob of GLOBS) {
+        expect(copies, `${label} is missing ${glob}`).toContain(glob);
+      }
+      // The directory itself would drag in the pickles the globs exclude.
+      expect(copies).not.toContain("ml-service/registry");
+      expect(copies).not.toContain("ml-service/registry/");
+    });
 
-  it("has no server code that would need it back", () => {
-    // The guard that gives the two above their meaning: if a filesystem read
-    // of the registry ever returns to the API, this fails and says why,
-    // rather than someone re-adding the COPY to fix it and the directory
-    // silently shipping again. mlFetch to the ML service is the route.
-    const lines = ["routes.ts", "services/model-status.ts"]
-      .flatMap(f => read("server", f).split(NEWLINE))
-      .filter(line => {
-        const t = line.trim();
-        return !t.startsWith("//") && !t.startsWith("*");
-      });
+    it(`${label} copies nothing from the registry that could be a pickle`, () => {
+      const fromRegistry = runtimeCopies(dockerfile).filter(p => p.includes("ml-service/registry"));
+      expect(fromRegistry.length).toBeGreaterThan(0);
+      for (const path of fromRegistry) {
+        expect(path, `${path} could match a .pkl`).toMatch(/\.json$/);
+      }
+    });
+  }
 
-    const code = lines.join(" ");
-    expect(code).not.toMatch(/readdirSync|existsSync/);
-    expect(code).not.toContain("ml-service/registry");
+  it("the reader asks for exactly what the images ship", () => {
+    // The guard that ties the COPY globs to the code. A reader that reached
+    // for metadata_10d_* or a .pkl would find nothing in the container while
+    // working perfectly on a developer's machine, which is the failure the
+    // original COPY removal was meant to make impossible.
+    const card = read("server", "services/model-card.ts");
+    expect(card).toContain("feature_importance_");
+    expect(card).toContain("metadata_");
+    expect(card, "the reader must use the horizon the images ship").toContain("30d");
+    expect(card).not.toMatch(/\.pkl/);
   });
 });
 

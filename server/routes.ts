@@ -20,6 +20,8 @@ import { assetRiskPredictions } from "@shared/schema";
 import { enhancedFeatureService } from "./services/feature-engineering-enhanced";
 import { evaluatePMSchedule, generatePMDescription, samplePMCost, MaintenanceTypeKey } from "./services/pm-scheduler";
 import { startSeedJob, getSeedStatus, getLastSeedRun, getSystemStatus, resetSystem } from "./services/seed-orchestrator";
+import { featureDrift, predictionDrift, biasDrift } from "./services/drift-read";
+import { readModelCard } from "./services/model-card";
 import { mlFetch, describeMlFailure, ML_SLOW_TIMEOUT_MS, ML_SERVICE_URL, rateLimitState, probeHostDirectly } from "./services/ml-client";
 import { wakeAndWait, nudgeMlAwake, nudgeHoldingSince, REQUEST_WAKE_BUDGET_MS, REQUEST_WAKE_PROBE_MS, RETRY_AFTER_SECONDS, RATE_LIMIT_RETRY_SECONDS } from "./services/ml-wake";
 import { getMlHealth } from "./services/ml-health-cache";
@@ -1618,9 +1620,19 @@ export async function registerRoutes(
         minSamplesSplit: number | null; classWeight: string | null;
       } | null = null;
       try {
-        const fiRes = await mlFetch('/models/feature-importance');
-        if (fiRes.ok) {
-          const fiData = await fiRes.json() as { feature_importance: Record<string, number>; hyperparameters: Record<string, any> };
+        // The ML service first — a promoted champion is live before its files
+        // are committed — then the registry on disk. These are properties of a
+        // pinned version, so a static fact should not go blank because a
+        // service is asleep or, as on 2026-10-29, refused by the host's edge.
+        let fiData: { feature_importance: Record<string, number>; hyperparameters: Record<string, any> } | null = null;
+        try {
+          const fiRes = await mlFetch('/models/feature-importance');
+          if (fiRes.ok) fiData = await fiRes.json() as any;
+        } catch { /* fall through to the registry */ }
+        if (!fiData || Object.keys(fiData.feature_importance ?? {}).length === 0) {
+          fiData = await readModelCard(latest.modelVersion);
+        }
+        if (fiData) {
           featureImportance = Object.entries(fiData.feature_importance)
             .filter(([, v]) => v > 0.005)
             .sort(([, a], [, b]) => b - a)
@@ -2240,12 +2252,11 @@ export async function registerRoutes(
   });
 
   app.get("/api/ml/drift/latest", requireAuth, async (req, res) => {
+    // Read from the database, not through the ML service. The ML service's own handler for this is a SELECT over drift_metrics with no model loaded, so proxying it added a network hop, a cold start and — once the host put a challenge between the services — an outage over data already in MySQL.
     try {
-      const mlRes = await mlFetch("/drift/latest");
-      if (!mlRes.ok) return res.status(mlRes.status).json({ message: "Drift data unavailable" });
-      res.json(await mlRes.json());
-    } catch (e: any) {
-      res.status(500).json({ message: "ML service unreachable", error: e.message });
+      res.json(await featureDrift());
+    } catch (err: any) {
+      res.status(500).json({ message: "Failed to read drift metrics" });
     }
   });
 
@@ -2261,22 +2272,20 @@ export async function registerRoutes(
   });
 
   app.get("/api/ml/drift/prediction", requireAuth, async (req, res) => {
+    // Read from the database, not through the ML service. Same: prediction_drift_metrics is written by scoring runs and outlives the service that wrote it.
     try {
-      const mlRes = await mlFetch("/drift/prediction");
-      if (!mlRes.ok) return res.status(mlRes.status).json({ message: "Prediction drift data unavailable" });
-      res.json(await mlRes.json());
-    } catch (e: any) {
-      res.status(500).json({ message: "ML service unreachable", error: e.message });
+      res.json(await predictionDrift());
+    } catch (err: any) {
+      res.status(500).json({ message: "Failed to read drift metrics" });
     }
   });
 
   app.get("/api/ml/drift/bias", requireAuth, async (req, res) => {
+    // Read from the database, not through the ML service. Same: bias_drift_metrics, latest row per category at the 30d horizon.
     try {
-      const mlRes = await mlFetch("/drift/bias");
-      if (!mlRes.ok) return res.status(mlRes.status).json({ message: "Bias drift data unavailable" });
-      res.json(await mlRes.json());
-    } catch (e: any) {
-      res.status(500).json({ message: "ML service unreachable", error: e.message });
+      res.json(await biasDrift());
+    } catch (err: any) {
+      res.status(500).json({ message: "Failed to read drift metrics" });
     }
   });
 
@@ -2570,11 +2579,14 @@ export async function registerRoutes(
       const [predStats] = await db.select({ total: count() }).from(assetRiskPredictions);
 
       // ── drift ──────────────────────────────────────────────────────────────
+      // From the database, like the dashboard's drift routes. This reported
+      // NO_DATA whenever the ML service was unreachable, which made an agent
+      // polling for drift see "no drift" rather than "could not look" --
+      // readings that were in MySQL the whole time.
       let drift: { overall: string; features: any[] } = { overall: "NO_DATA", features: [] };
       try {
-        const mlRes = await mlFetch("/drift/latest");
-        if (mlRes.ok) drift = await mlRes.json();
-      } catch { /* ML service offline — surface NO_DATA */ }
+        drift = await featureDrift() as any;
+      } catch { /* database read failed — surface NO_DATA */ }
 
       // ── training status ────────────────────────────────────────────────────
       let trainingRunning = false;
