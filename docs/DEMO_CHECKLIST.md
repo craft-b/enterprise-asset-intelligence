@@ -10,6 +10,31 @@ ships.
 
 ---
 
+## 0a. Before warming anything: what a stranger sees
+
+**Run this first or not at all.** Every other step in this document warms the
+services, and once warmed they stay warm for about fifteen minutes, so this
+measurement is available only on the first attempt of a session.
+
+The pass used to begin by warming both services, which meant it could not see
+the path a visitor actually takes. A link sent to someone who opens it that
+evening lands on two suspended containers. That is the common case for a shared
+demo and it was the one case never tested.
+
+1. Leave both services idle at least fifteen minutes. Touching either one —
+   including a health check — restarts that clock.
+2. Open the site the way a stranger would: a private window, no session.
+3. Record: how long until anything renders, what the startup screen says, and
+   whether it explains itself or merely spins.
+4. Then sign in and record the second wait, for the ML service, separately.
+
+The two waits are independent. ApiGate covers the Node API; the ML service
+suspends on its own schedule and is not consulted until a page asks it for
+something, so a visitor can clear the first wait and meet a second one with no
+explanation. See section 7.
+
+---
+
 ## 0. Warm both services first
 
 Free instances suspend after ~15 minutes idle, and they sleep independently.
@@ -108,45 +133,59 @@ this table went stale without anyone noticing.
 | Cold-start banner | clears unaided at **~70s** | after `7a67e5c` |
 | Model page | feature importance and hyperparameters render | confirmed after `8b926d7` removed `ml-service/registry` from the API image; the data comes over HTTP from the ML service |
 
-**Last observed on the ten-asset seed, 2026-10-21 — not re-measured.** Kept
-because a stale observation is still a fact about a known past state, where a
-prediction is nothing. Do not treat these as what the app should show now:
+**Read off the deployed app during the demo pass, 2026-10-29:**
 
-| | Last observed (ten-asset seed) |
-|---|---|
-| Equipment | 10 units across 9 categories (only Crane had two) |
-| Rentals / invoices / swaps | 15 / 10 / 2 |
-| Job sites / vendors | 6 / 4 |
-| Feature snapshots | 240 |
-| Maintenance events | 18 |
-| Model metrics | v1.17, 96 rows, **dataset_size 10,828** |
-| Simulation cursor | 2026-10-21, 90 days run |
-| Users | 2 (admin, viewer) |
+| | Measured | Ten-asset seed, 2026-10-21 |
+|---|---|---|
+| Equipment | **60 units, 8 categories** | 10 units across 9 categories |
+| Risk bands | **14 HIGH / 27 MEDIUM / 19 LOW** | — |
+| Rentals / invoices / swaps | **15 / 10 / 2** | 15 / 10 / 2 |
+| Job sites / vendors | **6 / 4** | 6 / 4 |
+| Model metrics | **dataset_size 10,828**, 3 horizons, 2 CV splits | v1.17, 96 rows, dataset_size 10,828 |
 
-**To close the gap:** read those eight numbers off once during the pass and
-replace the table. Every one is on a page sections 3 and 5 already visit, so it
-costs only the writing down.
+Two things the pass could not read, and they come out of this table rather than
+being guessed at: the **metrics row count**, which the Model Performance page
+does not display, and **feature snapshots / maintenance events / simulation
+cursor / user count**, which were not reached before the pass was diverted into
+the wake failure in section 7. A figure a doc promises and the app does not show
+is a defect in the doc.
 
-They are blank rather than filled with plausible values because the production
-database is reachable only from Render's own environment — the repository's
-`.env` points at a development instance — so no one has measured them. Writing
-down what they probably are is exactly what produced the column this section
-replaced.
+**What the measured column says that the old one did not.**
+
+The rental, job-site and vendor counts are *identical* to the ten-asset seed,
+because `server/seeds/rentals.ts` is a hardcoded fifteen-entry list whose
+equipment indices run 0–9. The fleet grew to sixty and the rental data did not
+come with it, so fifty units have no rental history and the rental-derived
+features are degenerate for them. This is invisible on screen — the asset
+History card merges maintenance with rentals and maintenance *did* scale — so
+nothing looks wrong. See `docs/ML_KNOWN_WORK.md`.
+
+`dataset_size` is also unchanged at 10,828, which means the champion was trained
+on the ten-asset seed and is scoring sixty assets. That is defensible and the
+by-asset CV split on the same page is the evidence for it — the model is tested
+against machines it has never seen. It is worth saying out loud before someone
+works it out.
 
 ---
 
 ## 3. Page by page
 
-- **Fleet / equipment** — 60 units across 9 categories, statuses populated,
-  no blank cells.
-- **Risk queue** — 60 rows, three bands present; 15 HIGH as of 2026-10-28. A
-  queue with no LOW row or no HIGH row is worth noting. A uniform LOW queue at
-  probability 0.05 is the cold-start rule, not the model — see `COLD_START` in
-  `server/services/imputation.ts`.
-- **Equipment detail** — SHAP drivers (three per asset) and a recommendation
-  string. The recommendation is the deterministic template, not an LLM.
-- **Rentals** — with the equipment swaps visible and same-category. Count
-  unverified on the current fleet.
+- **Fleet / equipment** — 60 units across **8** categories, statuses populated,
+  no blank cells. (This line said nine until 2026-10-29; the nine came from the
+  ten-asset seed and had never been re-read off the app.)
+- **Risk queue** — 60 rows, three bands present. The split moves between
+  scoring runs as borderline assets cross a threshold (15 HIGH on 2026-10-28,
+  14 HIGH on 2026-10-29), so do not read a one-row difference as a fault. What
+  matters is that the bands are *not uniform*: a queue that is all LOW at
+  probability 0.05 is the cold-start rule rather than the model — see
+  `COLD_START` in `server/services/imputation.ts`.
+- **Equipment detail** — the "Why this risk score" card, with up to **five**
+  SHAP attributions per horizon across **three** horizons (the old "three per
+  asset" here was the horizon count written down as a driver count). Labels name
+  the quantity measured and never a direction; the sign and colour carry that.
+  Also a recommendation string, which is the deterministic template, not an LLM.
+- **Rentals** — 15 rentals, 2 swaps, same-category. Covers only the first ten
+  assets; see the note under section 2.
 - **Model page** — v1.17, Training Dataset Size **10,828**, metrics across
   three horizons and two CV splits (temporal and by-asset).
 - **ML dashboard** — all three drift monitors should now carry readings, and
@@ -207,13 +246,71 @@ Only if you want to exercise the write paths. Use the rotated password.
 
 ## 6. How to run the pass
 
-1. Go through sections 1–4 without fixing anything. Write down what you see.
-2. Sort each note into **wrong** (the system says or does something false) or
+1. Run section **0a** first, from cold, or skip it for this session — it
+   cannot be recovered once anything is warmed.
+2. Go through sections 1–4 without fixing anything. Write down what you see.
+3. Sort each note into **wrong** (the system says or does something false) or
    **limited** (a real data constraint). Wrong gets fixed; limited gets
    documented.
-3. Fix in one batch, one commit per category.
-4. Re-run sections 0–4 once.
+4. Fix in one batch, one commit per category.
+5. Re-run sections 0–4 once.
+
+A figure this document asserts and the app does not display is itself a defect:
+it sends the next reader hunting for something that is not there. Three of the
+ten faults found on 2026-10-29 were stale numbers in this file rather than
+faults in the app, so check the doc against the screen in both directions.
 
 **Done when every empty state explains which of its reasons applies, and the
 README's limitations section matches what the app shows.** Not when there is
 nothing left to improve.
+
+
+---
+
+## 7. The wake path, and why it kept being wrong
+
+The ML service suspends after about fifteen minutes and takes 42–72.5 seconds
+to come back (ten observations). The build stamp splits that: a request on
+2026-10-29 reached a container whose process started 34 seconds later and
+answered 39.9 seconds after that. Roughly half the wait is the host scheduling
+and pulling an image before any application code exists, which is why no
+instrumentation inside the service can report it.
+
+Three production failures have come out of this path, all with one shape: **the
+component reporting on the cold start was the thing preventing it.**
+
+1. **Probes aborted into the boot.** The banner polled `/api/ml/health` every
+   five seconds and the route turned each poll into a request aborted at four
+   seconds. An abort tears down the request the host uses to hold a cold start
+   open. One tab reached 370 seconds.
+2. **Caching halved the rate of the same abort.** One aborted probe every ten
+   seconds instead of every five. A seventy-second boot was still torn down
+   seven times per attempt. One tab reached 640 seconds, while a plain `curl`
+   woke the same service in 71.9. *Reducing the rate of a fatal interruption is
+   not a fix*, and it read as one for most of a day.
+3. **The API locked itself out of the host.** Suppressing the nudge under a 429
+   was right; leaving the probes at a ten-second TTL was not. The probe drew a
+   429, the 429 cancelled the nudge, nothing asked the container to start, and
+   the next probe kept the limit alive. One tab reached 2300 seconds against a
+   service that was merely asleep and that answered every other address
+   normally. Fixed in `9fbe7e5`: a rate-limited reading is held for a minute.
+
+**If the banner climbs past ~120 seconds, do not assume a cold start.** Read
+`/api/ml/health` directly — signed in, against the API origin, not the static
+host, which has no session cookie:
+
+```
+https://eai-api-q3u3.onrender.com/api/ml/health
+```
+
+The `reason` field names the branch taken: `rate-limited by the host` is the
+API locked out, `unreachable` is a wrong `ML_SERVICE_URL`, `no answer within
+4000ms` and `starting up` are both ordinary.
+
+**A warning about measuring this at all.** A direct probe from anywhere wakes
+the service, so a probe run to diagnose a wake failure destroys the evidence
+for it — and will make the next banner clear on time for a reason that has
+nothing to do with any fix. Every clean clear observed on 2026-10-29 followed a
+diagnostic `curl` from the machine doing the diagnosing, which is how the
+second fix above was mistaken for a working one. When testing a wake, touch
+nothing and let the app do it.
