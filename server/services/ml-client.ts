@@ -146,7 +146,28 @@ export const ML_SLOW_TIMEOUT_MS = envMs("ML_SLOW_TIMEOUT_MS", 300_000);
  */
 export const RATE_LIMIT_COOLDOWN_MS = Number(process.env.ML_RATE_LIMIT_COOLDOWN_MS ?? 60_000);
 
+/**
+ * Ceiling on the backoff.
+ *
+ * Long, because the alternative is worse. A cooldown that is too short costs
+ * another refusal and resets the clock; one that is too long costs a slower
+ * first page after the limit lifts. Fifteen minutes is also roughly the idle
+ * window, so a service nobody has asked for in that time was asleep anyway.
+ */
+export const RATE_LIMIT_MAX_COOLDOWN_MS = Number(process.env.ML_RATE_LIMIT_MAX_MS ?? 900_000);
+
 let rateLimitedUntil = 0;
+let consecutive429 = 0;
+let lastRetryAfter: string | null = null;
+
+/** What the gate has seen, for the admin diagnostic. Read-only. */
+export function rateLimitState(now: number = Date.now()) {
+  return {
+    remainingMs: Math.max(0, rateLimitedUntil - now),
+    consecutive429,
+    lastRetryAfter,
+  };
+}
 
 /** Milliseconds left on the shared cooldown, or 0 when there is none. */
 export function rateLimitRemaining(now: number = Date.now()): number {
@@ -156,6 +177,36 @@ export function rateLimitRemaining(now: number = Date.now()): number {
 /** Test seam: forget any cooldown. */
 export function resetRateLimitGate(): void {
   rateLimitedUntil = 0;
+  consecutive429 = 0;
+  lastRetryAfter = null;
+}
+
+/**
+ * How long to stay away, in milliseconds.
+ *
+ * `Retry-After` first, because the host is the only party that knows. It is
+ * either a seconds count or an HTTP date; both are standard and both appear
+ * in the wild. Everything here was previously a guess -- 60 seconds, chosen
+ * because another module had already guessed 60 seconds -- and a guess that is
+ * shorter than the real window re-probes into the limit and resets it, which
+ * is a deadlock with a longer period rather than a fix.
+ *
+ * Without the header, double each time. A limit that outlasts one cooldown
+ * will outlast the next identical one too.
+ */
+export function cooldownFor(header: string | null, strikes: number, now: number = Date.now()): number {
+  if (header) {
+    const seconds = Number(header);
+    if (Number.isFinite(seconds) && seconds > 0) {
+      return Math.min(seconds * 1000, RATE_LIMIT_MAX_COOLDOWN_MS);
+    }
+    const when = Date.parse(header);
+    if (Number.isFinite(when) && when > now) {
+      return Math.min(when - now, RATE_LIMIT_MAX_COOLDOWN_MS);
+    }
+  }
+  const doubled = RATE_LIMIT_COOLDOWN_MS * Math.pow(2, Math.max(0, strikes - 1));
+  return Math.min(doubled, RATE_LIMIT_MAX_COOLDOWN_MS);
 }
 
 /**
@@ -178,11 +229,19 @@ function syntheticRateLimit(): Response {
  * A 429 starts the cooldown. Any answer the service itself gave ends it --
  * the limit is on reaching the edge, so getting through means it has lifted.
  */
-function recordOutcome(status: number): void {
-  if (status === 429) {
-    rateLimitedUntil = Date.now() + RATE_LIMIT_COOLDOWN_MS;
-  } else if (status < 500) {
+function recordOutcome(res: Response): void {
+  if (res.status === 429) {
+    consecutive429 += 1;
+    lastRetryAfter = res.headers.get("retry-after");
+    rateLimitedUntil = Date.now() + cooldownFor(lastRetryAfter, consecutive429);
+    console.warn(
+      `[ML] rate-limited by the host (strike ${consecutive429}, retry-after=${lastRetryAfter ?? "absent"}); ` +
+      `holding all ML requests for ${Math.round(rateLimitRemaining() / 1000)}s`,
+    );
+  } else if (res.status < 500) {
+    if (consecutive429 > 0) console.info(`[ML] rate limit lifted after ${consecutive429} strike(s)`);
     rateLimitedUntil = 0;
+    consecutive429 = 0;
   }
 }
 
@@ -212,12 +271,12 @@ export async function mlFetch(
 
   if (init.signal) {
     const res = await fetch(url, { ...init, headers });
-    recordOutcome(res.status);
+    recordOutcome(res);
     return res;
   }
   if (opts?.timeoutMs === Infinity) {
     const res = await fetch(url, { ...init, headers });
-    recordOutcome(res.status);
+    recordOutcome(res);
     return res;
   }
 
@@ -226,7 +285,7 @@ export async function mlFetch(
   const timer = setTimeout(() => controller.abort(), budget);
   try {
     const res = await fetch(url, { ...init, headers, signal: controller.signal });
-    recordOutcome(res.status);
+    recordOutcome(res);
     return res;
   } catch (err: any) {
     // An AbortError's own message is "This operation was aborted", which tells

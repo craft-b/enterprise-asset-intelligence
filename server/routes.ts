@@ -20,8 +20,8 @@ import { assetRiskPredictions } from "@shared/schema";
 import { enhancedFeatureService } from "./services/feature-engineering-enhanced";
 import { evaluatePMSchedule, generatePMDescription, samplePMCost, MaintenanceTypeKey } from "./services/pm-scheduler";
 import { startSeedJob, getSeedStatus, getLastSeedRun, getSystemStatus, resetSystem } from "./services/seed-orchestrator";
-import { mlFetch, describeMlFailure, ML_SLOW_TIMEOUT_MS } from "./services/ml-client";
-import { wakeAndWait, nudgeMlAwake, REQUEST_WAKE_BUDGET_MS, REQUEST_WAKE_PROBE_MS, RETRY_AFTER_SECONDS, RATE_LIMIT_RETRY_SECONDS } from "./services/ml-wake";
+import { mlFetch, describeMlFailure, ML_SLOW_TIMEOUT_MS, ML_SERVICE_URL, rateLimitState } from "./services/ml-client";
+import { wakeAndWait, nudgeMlAwake, nudgeHoldingSince, REQUEST_WAKE_BUDGET_MS, REQUEST_WAKE_PROBE_MS, RETRY_AFTER_SECONDS, RATE_LIMIT_RETRY_SECONDS } from "./services/ml-wake";
 import { getMlHealth } from "./services/ml-health-cache";
 import { getModelStatus } from "./services/model-status";
 import { timingSafeEqual } from "crypto";
@@ -2124,6 +2124,33 @@ export async function registerRoutes(
   });
 
   // ── DRIFT MONITORING ─────────────────────────────────────────────────────
+  // Why this exists: four fixes were shipped at this path on 2026-10-29, each
+  // from a guess, because nothing reported what the API could actually see.
+  // One page load here answers what a ten-minute deploy-and-ask cycle was
+  // answering one bit at a time.
+  app.get("/api/ml/diagnostics", requireAdmin, async (req, res) => {
+    const started = Date.now();
+    let probe: Record<string, unknown>;
+    try {
+      const r = await mlFetch("/health", {}, { timeoutMs: 10_000 });
+      probe = {
+        status: r.status,
+        ms: Date.now() - started,
+        retryAfter: r.headers.get("retry-after"),
+        contentType: r.headers.get("content-type"),
+        body: (await r.text()).slice(0, 300),
+      };
+    } catch (err: any) {
+      probe = { error: err?.name ?? "unknown", message: String(err?.message).slice(0, 300), ms: Date.now() - started };
+    }
+    res.json({
+      mlServiceUrl: ML_SERVICE_URL,
+      gate: rateLimitState(),
+      nudgeHoldingForMs: nudgeHoldingSince() === null ? null : Date.now() - nudgeHoldingSince()!,
+      probe,
+    });
+  });
+
   app.get("/api/ml/drift/latest", requireAuth, async (req, res) => {
     try {
       const mlRes = await mlFetch("/drift/latest");
