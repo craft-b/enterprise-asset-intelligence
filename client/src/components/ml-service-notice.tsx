@@ -17,7 +17,8 @@
 // as soon as the service answers.
 
 import { useEffect, useState } from "react";
-import { Moon, Loader2 } from "lucide-react";
+import { cn } from "@/lib/utils";
+
 
 /** Matches the gate's measured figure; both describe the same host behaviour. */
 const TYPICAL_COLD_START_SECONDS = 60;
@@ -130,54 +131,36 @@ export function MlServiceNotice() {
 
   if (!waking) return null;
 
-  // Past the cold-start window this stops being a wait and starts being a
-  // fault. The page is no less useful -- scores, attributions and model
-  // metrics are all read from the database -- so the notice says which parts
-  // are live rather than implying the whole page is pending.
-  if (unavailable) {
-    const minutes = Math.floor(seconds / 60);
-    return (
-      <div
-        className="flex items-start gap-3 rounded-lg border border-slate-300 bg-slate-50 p-3"
-        aria-live="polite"
-      >
-        <Moon className="mt-0.5 h-4 w-4 shrink-0 text-slate-500" aria-hidden />
-        <div className="text-sm text-slate-800">
-          <p className="font-medium">The ML service is not responding</p>
-          <p className="mt-0.5 text-xs leading-relaxed text-slate-600">
-            It runs on separate free hosting and has not answered for{" "}
-            {minutes > 0 ? `${minutes} min` : `${seconds}s`}, which is well past
-            a cold start. <span className="font-medium">Everything on this page
-            is still current:</span> risk scores, per-asset attributions and
-            model metrics are read from the database, where each scoring run
-            persists them. What needs the service itself is live drift
-            evaluation and re-scoring on demand; those will be stale or
-            unavailable until it answers.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
+  // One line, not a boxed alert.
+  //
+  // This used to render a full-width amber panel at the top of the page,
+  // above a red risk alert and a blue model-provenance alert — three stacked
+  // warnings before any content, for a condition the reader cannot act on and
+  // which leaves nearly everything on the page working. The visual weight
+  // claimed the page was broken when a single card was.
+  //
+  // So: a muted line in the page's own voice, stating which capability is
+  // affected and nothing more. Everything read from the database — scores,
+  // attributions, model metrics — renders as usual and needs no caveat,
+  // because none applies to it.
+  const dotClass = unavailable ? "bg-slate-400" : "bg-amber-500 animate-pulse";
   return (
-    <div
-      className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3"
+    <p
+      className="flex items-center gap-2 text-xs text-muted-foreground"
       aria-live="polite"
     >
-      <Moon className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" aria-hidden />
-      <div className="text-sm text-amber-900">
-        <p className="font-medium">The ML service is starting up</p>
-        <p className="mt-0.5 text-xs leading-relaxed text-amber-800">
-          It runs on free hosting and suspends separately from the rest of the
-          app, so predictions, drift and scoring need about{" "}
-          {TYPICAL_COLD_START_SECONDS} seconds to come back. Everything on this
-          page that comes from the database is already current.
-        </p>
-        <p className="mt-1 flex items-center gap-1.5 text-xs tabular-nums text-amber-700">
-          <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
-          {seconds}s elapsed
-        </p>
-      </div>
-    </div>
+      <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", dotClass)} aria-hidden />
+      {unavailable ? (
+        <span>
+          Live scoring and drift evaluation are unavailable. Figures on this page
+          come from the last completed run.
+        </span>
+      ) : (
+        <span>
+          ML service waking — live scoring available in about{" "}
+          {TYPICAL_COLD_START_SECONDS}s <span className="tabular-nums">({seconds}s)</span>
+        </span>
+      )}
+    </p>
   );
 }

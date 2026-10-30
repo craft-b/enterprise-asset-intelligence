@@ -169,16 +169,14 @@ describe("the notice stops claiming a cold start that is not happening", () => {
     expect(ms).toBeLessThanOrEqual(300_000);
   });
 
-  it("names what is still trustworthy rather than only what is broken", () => {
+  it("names where the page's figures come from, not only what is broken", () => {
     // A notice that says only "unavailable" invites a reader to distrust the
     // numbers on the page, which are fine.
-    expect(SRC).toMatch(/Everything on this page\s*\n?\s*is still current/);
-    expect(SRC).toMatch(/read from the database/);
+    expect(SRC).toMatch(/come from the last completed run/i);
   });
 
   it("says which capabilities actually need the service", () => {
-    expect(SRC).toMatch(/live drift/i);
-    expect(SRC).toMatch(/re-scoring/i);
+    expect(SRC).toMatch(/Live scoring and drift evaluation are unavailable/i);
   });
 
   it("keeps polling after giving up, so recovery clears it unaided", () => {
@@ -195,10 +193,24 @@ describe("the notice stops claiming a cold start that is not happening", () => {
 
   it("does not call it a cold start in the fault copy", () => {
     // Just the fault branch: it ends where the ordinary banner's return begins.
-    const start = SRC.indexOf("if (unavailable) {");
-    const fault = SRC.slice(start, SRC.indexOf("\n  return (", start));
-    expect(fault).toMatch(/not responding/i);
-    expect(fault, "the fault state must not repeat the cold-start promise")
-      .not.toMatch(/is starting up/);
+    const start = SRC.indexOf("{unavailable ? (");
+    const fault = SRC.slice(start, SRC.indexOf(") : (", start));
+    expect(fault).toMatch(/unavailable/i);
+    expect(fault, "the fault state must not promise the service is coming back")
+      .not.toMatch(/waking|available in about/i);
+  });
+});
+
+describe("visual weight", () => {
+  const SRC2 = readFileSync(join(__dirname, "ml-service-notice.tsx"), "utf8");
+
+  it("is a line, not a stacked alert box", () => {
+    // It rendered as a full-width amber panel above a red risk alert and a
+    // blue provenance alert: three boxed warnings before any content, for a
+    // condition the reader cannot act on and which leaves nearly all of the
+    // page working. Visual weight is an assertion too.
+    expect(SRC2, "the notice should not reintroduce a filled alert panel")
+      .not.toMatch(/bg-(amber|slate|red)-50(?![0-9])|rounded-lg border/);
+    expect(SRC2).toMatch(/text-xs text-muted-foreground/);
   });
 });
