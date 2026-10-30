@@ -603,6 +603,26 @@ Five things that deployment needed, and now has:
 - **A simulation clock that survives suspension.** The simulator advances seven days per real day, scheduled with a timer for 06:00. A free instance suspends after about fifteen minutes without traffic, so that timer is almost never alive when it should fire and every restart rearms it — the clock sat on its seed date while real time moved on, and the demo showed rentals from six months earlier. It now also catches up at boot, driven by elapsed real time rather than by starting, since this host starts the container on any visit after an idle period and a per-boot advance would race the clock ahead of reality. A pass is capped and carries its remainder, because each simulated day costs a feature snapshot per asset.
 - **A separately hosted frontend, without touching 80 call sites.** Those call sites use relative `/api` paths, which resolve against the static host once the SPA moves. Under the proxy they stay relative and Vercel forwards them; set `VITE_API_URL` instead and a single wrapper around `fetch` ([`api-base.ts`](client/src/lib/api-base.ts)) rewrites them to the API origin at runtime. Either way no component changed and a new one cannot forget. The direct path is served by [`cors.ts`](server/services/cors.ts), which answers only origins named in `ALLOWED_ORIGINS` and refuses a wildcard at boot — with credentials, browsers reject it anyway.
 
+**Live ML is blocked as of 2026-10-30, and the app says so.** Requests from the
+API to the ML service return HTTP 429 with a Cloudflare challenge page — a
+JavaScript interstitial that server-to-server traffic can never solve. The
+cause is the shared NAT address free Render services egress through: GitHub
+answers that same instance's *first* unauthenticated request with "API rate
+limit exceeded for 74.220.48.235", so the budget is spent by other tenants
+before this service sends anything. A sustained polling bug here (since fixed —
+one request a minute, exponential backoff, a shared gate across every caller)
+most likely tripped the reputation threshold; the shared address is why it has
+not recovered. Render confirmed the supported remedy: private networking, which
+free web services can send over but cannot receive on, so it needs one paid
+instance.
+
+What this costs is narrower than it sounds. Risk scores, per-asset SHAP
+attributions and model metrics are persisted by each scoring run and read from
+the database, so they render normally. Live drift evaluation and on-demand
+re-scoring are what need the service itself, and the UI says which is which
+rather than implying the page is pending. `GET /api/ml/diagnostics` (admin)
+reports the egress state, the gate, and a live probe of each path.
+
 Honest about the free tier: both Render services suspend after ~15 minutes idle. Three successive
 cold starts of the ML service measured 51s, 62s and 73s — the host's own dashboard warns of "50
 seconds or more", and the figure drifts upward, so anything in the code that waits on it is sized
