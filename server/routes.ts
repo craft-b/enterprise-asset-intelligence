@@ -2129,27 +2129,62 @@ export async function registerRoutes(
   // One page load here answers what a ten-minute deploy-and-ask cycle was
   // answering one bit at a time.
   app.get("/api/ml/diagnostics", requireAdmin, async (req, res) => {
-    const started = Date.now();
-    let probe: Record<string, unknown>;
-    try {
-      // Past the gate on purpose: see probeHostDirectly. A gated probe
-      // reports our own 429 in a millisecond and says nothing about Render.
-      const r = await probeHostDirectly(10_000);
-      probe = {
-        status: r.status,
-        ms: Date.now() - started,
-        retryAfter: r.headers.get("retry-after"),
-        contentType: r.headers.get("content-type"),
-        body: (await r.text()).slice(0, 300),
-      };
-    } catch (err: any) {
-      probe = { error: err?.name ?? "unknown", message: String(err?.message).slice(0, 300), ms: Date.now() - started };
-    }
+    // Four probes, each changing one variable, because "the host refuses us"
+    // has several possible causes and they need different remedies:
+    //
+    //   neutral     — can this instance reach the internet at all? If this
+    //                 fails too, the problem is egress, not the ML service.
+    //   ml          — our ordinary request, auth headers and all.
+    //   mlBare      — same URL, no headers. Separates "Render blocks this
+    //                 pair" from "something in our headers trips a filter".
+    //   mlBrowserUA — same URL with an ordinary browser User-Agent. Node
+    //                 sends its own, and an edge that screens on User-Agent
+    //                 would refuse us while serving a laptop from the same
+    //                 account — which is exactly the asymmetry observed.
+    //
+    // None of these go through mlFetch, so none of them record a strike or
+    // move the gate. Admin-only and manual; four requests, once, by hand.
+    const timed = async (label: string, run: () => Promise<globalThis.Response>) => {
+      const started = Date.now();
+      try {
+        const r = await run();
+        return [label, {
+          status: r.status,
+          ms: Date.now() - started,
+          retryAfter: r.headers.get("retry-after"),
+          contentType: r.headers.get("content-type"),
+          body: (await r.text()).slice(0, 200),
+        }] as const;
+      } catch (err: any) {
+        return [label, {
+          error: err?.name ?? "unknown",
+          message: String(err?.message).slice(0, 200),
+          ms: Date.now() - started,
+        }] as const;
+      }
+    };
+
+    const bounded = (url: string, headers?: Record<string, string>) => () => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 10_000);
+      return fetch(url, { headers, signal: controller.signal }).finally(() => clearTimeout(timer));
+    };
+
+    const BROWSER_UA =
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+      "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
+    const results = Object.fromEntries(await Promise.all([
+      timed("neutral", bounded("https://api.github.com/zen")),
+      timed("ml", () => probeHostDirectly(10_000)),
+      timed("mlBare", bounded(`${ML_SERVICE_URL}/health`)),
+      timed("mlBrowserUA", bounded(`${ML_SERVICE_URL}/health`, { "user-agent": BROWSER_UA })),
+    ]));
     res.json({
       mlServiceUrl: ML_SERVICE_URL,
       gate: rateLimitState(),
       nudgeHoldingForMs: nudgeHoldingSince() === null ? null : Date.now() - nudgeHoldingSince()!,
-      probe,
+      probes: results,
     });
   });
 
