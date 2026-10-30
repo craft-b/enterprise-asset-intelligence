@@ -170,7 +170,11 @@ function DriftMonitorCard() {
             variant="outline"
             size="sm"
             onClick={() => computeRef.mutate()}
-            disabled={computeRef.isPending}
+            // Also disabled when the service is unreachable: this routes
+            // through it, so offering the button would hand an admin a
+            // remedy that cannot run.
+            disabled={computeRef.isPending || Boolean(error)}
+            title={error ? "The ML service is not reachable" : undefined}
           >
             {computeRef.isPending
               ? <Loader2 className="h-3 w-3 animate-spin mr-1" />
@@ -191,13 +195,31 @@ function DriftMonitorCard() {
               <AlertCircle className="h-4 w-4" />
               <AlertDescription className="text-sm">
                 {/*
-                  Two different situations used to share one message. "No drift
-                  data yet — click Reset Baseline" told an admin to compute a
-                  baseline that already existed, when the real reason for the
-                  empty monitor was that no scoring batch had reached the
-                  minimum sample count. Saying which one it is costs a sentence.
+                  Three situations, not two.
+                  
+                  The first split was between "no baseline" and "a baseline but
+                  no batch large enough" — worth making, because telling an
+                  admin to compute a baseline that already exists sends them to
+                  fix the wrong thing.
+                  
+                  It missed the case where the service cannot be reached at all.
+                  `error` set means `drift` is undefined, so the optional chain
+                  fell through to "No reference distribution loaded — click
+                  Reset Baseline", which is false twice over: a reference does
+                  exist (the service logs loading it at startup), and the button
+                  routes through the same unreachable service. It named a cause
+                  it had no evidence for and offered a remedy that cannot work,
+                  which is worse than saying nothing.
                 */}
-                {drift?.reference?.loaded ? (
+                {error ? (
+                  <>
+                    Drift cannot be evaluated right now — the ML service is not
+                    reachable. This says nothing about the drift state itself:
+                    the reference distribution and the stored readings are
+                    unaffected, and the monitor resumes when the service
+                    answers.
+                  </>
+                ) : drift?.reference?.loaded ? (
                   <>
                     Baseline established
                     {drift.reference.model_version ? ` (${drift.reference.model_version})` : ""}

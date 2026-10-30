@@ -202,3 +202,38 @@ describe("a populated card explains why it is alerting", () => {
     expect(CODE).toContain("not yet a verdict on it");
   });
 });
+
+// ── Unreachable is not the same as nothing to report ─────────────────────────
+//
+// With the ML service unreachable, `error` is set and `drift` is undefined, so
+// the optional chain fell through to the "no baseline" arm and the card said
+// "No reference distribution loaded — click Reset Baseline". False twice: a
+// reference does exist (the service logs loading it at startup) and the button
+// routes through the same unreachable service.
+//
+// Naming a cause with no evidence for it, and offering a remedy that cannot
+// run, is the defect this file was written to prevent — it just had two
+// branches where it needed three.
+describe("the drift card distinguishes unreachable from empty", () => {
+  it("handles the error case before inspecting the payload", () => {
+    // Order matters: `drift?.reference?.loaded` is falsy when drift is
+    // undefined, so an error arm placed after it never runs.
+    const branch = CODE.slice(CODE.indexOf("{error ? ("), CODE.indexOf("drift?.reference?.loaded ? ("));
+    expect(branch, "the error arm must come first").toMatch(/ML service is not reachable/);
+  });
+
+  it("does not blame a missing baseline when it cannot see one", () => {
+    const errorArm = CODE.slice(CODE.indexOf("{error ? ("), CODE.indexOf(") : drift?.reference?.loaded"));
+    expect(errorArm).not.toMatch(/No reference distribution loaded/);
+    expect(errorArm).not.toMatch(/Reset Baseline/);
+  });
+
+  it("says the drift state itself is unknown, not that it is fine", () => {
+    const errorArm = CODE.slice(CODE.indexOf("{error ? ("), CODE.indexOf(") : drift?.reference?.loaded"));
+    expect(errorArm).toMatch(/says nothing about the drift state/i);
+  });
+
+  it("disables the remedy it cannot perform", () => {
+    expect(CODE).toMatch(/disabled=\{computeRef\.isPending \|\| Boolean\(error\)\}/);
+  });
+});
