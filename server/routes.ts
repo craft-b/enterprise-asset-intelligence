@@ -1689,6 +1689,22 @@ export async function registerRoutes(
         newest: sql`MAX(${assetRiskPredictions.predictedAt})`,
       }).from(assetRiskPredictions);
 
+      // Training-set size of the current champion, read from the metrics
+      // table rather than inferred from what is in the snapshots table now.
+      let trainedOn: number | null = null;
+      try {
+        const { modelMetrics } = await import('@shared/schema');
+        const [champion] = await db
+          .select({ datasetSize: modelMetrics.datasetSize })
+          .from(modelMetrics)
+          .orderBy(desc(modelMetrics.trainedAt))
+          .limit(1);
+        trainedOn = champion?.datasetSize ?? null;
+      } catch {
+        // Leave it null; the dashboard omits the clause rather than inventing
+        // a number, which is what the hardcoded "22,025" fallback was doing.
+      }
+
       res.json({
         snapshots: {
           total: Number(snapshotStats?.total) || 0,
@@ -1703,6 +1719,16 @@ export async function registerRoutes(
           newestDate: predictionDates?.newest,
         },
         readyForTraining: (Number(snapshotStats?.labeled) || 0) > 100,
+        // What the champion was actually trained on, which is NOT
+        // snapshots.labeled above. That is how many labelled snapshots exist
+        // in the database right now; this is the row count of the training
+        // set the current model was fitted to, and the two drift apart as
+        // soon as the simulator advances or the fleet changes.
+        //
+        // The dashboard printed the first and called it the second -- "models
+        // trained on 1,380 labeled snapshots" beside a model page reporting
+        // 10,828 -- so the app contradicted itself about its own model.
+        trainedOn: trainedOn ?? null,
         // Asked of the ML service, not of the filesystem. See
         // services/model-status.ts for what the filesystem was answering.
         modelStatus: await getModelStatus(),

@@ -586,8 +586,10 @@ export default function PredictiveMaintenanceDashboard() {
       <Alert className="border-blue-100 bg-blue-50">
         <Info className="h-4 w-4 text-blue-600" />
         <AlertDescription className="text-blue-800 text-sm">
-          Predictions use three separate Random Forest models trained on{" "}
-          {pipelineStatus?.snapshots?.labeled?.toLocaleString() ?? "22,025"} labeled snapshots.
+          Predictions use three separate Random Forest models
+          {pipelineStatus?.trainedOn
+            ? ` trained on ${pipelineStatus.trainedOn.toLocaleString()} labeled snapshots.`
+            : "."}
           <span className="ml-1 font-medium">
             10d: high confidence · 30d: high · 60d: high
             {pipelineStatus?.modelStatus && (
