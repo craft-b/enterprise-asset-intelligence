@@ -120,7 +120,9 @@ describe("the elapsed counter is anchored to the wake, not to the mount", () => 
 
   it("starts the clock on the first failed check", () => {
     expect(SRC).toMatch(/if\s*\(\s*wakeStartedAt\s*===\s*null\s*\)\s*wakeStartedAt\s*=\s*Date\.now\(\)/);
-    expect(SRC).toMatch(/setSeconds\(Math\.floor\(\(Date\.now\(\)\s*-\s*wakeStartedAt\)\s*\/\s*1000\)\)/);
+    // The elapsed value must derive from wakeStartedAt, however it is spelled.
+    expect(SRC).toMatch(/const waited = Date\.now\(\) - wakeStartedAt/);
+    expect(SRC).toMatch(/setSeconds\(Math\.floor\(waited \/ 1000\)\)/);
   });
 
   it("clears the anchor when the service answers, so a second wake is timed fresh", () => {
@@ -139,5 +141,64 @@ describe("the elapsed counter is anchored to the wake, not to the mount", () => 
     // Measured range across ten observations: 42s - 72.5s.
     expect(stated).toBeGreaterThanOrEqual(42);
     expect(stated).toBeLessThanOrEqual(90);
+  });
+});
+
+// ── When a wait becomes a fault ──────────────────────────────────────────────
+//
+// The banner had no terminal state: it said "starting up" and counted for as
+// long as the tab was open. Observed readings of 370, 650 and 2300 seconds
+// were all presented beside a sentence promising about sixty, and in each case
+// the service was not starting up at all — the host was refusing the API's
+// requests outright.
+//
+// Past a generous cold-start window the honest thing is to say so, and to say
+// what still works, because nearly all of it does: scores, attributions and
+// model metrics are read from the database where each scoring run persists
+// them. Only live drift and on-demand re-scoring need the service itself.
+describe("the notice stops claiming a cold start that is not happening", () => {
+  const SRC = readFileSync(join(__dirname, "ml-service-notice.tsx"), "utf8");
+
+  it("has a threshold past which it reports a fault", () => {
+    const m = SRC.match(/UNAVAILABLE_AFTER_MS\s*=\s*([\d_]+)/);
+    expect(m, "no terminal state; the banner will count forever").not.toBeNull();
+    const ms = Number(m![1].replace(/_/g, ""));
+    // Past the slowest measured cold start (72.5s) with room for an image
+    // pull, and inside the patience of someone looking at a demo.
+    expect(ms).toBeGreaterThan(100_000);
+    expect(ms).toBeLessThanOrEqual(300_000);
+  });
+
+  it("names what is still trustworthy rather than only what is broken", () => {
+    // A notice that says only "unavailable" invites a reader to distrust the
+    // numbers on the page, which are fine.
+    expect(SRC).toMatch(/Everything on this page\s*\n?\s*is still current/);
+    expect(SRC).toMatch(/read from the database/);
+  });
+
+  it("says which capabilities actually need the service", () => {
+    expect(SRC).toMatch(/live drift/i);
+    expect(SRC).toMatch(/re-scoring/i);
+  });
+
+  it("keeps polling after giving up, so recovery clears it unaided", () => {
+    // Stopping would strand the banner on a service that came back.
+    const branch = SRC.slice(SRC.indexOf("const waited ="), SRC.indexOf("tick();"));
+    expect(branch).toMatch(/setUnavailable\(waited >= UNAVAILABLE_AFTER_MS\)/);
+    expect(branch, "the poll must be rescheduled regardless").toMatch(/timer = setTimeout\(tick, poll\)/);
+  });
+
+  it("clears the fault state when the service answers", () => {
+    const upBranch = SRC.slice(SRC.indexOf("if (up) {"), SRC.indexOf("// Count from the first failed check"));
+    expect(upBranch).toMatch(/setUnavailable\(false\)/);
+  });
+
+  it("does not call it a cold start in the fault copy", () => {
+    // Just the fault branch: it ends where the ordinary banner's return begins.
+    const start = SRC.indexOf("if (unavailable) {");
+    const fault = SRC.slice(start, SRC.indexOf("\n  return (", start));
+    expect(fault).toMatch(/not responding/i);
+    expect(fault, "the fault state must not repeat the cold-start promise")
+      .not.toMatch(/is starting up/);
   });
 });

@@ -38,6 +38,22 @@ const FIRST_POLL_MS = 5_000;
 /** Ceiling on the widening, so a service that comes up is still noticed. */
 const MAX_POLL_MS = 20_000;
 
+/**
+ * When to stop calling this a cold start.
+ *
+ * The banner had no terminal state. It said "starting up" and counted,
+ * forever, at whatever the wait turned out to be -- 370 seconds, 650, 2300 --
+ * because a wake that never completes is indistinguishable, from here, from
+ * one that is taking a while. Every one of those readings was presented
+ * beside a sentence promising about sixty seconds.
+ *
+ * Past this, something is wrong rather than slow, and saying so is both more
+ * honest and more useful: the page keeps working, and a reader who knows
+ * which parts are live can judge the rest. Comfortably past the slowest
+ * measured cold start (72.5s) plus a host that has to pull an image first.
+ */
+const UNAVAILABLE_AFTER_MS = 150_000;
+
 interface MlHealth {
   reachable: boolean;
   reason?: string;
@@ -63,6 +79,7 @@ export async function checkMlHealth(signal?: AbortSignal, fetchFn: typeof fetch 
 export function MlServiceNotice() {
   const [waking, setWaking] = useState(false);
   const [seconds, setSeconds] = useState(0);
+  const [unavailable, setUnavailable] = useState(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -79,6 +96,7 @@ export function MlServiceNotice() {
 
       if (up) {
         setWaking(false);
+        setUnavailable(false);
         wakeStartedAt = null;
         return; // answered — stop polling entirely
       }
@@ -92,8 +110,12 @@ export function MlServiceNotice() {
       // presented beside a sentence about cold starts.
       if (wakeStartedAt === null) wakeStartedAt = Date.now();
 
+      const waited = Date.now() - wakeStartedAt;
       setWaking(true);
-      setSeconds(Math.floor((Date.now() - wakeStartedAt) / 1000));
+      setSeconds(Math.floor(waited / 1000));
+      setUnavailable(waited >= UNAVAILABLE_AFTER_MS);
+      // Keep polling even once it is called unavailable, so a service that
+      // does come back clears the banner without a reload.
       poll = Math.min(Math.round(poll * 1.5), MAX_POLL_MS);
       timer = setTimeout(tick, poll);
     };
@@ -107,6 +129,35 @@ export function MlServiceNotice() {
   }, []);
 
   if (!waking) return null;
+
+  // Past the cold-start window this stops being a wait and starts being a
+  // fault. The page is no less useful -- scores, attributions and model
+  // metrics are all read from the database -- so the notice says which parts
+  // are live rather than implying the whole page is pending.
+  if (unavailable) {
+    const minutes = Math.floor(seconds / 60);
+    return (
+      <div
+        className="flex items-start gap-3 rounded-lg border border-slate-300 bg-slate-50 p-3"
+        aria-live="polite"
+      >
+        <Moon className="mt-0.5 h-4 w-4 shrink-0 text-slate-500" aria-hidden />
+        <div className="text-sm text-slate-800">
+          <p className="font-medium">The ML service is not responding</p>
+          <p className="mt-0.5 text-xs leading-relaxed text-slate-600">
+            It runs on separate free hosting and has not answered for{" "}
+            {minutes > 0 ? `${minutes} min` : `${seconds}s`}, which is well past
+            a cold start. <span className="font-medium">Everything on this page
+            is still current:</span> risk scores, per-asset attributions and
+            model metrics are read from the database, where each scoring run
+            persists them. What needs the service itself is live drift
+            evaluation and re-scoring on demand; those will be stale or
+            unavailable until it answers.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
