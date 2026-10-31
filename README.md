@@ -616,12 +616,19 @@ not recovered. Render confirmed the supported remedy: private networking, which
 free web services can send over but cannot receive on, so it needs one paid
 instance.
 
-What this costs is narrower than it sounds. Risk scores, per-asset SHAP
-attributions and model metrics are persisted by each scoring run and read from
-the database, so they render normally. Live drift evaluation and on-demand
-re-scoring are what need the service itself, and the UI says which is which
-rather than implying the page is pending. `GET /api/ml/diagnostics` (admin)
-reports the egress state, the gate, and a live probe of each path.
+What this costs is narrower than it sounds, and narrower than it first was.
+Risk scores, per-asset SHAP attributions and model metrics are persisted by each
+scoring run and read from the database. So are the three drift layers: the ML
+service's handlers for them were SELECTs over tables this API already reads, so
+the API now reads them directly. Feature importance and hyperparameters are
+properties of the pinned champion and ship in the image as the training run's
+own registry output. All of those render with the ML service unreachable.
+
+What genuinely needs the service is computation: scoring a new batch,
+recomputing a drift reference, the data-quality report and the
+champion-challenger comparison. The UI says which is which rather than
+implying the page is pending. `GET /api/ml/diagnostics` (admin) reports the
+egress state, the gate, and a live probe of each path.
 
 Honest about the free tier: both Render services suspend after ~15 minutes idle. Three successive
 cold starts of the ML service measured 51s, 62s and 73s — the host's own dashboard warns of "50
