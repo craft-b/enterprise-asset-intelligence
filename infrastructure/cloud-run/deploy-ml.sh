@@ -78,16 +78,50 @@ if gcloud run services describe "$SERVICE" --region "$REGION" >/dev/null 2>&1; t
   EXISTS=true
 fi
 
+# Pasting into a prompt that shows nothing is pasting blind: a paste that did
+# not land and one that did look identical. So each prompt reports what
+# arrived -- its length, never its content -- after trimming the stray
+# whitespace and carriage returns a browser paste can carry.
+#
+# On a first deploy both are required, so an empty answer asks again rather
+# than ending the run: two attempts at the original prompts ended with
+# "both values are required" and no way to tell which paste had failed.
+ask_secret() {
+  local prompt="$1" required="$2" value
+  while true; do
+    # Everything but the value goes to stderr: this runs inside $(...).
+    read -rsp "$prompt" value; echo >&2
+    value="$(printf '%s' "$value" | tr -d '\r' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    if [ -n "$value" ]; then
+      echo "  (received ${#value} characters)" >&2
+      break
+    fi
+    if [ "$required" != true ]; then
+      echo "  (nothing received -- keeping the current value)" >&2
+      break
+    fi
+    echo "  (nothing received -- the paste did not land. Copy the value again, then" >&2
+    echo "   click in this window and press Ctrl+V, or right-click > Paste, then Enter.)" >&2
+  done
+  printf '%s' "$value"
+}
+
+REQUIRED=true
+[ "$EXISTS" = true ] && REQUIRED=false
+
 echo
-echo "Paste each value and press Enter. Nothing is shown as you paste."
-read -rsp "DATABASE_URL (same as Render's): " DB_URL; echo
-read -rsp "ML_SERVICE_TOKEN (Render > Env Groups > eai-shared): " TOKEN; echo
+echo "Paste each value and press Enter once. Nothing is shown as you paste,"
+echo "but each answer reports how many characters arrived."
+DB_URL="$(ask_secret "DATABASE_URL (same as Render's): " "$REQUIRED")"
+TOKEN="$(ask_secret "ML_SERVICE_TOKEN (Render > Env Groups > eai-shared): " "$REQUIRED")"
 
 ENV_ARGS=()
 if [ -z "$DB_URL" ] && [ -z "$TOKEN" ] && [ "$EXISTS" = true ]; then
   echo "Both blank: keeping the service's current environment."
 elif [ -z "$DB_URL" ] || [ -z "$TOKEN" ]; then
-  echo "Both values are required on a first deploy (or both blank to keep the current ones)." >&2
+  [ -z "$DB_URL" ] && echo "DATABASE_URL arrived empty." >&2
+  [ -z "$TOKEN" ] && echo "ML_SERVICE_TOKEN arrived empty." >&2
+  echo "Both are required on a first deploy. Run the script again and paste the missing one." >&2
   exit 1
 else
   case "$DB_URL" in
