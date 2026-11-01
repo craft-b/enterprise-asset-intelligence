@@ -13,6 +13,7 @@ import { useEquipment } from "@/hooks/use-equipment";
 import { useEquipmentProjection, type ProjectionPoint, type ProjectionResult } from "@/hooks/use-predictive-maintenance";
 import { useMultiHorizonRiskScores, useLatestMultiHorizonPredictions } from "@/hooks/use-risk-score";
 import { Button } from "@/components/ui/button";
+import { ADMIN_ONLY, ReadOnlyAction } from "@/components/read-only-action";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -561,13 +562,15 @@ export default function PredictiveMaintenanceDashboard() {
             Multi-horizon failure probability — 10, 30, and 60 day windows
           </p>
         </div>
-        {isAdmin && (
+        {isAdmin ? (
           <div className="flex gap-2">
             <Button onClick={handleRunMultiHorizon} disabled={mhMutation.isPending} className="gap-2">
               {mhMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
               Run Multi-Horizon Forecast
             </Button>
           </div>
+        ) : (
+          <ReadOnlyAction>Run Multi-Horizon Forecast</ReadOnlyAction>
         )}
       </div>
 
@@ -755,155 +758,159 @@ export default function PredictiveMaintenanceDashboard() {
         </div>
       )}
 
-      {/* Admin Controls */}
-      {isAdmin && (
-        <Card>
-          <CardHeader>
-            <CardTitle>ML Pipeline Controls</CardTitle>
-            <CardDescription>
-              Administrative controls for the predictive maintenance pipeline.{" "}
-              <span className="font-medium text-amber-600">Simulation controls are demo/dev tools</span>{" "}
-              — in production, sensor data accumulates from live equipment telemetry.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex items-start gap-4 p-4 border rounded-lg">
-              <Database className="h-5 w-5 text-blue-600 mt-0.5" />
-              <div className="flex-1">
-                <div className="font-medium">Generate Feature Snapshots</div>
-                <div className="text-sm text-muted-foreground">
-                  Extract features from operational data for model training
-                </div>
-              </div>
-              <Button variant="outline" onClick={() => generateSnapshots.mutate(undefined)} disabled={generateSnapshots.isPending}>
-                {generateSnapshots.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Database className="mr-2 h-4 w-4" />}
-                Generate
-              </Button>
-            </div>
-
-            <div className="flex items-start gap-4 p-4 border rounded-lg">
-              <Tag className="h-5 w-5 text-purple-600 mt-0.5" />
-              <div className="flex-1">
-                <div className="font-medium">Label Historical Data</div>
-                <div className="text-sm text-muted-foreground">
-                  Label snapshots with 10d/30d/60d failure outcomes for model training
-                </div>
-              </div>
-              <Button variant="outline" onClick={() => labelSnapshots.mutate(undefined)} disabled={labelSnapshots.isPending}>
-                {labelSnapshots.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Tag className="mr-2 h-4 w-4" />}
-                Label
-              </Button>
-            </div>
-
-            <div className="flex items-start gap-4 p-4 border rounded-lg">
-              <BrainCircuit className="h-5 w-5 text-indigo-600 mt-0.5" />
-              <div className="flex-1">
-                <div className="font-medium">Retrain Models</div>
-                <div className="text-sm text-muted-foreground mb-2">
-                  Train new models on all labeled snapshots. Takes 2–5 minutes. Models hot-swap on completion.
-                </div>
-
-                {trainStatus?.running && (
-                  <div className="mb-2 p-2 bg-indigo-50 border border-indigo-200 rounded text-xs font-mono text-indigo-800 max-h-32 overflow-y-auto space-y-0.5">
-                    {trainStatus.log.slice(-12).map((line, i) => (
-                      <div key={i}>{line}</div>
-                    ))}
-                  </div>
-                )}
-
-                {trainStatus?.last_result && !trainStatus.running && (
-                  <div className={cn(
-                    "mb-2 flex items-center gap-2 text-xs px-2 py-1 rounded border",
-                    trainStatus.last_result.success
-                      ? "bg-green-50 border-green-200 text-green-700"
-                      : "bg-red-50 border-red-200 text-red-700"
-                  )}>
-                    {trainStatus.last_result.success ? (
-                      <><CheckCircle className="h-3 w-3" /> Training complete — {trainStatus.last_result.version} active</>
-                    ) : (
-                      <><AlertTriangle className="h-3 w-3" /> Training failed — check logs</>
-                    )}
-                  </div>
-                )}
-
-                {!trainStatus?.running && (trainStatus?.log?.length ?? 0) > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => setShowTrainLog(v => !v)}
-                    className="text-xs text-indigo-600 underline mb-2"
-                  >
-                    <ScrollText className="h-3 w-3 inline mr-1" />
-                    {showTrainLog ? "Hide" : "Show"} full log
-                  </button>
-                )}
-
-                {showTrainLog && trainStatus?.log && (
-                  <div className="mb-2 p-2 bg-slate-50 border rounded text-xs font-mono max-h-48 overflow-y-auto space-y-0.5">
-                    {trainStatus.log.map((line, i) => (
-                      <div key={i} className={cn(
-                        line.includes("SUCCESS") && "text-green-700 font-semibold",
-                        (line.includes("FATAL") || line.includes("FAILED")) && "text-red-700 font-semibold",
-                        line.includes("[CV]") && "text-blue-700",
-                        line.includes("[HOLDOUT]") && "text-purple-700",
-                      )}>{line}</div>
-                    ))}
-                  </div>
-                )}
-              </div>
-              <Button
-                variant="outline"
-                onClick={() => { setShowTrainLog(true); trainModel.mutate(); }}
-                disabled={trainModel.isPending || trainStatus?.running}
-                className="border-indigo-300 text-indigo-700 hover:bg-indigo-50"
-              >
-                {trainModel.isPending || trainStatus?.running
-                  ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Training...</>
-                  : <><BrainCircuit className="mr-2 h-4 w-4" /> Retrain</>
-                }
-              </Button>
-            </div>
-
-            <div className="flex items-start gap-4 p-4 border rounded-lg bg-slate-50">
-              <Activity className="h-5 w-5 text-green-600 mt-0.5" />
-              <div className="flex-1">
-                <div className="font-medium">Simulate Operations</div>
-                <div className="text-sm text-muted-foreground mb-3">
-                  Generate sensor readings and maintenance events.
-                  {(() => {
-                    const s = simulationState.data as any;
-                    if (!s) return null;
-                    return (
-                      <span className="ml-1 text-xs">
-                        Cursor: <strong>{s.cursor_date}</strong> · {s.total_days_run} days run
-                      </span>
-                    );
-                  })()}
-                </div>
-                <div className="flex items-center gap-3">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm text-muted-foreground">Days:</span>
-                    <input
-                      type="range" min={1} max={30} value={simDays}
-                      onChange={(e) => setSimDays(parseInt(e.target.value))}
-                      className="w-24"
-                    />
-                    <span className="text-sm font-medium w-6">{simDays}</span>
-                  </div>
-                  <Button
-                    variant="outline" size="sm"
-                    onClick={() => simulateDay.mutate(simDays)}
-                    disabled={simulateDay.isPending}
-                    className="border-green-300 text-green-700 hover:bg-green-50"
-                  >
-                    {simulateDay.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}
-                    Simulate {simDays} Day{simDays > 1 ? "s" : ""}
-                  </Button>
-                </div>
+      {/* Pipeline controls. Viewers see every step, locked: the card is the
+          clearest account on the page of how the model gets built, and hiding
+          it hid that too. The routes behind it are requireAdmin regardless. */}
+      <Card>
+        <CardHeader>
+          <CardTitle>ML Pipeline Controls</CardTitle>
+          <CardDescription>
+            Administrative controls for the predictive maintenance pipeline.{" "}
+            <span className="font-medium text-amber-600">Simulation controls are demo/dev tools</span>{" "}
+            — in production, sensor data accumulates from live equipment telemetry.
+            {!isAdmin && (
+              <span className="mt-1 block text-xs text-amber-600">{ADMIN_ONLY} to run these steps.</span>
+            )}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-start gap-4 p-4 border rounded-lg">
+            <Database className="h-5 w-5 text-blue-600 mt-0.5" />
+            <div className="flex-1">
+              <div className="font-medium">Generate Feature Snapshots</div>
+              <div className="text-sm text-muted-foreground">
+                Extract features from operational data for model training
               </div>
             </div>
-          </CardContent>
-        </Card>
-      )}
+            <Button variant="outline" onClick={() => generateSnapshots.mutate(undefined)} disabled={!isAdmin || generateSnapshots.isPending}>
+              {generateSnapshots.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Database className="mr-2 h-4 w-4" />}
+              Generate
+            </Button>
+          </div>
+
+          <div className="flex items-start gap-4 p-4 border rounded-lg">
+            <Tag className="h-5 w-5 text-purple-600 mt-0.5" />
+            <div className="flex-1">
+              <div className="font-medium">Label Historical Data</div>
+              <div className="text-sm text-muted-foreground">
+                Label snapshots with 10d/30d/60d failure outcomes for model training
+              </div>
+            </div>
+            <Button variant="outline" onClick={() => labelSnapshots.mutate(undefined)} disabled={!isAdmin || labelSnapshots.isPending}>
+              {labelSnapshots.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Tag className="mr-2 h-4 w-4" />}
+              Label
+            </Button>
+          </div>
+
+          <div className="flex items-start gap-4 p-4 border rounded-lg">
+            <BrainCircuit className="h-5 w-5 text-indigo-600 mt-0.5" />
+            <div className="flex-1">
+              <div className="font-medium">Retrain Models</div>
+              <div className="text-sm text-muted-foreground mb-2">
+                Train new models on all labeled snapshots. Takes 2–5 minutes. Models hot-swap on completion.
+              </div>
+
+              {trainStatus?.running && (
+                <div className="mb-2 p-2 bg-indigo-50 border border-indigo-200 rounded text-xs font-mono text-indigo-800 max-h-32 overflow-y-auto space-y-0.5">
+                  {trainStatus.log.slice(-12).map((line, i) => (
+                    <div key={i}>{line}</div>
+                  ))}
+                </div>
+              )}
+
+              {trainStatus?.last_result && !trainStatus.running && (
+                <div className={cn(
+                  "mb-2 flex items-center gap-2 text-xs px-2 py-1 rounded border",
+                  trainStatus.last_result.success
+                    ? "bg-green-50 border-green-200 text-green-700"
+                    : "bg-red-50 border-red-200 text-red-700"
+                )}>
+                  {trainStatus.last_result.success ? (
+                    <><CheckCircle className="h-3 w-3" /> Training complete — {trainStatus.last_result.version} active</>
+                  ) : (
+                    <><AlertTriangle className="h-3 w-3" /> Training failed — check logs</>
+                  )}
+                </div>
+              )}
+
+              {!trainStatus?.running && (trainStatus?.log?.length ?? 0) > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowTrainLog(v => !v)}
+                  className="text-xs text-indigo-600 underline mb-2"
+                >
+                  <ScrollText className="h-3 w-3 inline mr-1" />
+                  {showTrainLog ? "Hide" : "Show"} full log
+                </button>
+              )}
+
+              {showTrainLog && trainStatus?.log && (
+                <div className="mb-2 p-2 bg-slate-50 border rounded text-xs font-mono max-h-48 overflow-y-auto space-y-0.5">
+                  {trainStatus.log.map((line, i) => (
+                    <div key={i} className={cn(
+                      line.includes("SUCCESS") && "text-green-700 font-semibold",
+                      (line.includes("FATAL") || line.includes("FAILED")) && "text-red-700 font-semibold",
+                      line.includes("[CV]") && "text-blue-700",
+                      line.includes("[HOLDOUT]") && "text-purple-700",
+                    )}>{line}</div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <Button
+              variant="outline"
+              onClick={() => { setShowTrainLog(true); trainModel.mutate(); }}
+              disabled={!isAdmin || trainModel.isPending || trainStatus?.running}
+              className="border-indigo-300 text-indigo-700 hover:bg-indigo-50"
+            >
+              {trainModel.isPending || trainStatus?.running
+                ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Training...</>
+                : <><BrainCircuit className="mr-2 h-4 w-4" /> Retrain</>
+              }
+            </Button>
+          </div>
+
+          <div className="flex items-start gap-4 p-4 border rounded-lg bg-slate-50">
+            <Activity className="h-5 w-5 text-green-600 mt-0.5" />
+            <div className="flex-1">
+              <div className="font-medium">Simulate Operations</div>
+              <div className="text-sm text-muted-foreground mb-3">
+                Generate sensor readings and maintenance events.
+                {(() => {
+                  const s = simulationState.data as any;
+                  if (!s) return null;
+                  return (
+                    <span className="ml-1 text-xs">
+                      Cursor: <strong>{s.cursor_date}</strong> · {s.total_days_run} days run
+                    </span>
+                  );
+                })()}
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-muted-foreground">Days:</span>
+                  <input
+                    type="range" min={1} max={30} value={simDays}
+                    onChange={(e) => setSimDays(parseInt(e.target.value))}
+                    disabled={!isAdmin}
+                    className="w-24"
+                  />
+                  <span className="text-sm font-medium w-6">{simDays}</span>
+                </div>
+                <Button
+                  variant="outline" size="sm"
+                  onClick={() => simulateDay.mutate(simDays)}
+                  disabled={!isAdmin || simulateDay.isPending}
+                  className="border-green-300 text-green-700 hover:bg-green-50"
+                >
+                  {simulateDay.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}
+                  Simulate {simDays} Day{simDays > 1 ? "s" : ""}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* ── Detail Modal ──────────────────────────────────────────────────────── */}
       {selectedResult && (
@@ -1032,7 +1039,7 @@ export default function PredictiveMaintenanceDashboard() {
               </div>
 
               {/* ── Schedule PM button + inline form ──────────────────────── */}
-              {isAdmin && (
+              {isAdmin ? (
                 <div className="pt-2 border-t">
                   {!showSchedulePM ? (
                     <Button
@@ -1087,6 +1094,10 @@ export default function PredictiveMaintenanceDashboard() {
                       />
                     </div>
                   )}
+                </div>
+              ) : (
+                <div className="pt-2 border-t">
+                  <ReadOnlyAction className="w-full">Schedule Maintenance</ReadOnlyAction>
                 </div>
               )}
 

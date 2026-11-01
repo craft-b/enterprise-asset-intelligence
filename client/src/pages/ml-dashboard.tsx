@@ -29,6 +29,7 @@ import {
   Cell,
 } from "recharts";
 import { Button } from "@/components/ui/button";
+import { ReadOnlyAction } from "@/components/read-only-action";
 import { useSystemStatus } from "@/hooks/use-system-status";
 import { useAuth } from "@/hooks/use-auth";
 import { MlServiceNotice } from "@/components/ml-service-notice";
@@ -165,7 +166,7 @@ function DriftMonitorCard() {
             </CardDescription>
           </div>
         </div>
-        {isAdmin && (
+        {isAdmin ? (
           <Button
             variant="outline"
             size="sm"
@@ -181,6 +182,8 @@ function DriftMonitorCard() {
               : <RefreshCw className="h-3 w-3 mr-1" />}
             Reset Baseline
           </Button>
+        ) : (
+          <ReadOnlyAction variant="outline" size="sm">Reset Baseline</ReadOnlyAction>
         )}
       </CardHeader>
       <CardContent>
@@ -755,6 +758,9 @@ function ChampionChallengerCard() {
               )}
               Promote Challenger
             </button>
+          )}
+          {compare.challenger && !isAdmin && (
+            <ReadOnlyAction size="sm">Promote Challenger</ReadOnlyAction>
           )}
         </div>
       </CardHeader>

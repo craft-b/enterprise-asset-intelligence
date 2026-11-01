@@ -4,6 +4,7 @@ import { useSimulationState } from "@/hooks/use-predictive-maintenance";
 import { useEquipment } from "@/hooks/use-equipment";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
+import { ReadOnlyAction } from "@/components/read-only-action";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -210,7 +211,7 @@ export default function MaintenanceLog() {
           </p>
         </div>
 
-        {isAdmin && (
+        {isAdmin ? (
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogTrigger asChild>
               <Button onClick={() => handleAddMaintenance()}>
@@ -265,6 +266,8 @@ export default function MaintenanceLog() {
               )}
             </DialogContent>
           </Dialog>
+        ) : (
+          <ReadOnlyAction>Log Maintenance</ReadOnlyAction>
         )}
       </div>
 

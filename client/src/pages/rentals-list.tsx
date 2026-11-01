@@ -6,6 +6,7 @@ import { useRentals, useCompleteRental, useDeleteRental, useGenerateInvoice } fr
 import { useAuth } from "@/hooks/use-auth";
 import { SwapEquipmentDialog } from "@/components/swap-equipment-dialog";
 import { Button } from "@/components/ui/button";
+import { ReadOnlyAction } from "@/components/read-only-action";
 import {
   Table,
   TableBody,
@@ -125,7 +126,7 @@ export default function RentalsList() {
           <p className="text-muted-foreground">Track ongoing rentals and equipment assignments.</p>
         </div>
         
-        {isAdmin && (
+        {isAdmin ? (
           <Dialog open={isNewRentalOpen} onOpenChange={setIsNewRentalOpen}>
             <DialogTrigger asChild>
               <Button>
@@ -142,6 +143,8 @@ export default function RentalsList() {
               <RentalForm onSuccess={() => setIsNewRentalOpen(false)} />
             </DialogContent>
           </Dialog>
+        ) : (
+          <ReadOnlyAction>New Rental</ReadOnlyAction>
         )}
       </div>
 

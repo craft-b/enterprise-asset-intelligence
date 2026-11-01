@@ -7,6 +7,7 @@ import { TablePagination } from "@/components/ui/table-pagination";
 import { useVendors, useDeleteVendor } from "@/hooks/use-vendors";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
+import { ReadOnlyAction } from "@/components/read-only-action";
 import {
   Table,
   TableBody,
@@ -70,7 +71,7 @@ export default function VendorsList() {
           <p className="text-muted-foreground">Manage equipment vendors and supplier relationships.</p>
         </div>
         
-        {isAdmin && (
+        {isAdmin ? (
           <Dialog open={isNewVendorOpen} onOpenChange={setIsNewVendorOpen}>
             <DialogTrigger asChild>
               <Button>
@@ -87,6 +88,8 @@ export default function VendorsList() {
               <VendorForm onSuccess={() => setIsNewVendorOpen(false)} />
             </DialogContent>
           </Dialog>
+        ) : (
+          <ReadOnlyAction>New Vendor</ReadOnlyAction>
         )}
       </div>
 

@@ -9,6 +9,7 @@ import { useLatestMultiHorizonPredictions } from "@/hooks/use-risk-score";
 import { useMaintenanceDueSoon } from "@/hooks/use-maintenance";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
+import { ReadOnlyAction } from "@/components/read-only-action";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import {
@@ -131,7 +132,7 @@ export default function EquipmentList() {
           <p className="text-muted-foreground">Manage your equipment inventory with ML-powered risk insights</p>
         </div>
         
-        {isAdmin && (
+        {isAdmin ? (
           <div className="flex items-center gap-2">
           <SensorUpload />
           <Dialog open={isNewEquipmentOpen} onOpenChange={setIsNewEquipmentOpen}>
@@ -150,6 +151,11 @@ export default function EquipmentList() {
               <EquipmentForm onSuccess={() => setIsNewEquipmentOpen(false)} />
             </DialogContent>
           </Dialog>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            <ReadOnlyAction variant="outline" size="sm">Import Sensor Data</ReadOnlyAction>
+            <ReadOnlyAction>New Equipment</ReadOnlyAction>
           </div>
         )}
       </div>

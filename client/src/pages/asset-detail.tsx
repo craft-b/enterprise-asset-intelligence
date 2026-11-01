@@ -11,6 +11,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ReadOnlyAction } from "@/components/read-only-action";
 import { RiskBadge } from "@/components/risk-badge";
 import {
   Dialog,
@@ -257,10 +258,12 @@ export default function AssetDetail() {
               )}
             </p>
           </div>
-          {isAdmin && (
+          {isAdmin ? (
             <Button onClick={() => setShowSchedule(true)} className="gap-2 shrink-0">
               <Wrench className="h-4 w-4" /> Log Maintenance
             </Button>
+          ) : (
+            <ReadOnlyAction className="shrink-0">Log Maintenance</ReadOnlyAction>
           )}
         </div>
       </div>

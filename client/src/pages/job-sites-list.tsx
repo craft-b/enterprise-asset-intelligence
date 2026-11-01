@@ -5,6 +5,7 @@ import { TablePagination } from "@/components/ui/table-pagination";
 import { useJobSites, useDeleteJobSite } from "@/hooks/use-jobsites";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
+import { ReadOnlyAction } from "@/components/read-only-action";
 import {
   Table,
   TableBody,
@@ -68,7 +69,7 @@ export default function JobSitesList() {
           <p className="text-muted-foreground">Manage construction sites and project locations.</p>
         </div>
         
-        {isAdmin && (
+        {isAdmin ? (
           <Dialog open={isNewJobSiteOpen} onOpenChange={setIsNewJobSiteOpen}>
             <DialogTrigger asChild>
               <Button>
@@ -85,6 +86,8 @@ export default function JobSitesList() {
               <JobSiteForm onSuccess={() => setIsNewJobSiteOpen(false)} />
             </DialogContent>
           </Dialog>
+        ) : (
+          <ReadOnlyAction>New Job Site</ReadOnlyAction>
         )}
       </div>
 
