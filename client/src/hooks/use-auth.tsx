@@ -74,6 +74,12 @@ function useLogin() {
         if (res.status === 401) {
           throw new Error("Invalid username or password");
         }
+        if (res.status === 429) {
+          // Sign-in attempts are limited; the server's message says how long
+          // to wait, which "Login failed" would leave someone guessing at.
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.message || "Too many sign-in attempts. Try again later.");
+        }
         throw new Error("Login failed");
       }
       

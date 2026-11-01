@@ -6,6 +6,13 @@
 // (X-Actor) so the Python side can audit-log who invoked train / promote /
 // drift-reference. This is the ONLY place Node builds ML requests, so the token
 // can never be forgotten on a call site.
+//
+// On Cloud Run there is a second layer in front of the token. The service is
+// private, and each request also carries a Google ID token minted from
+// ML_SERVICE_GOOGLE_KEY (see google-id-token.ts), so a request without one is
+// refused by Google before it can wake -- and bill -- the container.
+
+import { createIdTokenSource, parseServiceAccountKey, type IdTokenSource } from "./google-id-token";
 
 /**
  * Check that ML_SERVICE_URL names the ML service and nothing else.
@@ -68,6 +75,41 @@ function normaliseMlServiceUrl(raw: string | undefined): string {
 }
 
 const ML_SERVICE_URL = normaliseMlServiceUrl(process.env.ML_SERVICE_URL);
+
+/**
+ * Check ML_SERVICE_GOOGLE_KEY at boot, for the same reason as the URL above: a
+ * malformed key is otherwise silent until the first ML request, which then
+ * fails with a token error on whatever page happened to ask.
+ */
+export function validateMlServiceGoogleKey(raw: string | undefined): void {
+  parseServiceAccountKey(raw);
+}
+
+/** Built without throwing, for module load; boot validation reports a bad key. */
+function idTokenSourceFromEnv(): IdTokenSource | null {
+  try {
+    const key = parseServiceAccountKey(process.env.ML_SERVICE_GOOGLE_KEY);
+    return key ? createIdTokenSource(key, ML_SERVICE_URL) : null;
+  } catch {
+    return null;
+  }
+}
+
+const idTokens = idTokenSourceFromEnv();
+
+/** How requests to the ML service are authenticated, for the admin diagnostic. */
+export const ML_AUTH_MODE = idTokens ? "google-id-token + service token" : "service token";
+
+/**
+ * The Authorization header for a private Cloud Run service, or nothing.
+ *
+ * Kept apart from mlHeaders, which stays synchronous for its callers: minting
+ * a token can mean a round trip to Google, and only the two functions below
+ * send requests.
+ */
+async function googleAuthHeader(): Promise<Record<string, string>> {
+  return idTokens ? { Authorization: `Bearer ${await idTokens.token()}` } : {};
+}
 
 export function mlHeaders(opts?: { json?: boolean; actorId?: number | string | null }): Record<string, string> {
   const h: Record<string, string> = {};
@@ -264,7 +306,7 @@ export async function probeHostDirectly(timeoutMs = 10_000): Promise<Response> {
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(`${ML_SERVICE_URL}/health`, {
-      headers: mlHeaders({ json: false }),
+      headers: { ...mlHeaders({ json: false }), ...(await googleAuthHeader()) },
       signal: controller.signal,
     });
   } finally {
@@ -277,11 +319,6 @@ export async function mlFetch(
   init: RequestInit = {},
   opts?: { actorId?: number | string | null; timeoutMs?: number },
 ): Promise<Response> {
-  const hasBody = init.body !== undefined && init.body !== null;
-  const headers = {
-    ...mlHeaders({ json: hasBody, actorId: opts?.actorId }),
-    ...(init.headers as Record<string, string> | undefined),
-  };
   const url = `${ML_SERVICE_URL}${path}`;
 
   // Shared cooldown, checked before anything is sent.
@@ -295,6 +332,14 @@ export async function mlFetch(
   // Backing off per-caller cannot work: the limit is on the address, so it is
   // the address that has to go quiet. One gate, every caller.
   if (rateLimitRemaining() > 0) return syntheticRateLimit();
+
+  // After the gate, so a request that will not be sent does not mint a token.
+  const hasBody = init.body !== undefined && init.body !== null;
+  const headers = {
+    ...mlHeaders({ json: hasBody, actorId: opts?.actorId }),
+    ...(await googleAuthHeader()),
+    ...(init.headers as Record<string, string> | undefined),
+  };
 
   if (init.signal) {
     const res = await fetch(url, { ...init, headers });

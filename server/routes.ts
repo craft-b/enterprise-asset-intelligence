@@ -9,7 +9,7 @@ import { createSessionStore, resolveSessionSecret, SESSION_TTL_MS } from "./serv
 import { applyCors } from "./services/cors";
 import { toPublicUser } from "./services/public-user";
 import { csvToRecords, ingestReadings, MAX_ROWS } from "./services/sensor-ingest";
-import { validateMlServiceUrl } from "./services/ml-client";
+import { validateMlServiceUrl, validateMlServiceGoogleKey, ML_AUTH_MODE } from "./services/ml-client";
 import bcrypt from "bcryptjs";
 import { maintenanceEvents, equipment, equipmentRiskScores, rentals, equipmentFailurePredictions, equipmentSwaps, users } from "@shared/schema";
 import { eq, desc, asc, count, sql, and, like } from "drizzle-orm";
@@ -25,6 +25,8 @@ import { readModelCard } from "./services/model-card";
 import { mlFetch, describeMlFailure, ML_SLOW_TIMEOUT_MS, ML_SERVICE_URL, rateLimitState, probeHostDirectly } from "./services/ml-client";
 import { wakeAndWait, nudgeMlAwake, nudgeHoldingSince, REQUEST_WAKE_BUDGET_MS, REQUEST_WAKE_PROBE_MS, RETRY_AFTER_SECONDS, RATE_LIMIT_RETRY_SECONDS } from "./services/ml-wake";
 import { getMlHealth } from "./services/ml-health-cache";
+import { cachedMl, invalidateMlCache, ML_CACHE_TTL_MS, type MlOutcome } from "./services/ml-response-cache";
+import { apiRateLimit, clientKey, createLoginThrottle, refuseThrottledLogin, registerRateLimit } from "./services/request-limits";
 import { getModelStatus } from "./services/model-status";
 import { timingSafeEqual } from "crypto";
 import { registerTestLogin } from "./test-login";
@@ -99,11 +101,17 @@ export async function registerRoutes(
   // touching the session, and a blocked origin should never reach a handler.
   applyCors(app);
 
+  // After CORS, so a refusal still reaches the browser as a readable 429
+  // rather than an opaque CORS failure. Before the session, so a refused
+  // request never costs the session-store read that every other one does.
+  app.use("/api", apiRateLimit());
+
   // Fail here rather than at the first call to the ML service. A wrong value
   // is silent until something uses it, and then surfaces as whatever that
   // other URL happens to return -- a seed run once reported an entire GitHub
   // error page as its failure message.
   validateMlServiceUrl(process.env.ML_SERVICE_URL);
+  validateMlServiceGoogleKey(process.env.ML_SERVICE_GOOGLE_KEY);
 
   // SEC-3: sessions are persisted in MySQL rather than express-session's
   // in-process MemoryStore, which leaks and loses every session on restart.
@@ -135,6 +143,32 @@ export async function registerRoutes(
     }
     next();
   };
+
+  // ── VIEWER-REACHABLE ML READS ─────────────────────────────────────────────
+  // Every one goes through the response cache: the viewer password is public,
+  // so those routes are too, and each used to cost an ML request per call.
+  // services/ml-response-cache.ts has the reasoning and the ceiling.
+  const passThrough = (path: string, unavailable: string) => async (): Promise<MlOutcome> => {
+    const mlRes = await mlFetch(path);
+    if (!mlRes.ok) return { status: mlRes.status, body: { message: unavailable } };
+    return { status: 200, body: await mlRes.json() };
+  };
+  const shared = (path: string, unavailable: string) =>
+    cachedMl(`shared:${path}`, { ttlMs: ML_CACHE_TTL_MS.shared, budgeted: true }, passThrough(path, unavailable));
+  const send = (res: Response, outcome: MlOutcome) => res.status(outcome.status).json(outcome.body);
+
+  // Any successful admin write empties that cache. Writes are where the data
+  // and the model change, and they are rare, so flushing everything is both
+  // correct and cheap -- and one rule here cannot be forgotten by a new route
+  // the way a call per handler can.
+  app.use("/api", (req: Request, res: Response, next: NextFunction) => {
+    if (req.method !== "GET" && req.method !== "OPTIONS" && req.session?.role === "ADMINISTRATOR") {
+      res.on("finish", () => {
+        if (res.statusCode < 400) invalidateMlCache();
+      });
+    }
+    next();
+  });
 
   // NOTE: the old getDefaultMetrics() hardcoded-fallback was deleted (ML-9).
   // Metrics endpoints now return an honest empty state when no model exists.
@@ -498,12 +532,21 @@ export async function registerRoutes(
   registerTestLogin(app);
 
   // ── AUTH ──────────────────────────────────────────────────────────────────
+  // Failed sign-ins are limited per client and per username; see
+  // services/request-limits.ts for the numbers and the trade-off.
+  const loginThrottle = createLoginThrottle();
+
   app.post(api.auth.login.path, asyncRoute(async (req, res) => {
     const { username, password } = api.auth.login.input.parse(req.body);
+    // Checked before bcrypt, so a refused attempt costs no hashing either.
+    const client = clientKey(req);
+    if (refuseThrottledLogin(res, loginThrottle.blockedFor(client, username))) return;
     const user = await storage.getUserByUsername(username);
     if (!user || !bcrypt.compareSync(password, user.password)) {
+      loginThrottle.recordFailure(client, username);
       return res.status(401).json({ message: "Invalid credentials" });
     }
+    loginThrottle.recordSuccess(client, username);
     req.session.userId = user.id;
     req.session.role = user.role;
     res.json(toPublicUser(user));
@@ -518,7 +561,7 @@ export async function registerRoutes(
     res.json(toPublicUser(await storage.getUser(req.session.userId)));
   }));
 
-  app.post(api.auth.register.path, asyncRoute(async (req, res) => {
+  app.post(api.auth.register.path, registerRateLimit(), asyncRoute(async (req, res) => {
     const input = api.auth.register.input.parse(req.body);
     if (await storage.getUserByUsername(input.username)) {
       return res.status(400).json({ message: "Username exists" });
@@ -1625,10 +1668,8 @@ export async function registerRoutes(
         // pinned version, so a static fact should not go blank because a
         // service is asleep or, as on 2026-10-29, refused by the host's edge.
         let fiData: { feature_importance: Record<string, number>; hyperparameters: Record<string, any> } | null = null;
-        try {
-          const fiRes = await mlFetch('/models/feature-importance');
-          if (fiRes.ok) fiData = await fiRes.json() as any;
-        } catch { /* fall through to the registry */ }
+        const fi = await shared('/models/feature-importance', 'Feature importance unavailable');
+        if (fi.status === 200) fiData = fi.body as any;
         if (!fiData || Object.keys(fiData.feature_importance ?? {}).length === 0) {
           fiData = await readModelCard(latest.modelVersion);
         }
@@ -1756,44 +1797,72 @@ export async function registerRoutes(
       const equipmentId = parseInt(req.params.id);
       if (isNaN(equipmentId)) return res.status(400).json({ message: "Invalid equipment ID" });
 
-      const snapshotTs = await getSimulationDate();
-      const snapshot = await enhancedFeatureService.generateSnapshot(equipmentId, snapshotTs);
-
-      const mlPayload = {
-        equipment_id: snapshot.equipmentId, snapshot_ts: snapshot.snapshotTs,
-        category: snapshot.category, asset_age_years: snapshot.assetAgeYears,
-        total_hours_lifetime: snapshot.totalHoursLifetime, hours_used_30d: snapshot.hoursUsed30d,
-        hours_used_90d: snapshot.hoursUsed90d, rental_days_30d: snapshot.rentalDays30d,
-        rental_days_90d: snapshot.rentalDays90d, avg_rental_duration: snapshot.avgRentalDuration,
-        maintenance_events_90d: snapshot.maintenanceEvents90d, maintenance_cost_180d: snapshot.maintenanceCost180d,
-        avg_downtime_per_event: snapshot.avgDowntimePerEvent, days_since_last_maintenance: snapshot.daysSinceLastMaintenance,
-        mean_time_between_failures: snapshot.meanTimeBetweenFailures, vendor_reliability_score: snapshot.vendorReliabilityScore,
-        jobsite_risk_score: snapshot.jobSiteRiskScore, usage_intensity: snapshot.usageIntensity,
-        usage_trend: snapshot.usageTrend, utilization_vs_expected: snapshot.utilizationVsExpected,
-        wear_rate: snapshot.wearRate, aging_factor: snapshot.agingFactor, maint_overdue: snapshot.maintOverdue,
-        cost_per_event: snapshot.costPerEvent, maint_burden: snapshot.maintBurden,
-        mechanical_wear_score: snapshot.mechanicalWearScore, abuse_score: snapshot.abuseScore,
-        neglect_score: snapshot.neglectScore, wear_rate_velocity: snapshot.wearRateVelocity,
-        maint_frequency_trend: snapshot.maintFrequencyTrend, cost_trend: snapshot.costTrend,
-        hours_velocity: snapshot.hoursVelocity, neglect_acceleration: snapshot.neglectAcceleration,
-        sensor_degradation_rate: snapshot.sensorDegradationRate,
-      };
-
-      const mlResponse = await mlFetch("/predict/project", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(mlPayload),
-      });
-
-      if (!mlResponse.ok) {
-        return res.status(502).json({
-          message: `ML service error - ${await describeMlFailure(mlResponse, "/predict/project")}`,
-        });
+      // Existence first, and only then a cache key. Keys for ids that do not
+      // exist would cost no ML call, but they would fill the cache and evict
+      // the real ones -- and every evicted real one is a call made again.
+      if (!(await storage.getEquipment(equipmentId))) {
+        return res.status(404).json({ message: "Equipment not found" });
       }
-      res.json(await mlResponse.json());
+
+      // Keyed by the simulation date too: advancing the simulation is a new
+      // day, so it is a new projection rather than a stale one.
+      const snapshotTs = await getSimulationDate();
+      const key = `projection:${equipmentId}:${new Date(snapshotTs).toISOString()}`;
+      send(res, await cachedMl(key, { ttlMs: ML_CACHE_TTL_MS.projection, budgeted: true }, () =>
+        projectEquipment(equipmentId, snapshotTs)));
     } catch (err: any) {
       console.error("[PROJECTION] Error:", err);
       res.status(500).json({ message: err.message || "Projection failed" });
     }
   });
+
+  /** One asset's risk trajectory from the ML service, as a cacheable outcome. */
+  async function projectEquipment(equipmentId: number, snapshotTs: Date): Promise<MlOutcome> {
+    try {
+      return await requestProjection(equipmentId, snapshotTs);
+    } catch (err: any) {
+      // Caught here rather than by the cache, whose fallback would call a
+      // snapshot or database error "ML service unreachable".
+      console.error("[PROJECTION] Error:", err);
+      return { status: 500, body: { message: err.message || "Projection failed" } };
+    }
+  }
+
+  async function requestProjection(equipmentId: number, snapshotTs: Date): Promise<MlOutcome> {
+    const snapshot = await enhancedFeatureService.generateSnapshot(equipmentId, snapshotTs);
+
+    const mlPayload = {
+      equipment_id: snapshot.equipmentId, snapshot_ts: snapshot.snapshotTs,
+      category: snapshot.category, asset_age_years: snapshot.assetAgeYears,
+      total_hours_lifetime: snapshot.totalHoursLifetime, hours_used_30d: snapshot.hoursUsed30d,
+      hours_used_90d: snapshot.hoursUsed90d, rental_days_30d: snapshot.rentalDays30d,
+      rental_days_90d: snapshot.rentalDays90d, avg_rental_duration: snapshot.avgRentalDuration,
+      maintenance_events_90d: snapshot.maintenanceEvents90d, maintenance_cost_180d: snapshot.maintenanceCost180d,
+      avg_downtime_per_event: snapshot.avgDowntimePerEvent, days_since_last_maintenance: snapshot.daysSinceLastMaintenance,
+      mean_time_between_failures: snapshot.meanTimeBetweenFailures, vendor_reliability_score: snapshot.vendorReliabilityScore,
+      jobsite_risk_score: snapshot.jobSiteRiskScore, usage_intensity: snapshot.usageIntensity,
+      usage_trend: snapshot.usageTrend, utilization_vs_expected: snapshot.utilizationVsExpected,
+      wear_rate: snapshot.wearRate, aging_factor: snapshot.agingFactor, maint_overdue: snapshot.maintOverdue,
+      cost_per_event: snapshot.costPerEvent, maint_burden: snapshot.maintBurden,
+      mechanical_wear_score: snapshot.mechanicalWearScore, abuse_score: snapshot.abuseScore,
+      neglect_score: snapshot.neglectScore, wear_rate_velocity: snapshot.wearRateVelocity,
+      maint_frequency_trend: snapshot.maintFrequencyTrend, cost_trend: snapshot.costTrend,
+      hours_velocity: snapshot.hoursVelocity, neglect_acceleration: snapshot.neglectAcceleration,
+      sensor_degradation_rate: snapshot.sensorDegradationRate,
+    };
+
+    const mlResponse = await mlFetch("/predict/project", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(mlPayload),
+    });
+
+    if (!mlResponse.ok) {
+      return {
+        status: 502,
+        body: { message: `ML service error - ${await describeMlFailure(mlResponse, "/predict/project")}` },
+      };
+    }
+    return { status: 200, body: await mlResponse.json() };
+  }
 
   // ── SENSOR TRENDS — daily aggregates for the asset detail page ────────────
   // Anchored to the simulation cursor like every other time-aware read.
@@ -2122,15 +2191,25 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/ml/train/status", requireAuth, async (req, res) => {
-    try {
-      const mlRes = await mlFetch("/train/status");
-      if (!mlRes.ok) return res.status(mlRes.status).json({ message: "Status unavailable" });
-      res.json(await mlRes.json());
-    } catch (e: any) {
-      res.status(500).json({ message: "ML service unreachable", error: e.message });
-    }
-  });
+  // A training job finishing changes the registry, the comparison and feature
+  // importance, and is not an admin write -- it happens in the ML service on
+  // its own time. The status poll is what sees it end.
+  let trainingWasRunning = false;
+
+  app.get("/api/ml/train/status", requireAuth, asyncRoute(async (req, res) => {
+    // Not budgeted: an admin polls this while a job runs, and spending the
+    // shared budget on it would starve every other page. One key on a short
+    // TTL is bounded on its own.
+    send(res, await cachedMl("status:/train/status", { ttlMs: ML_CACHE_TTL_MS.status, budgeted: false }, async () => {
+      const outcome = await passThrough("/train/status", "Status unavailable")();
+      if (outcome.status === 200) {
+        const running = Boolean((outcome.body as any)?.running);
+        if (trainingWasRunning && !running) invalidateMlCache("shared:");
+        trainingWasRunning = running;
+      }
+      return outcome;
+    }));
+  }));
 
   // ── ML SERVICE REACHABILITY ──────────────────────────────────────────────
   //
@@ -2167,21 +2246,22 @@ export async function registerRoutes(
   // One page load here answers what a ten-minute deploy-and-ask cycle was
   // answering one bit at a time.
   app.get("/api/ml/diagnostics", requireAdmin, async (req, res) => {
-    // Four probes, each changing one variable, because "the host refuses us"
-    // has several possible causes and they need different remedies:
+    // Three probes, each changing one variable:
     //
-    //   neutral     — can this instance reach the internet at all? If this
-    //                 fails too, the problem is egress, not the ML service.
-    //   ml          — our ordinary request, auth headers and all.
-    //   mlBare      — same URL, no headers. Separates "Render blocks this
-    //                 pair" from "something in our headers trips a filter".
-    //   mlBrowserUA — same URL with an ordinary browser User-Agent. Node
-    //                 sends its own, and an edge that screens on User-Agent
-    //                 would refuse us while serving a laptop from the same
-    //                 account — which is exactly the asymmetry observed.
+    //   neutral          — can this instance reach the internet at all? If
+    //                      this fails too, the problem is egress, not the ML
+    //                      service.
+    //   ml               — our ordinary request, every credential attached.
+    //   mlUnauthenticated — same URL, no headers. On a private Cloud Run
+    //                      service this must be refused (403) by Google; a
+    //                      200 means anyone can wake the service and bill it.
+    //
+    // The Render-era probes (a browser User-Agent, the private network) are
+    // gone with the Render ML service: they answered why Render's edge
+    // refused this API, and there is no Render edge on this path any more.
     //
     // None of these go through mlFetch, so none of them record a strike or
-    // move the gate. Admin-only and manual; four requests, once, by hand.
+    // move the gate. Admin-only and manual; three requests, once, by hand.
     const timed = async (label: string, run: () => Promise<globalThis.Response>) => {
       const started = Date.now();
       try {
@@ -2202,51 +2282,31 @@ export async function registerRoutes(
       }
     };
 
-    const bounded = (url: string, headers?: Record<string, string>) => () => {
+    const bounded = (url: string) => () => {
       const controller = new AbortController();
-      // Internal addresses resolve at once or not at all; do not spend ten
-      // seconds discovering that a hostname does not exist.
-      const controllerMs = url.startsWith("http://") ? 4_000 : 10_000;
-      const timer = setTimeout(() => controller.abort(), controllerMs);
-      return fetch(url, { headers, signal: controller.signal }).finally(() => clearTimeout(timer));
+      const timer = setTimeout(() => controller.abort(), 10_000);
+      return fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
     };
-
-    const BROWSER_UA =
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-      "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
-
-    // Render's private network, if it reaches a free instance at all.
-    //
-    // The public path egresses through a shared NAT address that other
-    // free-tier tenants also use -- confirmed by the neutral probe, which drew
-    // GitHub's unauthenticated limit (60/hour/IP) on this instance's FIRST
-    // request. That address is what Render's edge is refusing, so no amount of
-    // politeness from this service can recover it.
-    //
-    // The private network bypasses both the NAT and the public edge. The open
-    // question is the port: Render assigns PORT (usually 10000) and the
-    // entrypoint falls back to 8000, so try both and the bare name.
-    //
-    // Short timeouts: an internal address either resolves immediately or does
-    // not exist. A suspended instance is the real unknown -- wake is handled
-    // by the public load balancer, so a private request may well find nothing
-    // listening even when the service is healthy.
-    const internal = (hostPort: string) =>
-      timed(`internal:${hostPort}`, bounded(`http://${hostPort}/health`));
 
     const results = Object.fromEntries(await Promise.all([
       timed("neutral", bounded("https://api.github.com/zen")),
       timed("ml", () => probeHostDirectly(10_000)),
-      timed("mlBare", bounded(`${ML_SERVICE_URL}/health`)),
-      timed("mlBrowserUA", bounded(`${ML_SERVICE_URL}/health`, { "user-agent": BROWSER_UA })),
-      internal("eai-ml:10000"),
-      internal("eai-ml:8000"),
-      internal("eai-ml"),
+      timed("mlUnauthenticated", bounded(`${ML_SERVICE_URL}/health`)),
     ]));
     res.json({
       mlServiceUrl: ML_SERVICE_URL,
+      mlAuth: ML_AUTH_MODE,
       gate: rateLimitState(),
       nudgeHoldingForMs: nudgeHoldingSince() === null ? null : Date.now() - nudgeHoldingSince()!,
+      // What the rate limits count this request as. If `key` is a proxy's
+      // address rather than yours, every visitor shares one limit -- see
+      // clientKey in services/request-limits.ts.
+      client: {
+        key: clientKey(req),
+        reqIp: req.ip ?? null,
+        cfConnectingIp: req.headers["cf-connecting-ip"] ?? null,
+        forwardedFor: req.headers["x-forwarded-for"] ?? null,
+      },
       probes: results,
     });
   });
@@ -2289,47 +2349,23 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/ml/drift/summary", requireAuth, async (req, res) => {
-    try {
-      const mlRes = await mlFetch("/drift/summary");
-      if (!mlRes.ok) return res.status(mlRes.status).json({ message: "Drift summary unavailable" });
-      res.json(await mlRes.json());
-    } catch (e: any) {
-      res.status(500).json({ message: "ML service unreachable", error: e.message });
-    }
-  });
+  app.get("/api/ml/drift/summary", requireAuth, asyncRoute(async (req, res) => {
+    send(res, await shared("/drift/summary", "Drift summary unavailable"));
+  }));
 
   // ── DATA QUALITY ─────────────────────────────────────────────────────────
-  app.get("/api/ml/data-quality/report", requireAuth, async (req, res) => {
-    try {
-      const mlRes = await mlFetch("/data-quality/report");
-      if (!mlRes.ok) return res.status(mlRes.status).json({ message: "Data quality report unavailable" });
-      res.json(await mlRes.json());
-    } catch (e: any) {
-      res.status(500).json({ message: "ML service unreachable", error: e.message });
-    }
-  });
+  app.get("/api/ml/data-quality/report", requireAuth, asyncRoute(async (req, res) => {
+    send(res, await shared("/data-quality/report", "Data quality report unavailable"));
+  }));
 
   // ── CHAMPION-CHALLENGER ───────────────────────────────────────────────────
-  app.get("/api/ml/models/registry", requireAuth, async (req, res) => {
-    try {
-      const mlRes = await mlFetch("/models/registry");
-      if (!mlRes.ok) return res.status(mlRes.status).json({ message: "Registry unavailable" });
-      res.json(await mlRes.json());
-    } catch (e: any) {
-      res.status(500).json({ message: "ML service unreachable", error: e.message });
-    }
-  });
+  app.get("/api/ml/models/registry", requireAuth, asyncRoute(async (req, res) => {
+    send(res, await shared("/models/registry", "Registry unavailable"));
+  }));
 
-  app.get("/api/ml/models/compare", requireAuth, async (req, res) => {
-    try {
-      const mlRes = await mlFetch("/models/champion-challenger/compare");
-      if (!mlRes.ok) return res.status(mlRes.status).json({ message: "Compare unavailable" });
-      res.json(await mlRes.json());
-    } catch (e: any) {
-      res.status(500).json({ message: "ML service unreachable", error: e.message });
-    }
-  });
+  app.get("/api/ml/models/compare", requireAuth, asyncRoute(async (req, res) => {
+    send(res, await shared("/models/champion-challenger/compare", "Compare unavailable"));
+  }));
 
   app.post("/api/ml/models/promote", requireAdmin, async (req, res) => {
     try {
