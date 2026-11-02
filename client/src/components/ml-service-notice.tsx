@@ -5,7 +5,8 @@
 // ApiGate covers the Node API, so by the time anything renders, that one is
 // awake. The ML service suspends on its own schedule and is not consulted
 // until a page asks it for something — which means a visitor can pass the
-// startup screen, reach the ML dashboard, and meet a fresh 50-60 second wait
+// startup screen, reach the ML dashboard, and meet a fresh wait (about 20
+// seconds on Cloud Run; 50-60 when the service was on Render)
 // with no explanation. The drift query's failure message in that window is
 // "Failed to fetch drift status", which reads as a broken feature rather than
 // a sleeping container.
@@ -20,8 +21,12 @@ import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 
 
-/** Matches the gate's measured figure; both describe the same host behaviour. */
-const TYPICAL_COLD_START_SECONDS = 60;
+/**
+ * Measured on Cloud Run: the request that woke the service took 18.7s. This
+ * used to match the gate's figure, when both services were on Render; the gate
+ * still describes Render's, and this no longer does.
+ */
+const TYPICAL_COLD_START_SECONDS = 20;
 
 /**
  * First gap between checks; it widens from here.

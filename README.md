@@ -649,8 +649,9 @@ used — not just at the traffic it actually gets.
   credential. So every viewer route that reaches the ML service goes through a
   cache with one shared request per key, and cache misses on the expensive ones
   draw on a global token bucket — a burst of 30, then one new computation every
-  20 seconds. The worst case is ~648k requests and ~149k vCPU-seconds a month,
-  against a free allowance of 2M and 180k, and [a test](server/services/ml-response-cache.test.ts)
+  two minutes. The worst case is ~540k requests and ~144k vCPU-seconds a month,
+  against a free allowance of 2M and 180k, at the slowest call time measured
+  in Cloud Run's request log (4.3s), and [a test](server/services/ml-response-cache.test.ts)
   holds it there ([`ml-response-cache.ts`](server/services/ml-response-cache.ts)).
 - **Rate limits on the API.** 300 requests a minute per visitor; 10 failed
   sign-ins per visitor and 30 per username per 15 minutes, checked before

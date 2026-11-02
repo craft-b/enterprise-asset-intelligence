@@ -56,10 +56,13 @@ curl -s -o /dev/null -w "ml  %{http_code} in %{time_total}s\n" --max-time 150 \
 Or sign in as admin and open `/api/ml/diagnostics`: its `ml` probe wakes the
 service through the API, the same way a page does, and reports how long it took.
 
-**Measured, not estimated — on Render.** The figures below are the ML service's
-cold starts while it ran on Render. Cloud Run's have not been measured on this
-deployment yet; until they are, budget the same. Eight observations across several
-days: **42, 51, 61.5, 61.5, 62, 62.9, 63.1, 71.9 seconds** — so budget 75s and
+**On Cloud Run: about 20 seconds.** Measured in Cloud Run's request log
+(`gcloud logging read` on `run.googleapis.com/requests`): the request that woke
+the service on 2026-11-02 took **18.7s**, about 2s of it before the process
+started. One observation so far; give it 30s before concluding anything.
+
+**On Render, for comparison.** The ML service's cold starts while it ran there,
+eight observations across several days: **42, 51, 61.5, 61.5, 62, 62.9, 63.1, 71.9 seconds** — so budget 75s and
 do not conclude anything is broken before then. A cold start after hours idle
 sits at the top of that range because the image may need pulling again.
 

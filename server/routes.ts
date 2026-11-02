@@ -2294,7 +2294,9 @@ export async function registerRoutes(
 
     const results = Object.fromEntries(await Promise.all([
       timed("neutral", bounded("https://www.google.com/generate_204")),
-      timed("ml", () => probeHostDirectly(10_000)),
+      // 60s, past a Cloud Run cold start (18.7s measured): at 10s an asleep
+      // service read as an abort instead of reporting how long it took to wake.
+      timed("ml", () => probeHostDirectly(60_000)),
       timed("mlUnauthenticated", bounded(`${ML_SERVICE_URL}/health`)),
     ]));
     res.json({

@@ -75,17 +75,20 @@ describe("checkMlHealth", () => {
 });
 
 describe("the advertised cold start", () => {
-  // Two components tell the visitor how long to expect, and they describe the
-  // same host behaviour. The gate said 45 seconds while the measured cold
-  // starts were 51s and 62s, so its progress bar filled and then kept waiting.
+  // Two components tell the visitor how long to expect. They used to describe
+  // the same host and had to agree; the ML service has since moved to Cloud
+  // Run, so each now has its own host's measured figure. The gate once said 45
+  // seconds while the measured cold starts were 51s and 62s, so its progress
+  // bar filled and then kept waiting.
   const read = (path: string) =>
     Number(
       readFileSync(join(__dirname, path), "utf-8")
         .match(/TYPICAL_COLD_START_SECONDS\s*=\s*(\d+)/)![1]
     );
 
-  it("matches between the gate and the notice", () => {
-    expect(read("./ml-service-notice.tsx")).toBe(read("./api-gate.tsx"));
+  it("is, for the ML service, not shorter than its Cloud Run cold start", () => {
+    // 18.7s measured in Cloud Run's request log.
+    expect(read("./ml-service-notice.tsx")).toBeGreaterThanOrEqual(19);
   });
 
   it("is not shorter than the cold starts actually measured", () => {
@@ -133,14 +136,14 @@ describe("the elapsed counter is anchored to the wake, not to the mount", () => 
   });
 
   it("still promises a figure the counter can plausibly reach", () => {
-    // The prose says ~60s. If that constant drifts far from the measured cold
-    // start the banner misleads again, in the other direction.
+    // If that constant drifts far from the measured cold start the banner
+    // misleads again, in the other direction.
     const m = SRC.match(/TYPICAL_COLD_START_SECONDS\s*=\s*(\d+)/);
     expect(m, "the stated figure went missing").not.toBeNull();
     const stated = Number(m![1]);
-    // Measured range across ten observations: 42s - 72.5s.
-    expect(stated).toBeGreaterThanOrEqual(42);
-    expect(stated).toBeLessThanOrEqual(90);
+    // Cloud Run: 18.7s. (On Render it was 42s - 72.5s across ten observations.)
+    expect(stated).toBeGreaterThanOrEqual(19);
+    expect(stated).toBeLessThanOrEqual(40);
   });
 });
 

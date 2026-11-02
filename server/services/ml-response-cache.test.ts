@@ -89,7 +89,10 @@ describe("the viewer budget", () => {
     }
     const refused = await cachedMl("one-more", metered, async () => ok(), clock);
     expect(refused.status).toBe(503);
-    expect(refused.body).toMatchObject({ message: BUDGET_SPENT_MESSAGE, retryAfterSeconds: 20 });
+    expect(refused.body).toMatchObject({
+      message: BUDGET_SPENT_MESSAGE,
+      retryAfterSeconds: ML_VIEWER_BUDGET.refillEveryMs / 1000,
+    });
   });
 
   it("serves a stale answer rather than refusing, when it has one", async () => {
@@ -131,9 +134,11 @@ describe("the ceiling", () => {
 
   // Assumptions, stated so they can be checked against the deployed service:
   // an expensive call (projection, data quality, drift summary) holds the
-  // instance for 0.75s on average; health and status answer in milliseconds
-  // but bill a 100ms minimum. 1 vCPU, 1 GiB, as deploy-ml.sh configures.
-  const SECONDS = { expensive: 0.75, cheap: 0.1 };
+  // instance for 4.25s, the slowest measured in Cloud Run's request log (the
+  // data-quality report: 3.7s and 4.3s); health and status answer in
+  // milliseconds but bill a 100ms minimum. 1 vCPU, 1 GiB, as deploy-ml.sh
+  // configures.
+  const SECONDS = { expensive: 4.25, cheap: 0.1 };
   const MEMORY_GIB = 1;
 
   it("is inside the free request allowance", () => {

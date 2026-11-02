@@ -209,8 +209,8 @@ container behind Google's front end, scaled to zero.
 allowance (Tier 1 regions such as `us-west1`, per billing account per month)
 is 2M requests, 180,000 vCPU-seconds and 360,000 GiB-seconds on request-based
 billing. Demo traffic is a sliver of that, and the API bounds what viewer
-traffic can cause at ~648k requests and ~149k vCPU-seconds a month however it
-is driven — see [Cost and abuse controls](../README.md#cost-and-abuse-controls).
+traffic can cause at ~540k requests and ~144k vCPU-seconds a month however it
+is driven, at the slowest call time Cloud Run has logged (4.3s) — see [Cost and abuse controls](../README.md#cost-and-abuse-controls).
 New accounts start on a 90-day trial that never charges the card; to keep the
 service past it, activate the full account, after which the free allowance
 applies.

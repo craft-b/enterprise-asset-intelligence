@@ -48,10 +48,14 @@ export const ML_CACHE_TTL_MS = {
 
 /**
  * The budget for the expensive viewer routes: a burst for one visitor's first
- * look around, then one new computation every 20 seconds, shared by everyone.
+ * look around, then one new computation every two minutes, shared by everyone.
  * Cached answers are shared too, so this is new work, not page views.
+ *
+ * It was every 20 seconds, sized for an assumed 0.75s per call. Cloud Run's
+ * request log measured the data-quality report at 3.7s and 4.3s, which would
+ * have put a month of the worst case at ~480k vCPU-seconds against a free 180k.
  */
-export const ML_VIEWER_BUDGET = { capacity: 30, refillEveryMs: 20_000 } as const;
+export const ML_VIEWER_BUDGET = { capacity: 30, refillEveryMs: 120_000 } as const;
 
 /** Entries kept. Keys are bounded by the routes and the fleet; this bounds memory regardless. */
 const MAX_ENTRIES = 500;
