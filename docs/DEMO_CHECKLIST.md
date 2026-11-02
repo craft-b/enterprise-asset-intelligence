@@ -37,16 +37,28 @@ explanation. See section 7.
 
 ## 0. Warm both services first
 
-Free instances suspend after ~15 minutes idle, and they sleep independently.
+The API suspends after ~15 minutes idle; the ML service scales to zero on its
+own schedule. Since 2026-11-02 the ML service is private on Cloud Run, so an
+unauthenticated request is refused by Google before it reaches the container —
+it cannot wake it. Warm the API from anywhere, and the ML service from Cloud
+Shell with your own identity:
 
 ```bash
-curl -s -o /dev/null -w "ml  %{http_code} in %{time_total}s\n" --max-time 150 https://eai-ml.onrender.com/health & curl -s -o /dev/null -w "api %{http_code} in %{time_total}s\n" --max-time 150 https://eai-api-q3u3.onrender.com/api/health & wait
+curl -s -o /dev/null -w "api %{http_code} in %{time_total}s\n" --max-time 150 https://eai-api-q3u3.onrender.com/api/health
 ```
 
-Both at once, so you pay one wait instead of two. Wait for both lines, then
-open the app.
+```bash
+# Cloud Shell
+curl -s -o /dev/null -w "ml  %{http_code} in %{time_total}s\n" --max-time 150 \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)" https://eai-ml-q2n75oonzq-uw.a.run.app/health
+```
 
-**Measured, not estimated.** ML cold starts, eight observations across several
+Or sign in as admin and open `/api/ml/diagnostics`: its `ml` probe wakes the
+service through the API, the same way a page does, and reports how long it took.
+
+**Measured, not estimated — on Render.** The figures below are the ML service's
+cold starts while it ran on Render. Cloud Run's have not been measured on this
+deployment yet; until they are, budget the same. Eight observations across several
 days: **42, 51, 61.5, 61.5, 62, 62.9, 63.1, 71.9 seconds** — so budget 75s and
 do not conclude anything is broken before then. A cold start after hours idle
 sits at the top of that range because the image may need pulling again.
@@ -79,22 +91,22 @@ it in 71.9. The app no longer does that — one unbounded request holds the boot
 and everything else waits on it — but a terminal still can, so let the curl
 finish rather than Ctrl-C'ing and retrying.
 
-**What is deployed, in three unauthenticated requests.** All three tiers answer
-in the same vocabulary, so a mismatch is visible without logging in:
+**What is deployed.** The API and the frontend answer unauthenticated:
 
 ```bash
 curl -s https://eai-api-q3u3.onrender.com/api/health | grep -o '"commit":"[^"]*"'
-curl -s https://eai-ml.onrender.com/health | grep -o '"commit":"[^"]*"'
 curl -s https://enterprise-asset-intelligence.vercel.app/ | grep -o 'build-commit" content="[^"]*"'
 ```
 
-Three different commits is not necessarily wrong — Render's build filters mean
-a client-only change never rebuilds the ML service — but it is the first thing
-to check when behaviour does not match the code you just read.
+Two different commits is not necessarily wrong — Render's build filter means a
+prose-only change never rebuilds the API — but it is the first thing to check
+when behaviour does not match the code you just read. The ML service reports
+`"commit":"unknown"` on Cloud Run, because `deploy --source` builds without the
+stamp; what it runs is whatever `deploy-ml.sh` last deployed.
 
-There is deliberately no keep-alive pinger: free instance hours are pooled
-across the account, so warming both continuously would exhaust the monthly
-allowance. See `render.yaml`.
+There is deliberately no keep-alive pinger. On Render, free instance hours are
+pooled across the account; on Cloud Run a warm instance is billed time and
+gives up the scale-to-zero that keeps it free.
 
 ---
 
@@ -269,7 +281,11 @@ nothing left to improve.
 
 ## 7. The wake path, and why it kept being wrong
 
-The ML service suspends after about fifteen minutes and takes 42–72.5 seconds
+This section is about the ML service on Render, where it ran until 2026-11-02;
+the lesson carries over to Cloud Run, whose scale-to-zero makes the same first
+request pay a cold start.
+
+The ML service suspended after about fifteen minutes and took 42–72.5 seconds
 to come back (ten observations). The build stamp splits that: a request on
 2026-10-29 reached a container whose process started 34 seconds later and
 answered 39.9 seconds after that. Roughly half the wait is the host scheduling

@@ -150,6 +150,12 @@ services:
         value: "true"
 
   # ── FastAPI ML service ────────────────────────────────────────────────────
+  # Superseded on 2026-11-02 by the private Cloud Run service that
+  # infrastructure/cloud-run/deploy-ml.sh deploys, and suspended on this
+  # deployment rather than deleted. Render's edge began refusing eai-api ->
+  # eai-ml with a 429 challenge no server can solve, and free services cannot
+  # receive private traffic; docs/DEPLOYMENT.md step 3b has the detail. Still
+  # a working definition for anyone whose Render account is not blocked.
   - type: web
     name: eai-ml
     runtime: docker

@@ -573,16 +573,16 @@ pipeline, and generating predictions in the right order.
 
 ## Deployment Status
 
-Deployed across three free tiers, with no monthly bill:
+Deployed across four free tiers, with no monthly bill:
 
 | Piece | Host | Notes |
 |---|---|---|
 | React SPA | Vercel | Static, so always instant — nothing to suspend |
 | Node API + SPA proxy | Render | Suspends when idle; measured 51–73s to wake |
-| FastAPI ML service | Render | Suspends independently |
+| FastAPI ML service | Google Cloud Run | Private, scales to zero, inside the always-free allowance behind a spend cap |
 | MySQL | TiDB Cloud Serverless | Always on; Render offers Postgres only |
 
-[`render.yaml`](render.yaml), [`vercel.json`](vercel.json) and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) reproduce it end to end.
+[`render.yaml`](render.yaml), [`vercel.json`](vercel.json), [`deploy-ml.sh`](infrastructure/cloud-run/deploy-ml.sh) and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) reproduce it end to end.
 
 Splitting the SPA onto static hosting is what makes a free tier presentable. Served from the API
 container, a cold start would be a blank browser window for a minute or more — indistinguishable from a
@@ -603,39 +603,77 @@ Five things that deployment needed, and now has:
 - **A simulation clock that survives suspension.** The simulator advances seven days per real day, scheduled with a timer for 06:00. A free instance suspends after about fifteen minutes without traffic, so that timer is almost never alive when it should fire and every restart rearms it — the clock sat on its seed date while real time moved on, and the demo showed rentals from six months earlier. It now also catches up at boot, driven by elapsed real time rather than by starting, since this host starts the container on any visit after an idle period and a per-boot advance would race the clock ahead of reality. A pass is capped and carries its remainder, because each simulated day costs a feature snapshot per asset.
 - **A separately hosted frontend, without touching 80 call sites.** Those call sites use relative `/api` paths, which resolve against the static host once the SPA moves. Under the proxy they stay relative and Vercel forwards them; set `VITE_API_URL` instead and a single wrapper around `fetch` ([`api-base.ts`](client/src/lib/api-base.ts)) rewrites them to the API origin at runtime. Either way no component changed and a new one cannot forget. The direct path is served by [`cors.ts`](server/services/cors.ts), which answers only origins named in `ALLOWED_ORIGINS` and refuses a wildcard at boot — with credentials, browsers reject it anyway.
 
-**Live ML is blocked as of 2026-10-30, and the app says so.** Requests from the
-API to the ML service return HTTP 429 with a Cloudflare challenge page — a
-JavaScript interstitial that server-to-server traffic can never solve. The
-cause is the shared NAT address free Render services egress through: GitHub
-answers that same instance's *first* unauthenticated request with "API rate
-limit exceeded for 74.220.48.235", so the budget is spent by other tenants
-before this service sends anything. A sustained polling bug here (since fixed —
-one request a minute, exponential backoff, a shared gate across every caller)
-most likely tripped the reputation threshold; the shared address is why it has
-not recovered. Render confirmed the supported remedy: private networking, which
-free web services can send over but cannot receive on, so it needs one paid
-instance.
+**Why the ML service runs on Cloud Run.** From 2026-10-30 to 2026-11-02 it ran
+on Render and could not be reached: requests from the API drew HTTP 429 with a
+Cloudflare challenge page — a JavaScript interstitial server-to-server traffic
+can never solve. The cause was the shared NAT address free Render services
+egress through: GitHub answered that same instance's *first* unauthenticated
+request with "API rate limit exceeded for 74.220.48.235", so the budget was
+spent by other tenants before this service sent anything. A sustained polling
+bug here (since fixed — one request a minute, exponential backoff, a shared gate
+across every caller) most likely tripped the reputation threshold; the shared
+address is why it did not recover. Render's supported remedy, private
+networking, lets a free service send but not receive, so it needed a paid
+instance. The same container now runs on Google Cloud Run as a **private**
+service — reached through Workload Identity Federation, with no Google-issued
+key, because new projects refuse to create one — and stays at $0.
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#3b-ml-service-google-cloud-run) has the
+setup, including the three things the first real deploy ran into.
 
-What this costs is narrower than it sounds, and narrower than it first was.
-Risk scores, per-asset SHAP attributions and model metrics are persisted by each
-scoring run and read from the database. So are the three drift layers: the ML
-service's handlers for them were SELECTs over tables this API already reads, so
-the API now reads them directly. Feature importance and hyperparameters are
-properties of the pinned champion and ship in the image as the training run's
-own registry output. All of those render with the ML service unreachable.
+The outage left a better design behind. Risk scores, per-asset SHAP
+attributions and model metrics were already persisted by each scoring run and
+read from the database. The three drift layers now are too: the ML service's
+handlers for them were SELECTs over tables this API already reads, so the API
+reads them directly. Feature importance and hyperparameters are properties of
+the pinned champion and ship in the image as the training run's own registry
+output. All of those render with the ML service unreachable — asleep, refused
+by a host's edge, or paused by the spend cap — and only computation waits on
+it: scoring a new batch, recomputing a drift reference, the data-quality report
+and the champion-challenger comparison. `GET /api/ml/diagnostics` (admin)
+reports how the API authenticates, what the rate limits count a request as, and
+a live probe of each path.
 
-What genuinely needs the service is computation: scoring a new batch,
-recomputing a drift reference, the data-quality report and the
-champion-challenger comparison. The UI says which is which rather than
-implying the page is pending. `GET /api/ml/diagnostics` (admin) reports the
-egress state, the gate, and a live probe of each path.
+### Cost and abuse controls
 
-Honest about the free tier: both Render services suspend after ~15 minutes idle. Three successive
-cold starts of the ML service measured 51s, 62s and 73s — the host's own dashboard warns of "50
-seconds or more", and the figure drifts upward, so anything in the code that waits on it is sized
-against the slowest seen rather than the average. And 512MB serves the champion model (measured ~340MB resident) but will not train one — so
-the deployed instance loads artifacts baked into its image rather than training on demand. The
-~$33/mo configuration that removes the cold starts is documented in
+Google Cloud is the one host here billed to a card, and the viewer password is
+printed on the login page, so "free" has to hold however the public demo is
+used — not just at the traffic it actually gets.
+
+- **A private ML service.** Google refuses any request without the API's
+  identity before it reaches the container, and does not bill what it refuses.
+  The API proves that identity by signing its own short-lived JWT, which
+  Google's STS exchanges for an ID token
+  ([`google-id-token.ts`](server/services/google-id-token.ts)).
+- **A ceiling on what viewers can make it do.** The private endpoint does not
+  help against a script signed in as viewer, because the API holds the
+  credential. So every viewer route that reaches the ML service goes through a
+  cache with one shared request per key, and cache misses on the expensive ones
+  draw on a global token bucket — a burst of 30, then one new computation every
+  20 seconds. The worst case is ~648k requests and ~149k vCPU-seconds a month,
+  against a free allowance of 2M and 180k, and [a test](server/services/ml-response-cache.test.ts)
+  holds it there ([`ml-response-cache.ts`](server/services/ml-response-cache.ts)).
+- **Rate limits on the API.** 300 requests a minute per visitor; 10 failed
+  sign-ins per visitor and 30 per username per 15 minutes, checked before
+  bcrypt runs; 5 registrations an hour. Through Vercel's proxy the visitor is
+  the address Vercel recorded, and every limit also counts the address
+  Cloudflare saw — which cannot be forged — at ten times the allowance
+  ([`request-limits.ts`](server/services/request-limits.ts)).
+- **A spend cap.** A Cloud Billing budget with spend-cap enforcement pauses
+  Cloud Run at $5 of list-price usage a month. It should never trip; if it
+  does, the dashboard falls back to everything it reads from the database.
+
+[`route-cost-guards.test.ts`](server/route-cost-guards.test.ts) fails if a
+viewer route ever calls the ML service around the cache, or if the limits come
+unwired.
+
+Honest about the free tier: the Render API suspends after ~15 minutes idle, and three successive
+cold starts on that host measured 51s, 62s and 73s — the host's own dashboard warns of "50 seconds
+or more", and the figure drifts upward, so anything in the code that waits on it is sized against
+the slowest seen rather than the average. The ML service scales to zero on Cloud Run and pays its
+own, shorter cold start on the first call after a pause. Neither free configuration trains on
+demand — 512MB on Render ran out of memory, and Cloud Run's request-based billing throttles the
+CPU a background training job runs on — so the deployed service loads artifacts baked into its
+image. Removing the API's cold start costs ~$7/mo, documented in
 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Docker Compose (`docker-compose.yml`) runs all three
 services locally, and [Quickstart](#quickstart) seeds a full fleet — two of its steps wait on the
 ML service's cold start. The ten-asset fleet took two to five minutes. Sixty units is six times
