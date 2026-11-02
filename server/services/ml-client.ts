@@ -8,11 +8,11 @@
 // can never be forgotten on a call site.
 //
 // On Cloud Run there is a second layer in front of the token. The service is
-// private, and each request also carries a Google ID token minted from
-// ML_SERVICE_GOOGLE_KEY (see google-id-token.ts), so a request without one is
+// private, and each request also carries a Google ID token minted from the
+// credential in ML_SERVICE_GOOGLE_KEY (see google-id-token.ts), so a request without one is
 // refused by Google before it can wake -- and bill -- the container.
 
-import { createIdTokenSource, parseServiceAccountKey, type IdTokenSource } from "./google-id-token";
+import { createIdTokenSource, parseGoogleCredential, type IdTokenSource } from "./google-id-token";
 
 /**
  * Check that ML_SERVICE_URL names the ML service and nothing else.
@@ -82,14 +82,14 @@ const ML_SERVICE_URL = normaliseMlServiceUrl(process.env.ML_SERVICE_URL);
  * fails with a token error on whatever page happened to ask.
  */
 export function validateMlServiceGoogleKey(raw: string | undefined): void {
-  parseServiceAccountKey(raw);
+  parseGoogleCredential(raw);
 }
 
 /** Built without throwing, for module load; boot validation reports a bad key. */
 function idTokenSourceFromEnv(): IdTokenSource | null {
   try {
-    const key = parseServiceAccountKey(process.env.ML_SERVICE_GOOGLE_KEY);
-    return key ? createIdTokenSource(key, ML_SERVICE_URL) : null;
+    const credential = parseGoogleCredential(process.env.ML_SERVICE_GOOGLE_KEY);
+    return credential ? createIdTokenSource(credential, ML_SERVICE_URL) : null;
   } catch {
     return null;
   }

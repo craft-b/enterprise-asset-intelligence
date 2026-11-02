@@ -178,5 +178,7 @@ describe("inside a real Express app, configured as production is", () => {
     } finally {
       server.close();
     }
-  });
+    // Real sockets: under a full parallel suite on a busy machine this once
+    // took 6s against vitest's 5s default, with nothing wrong.
+  }, 20_000);
 });

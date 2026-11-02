@@ -18,11 +18,26 @@
 # not bill refused requests. The script creates one such account for the API
 # (eai-api-invoker) and grants it that single permission on this one service.
 #
+# The API lives on Render, not Google, so it has to prove it is that account.
+# A downloadable service account key would do, but Google now blocks key
+# creation by default (iam.disableServiceAccountKeyCreation) -- the first real
+# run was refused one. So the script sets up Workload Identity Federation: it
+# generates a key pair, uploads only the public half to a workload identity
+# pool, and prints the private half for Render. The API signs its own short
+# JWT, Google's STS trusts it on that public key, and the pool's principal may
+# mint ID tokens as eai-api-invoker and do nothing else. No Google-held key
+# exists. See server/services/google-id-token.ts for the API side.
+#
 # Run it from the repo root in Cloud Shell, which already has gcloud signed in:
 #
 #   git clone https://github.com/craft-b/enterprise-asset-intelligence.git
 #   cd enterprise-asset-intelligence
 #   bash infrastructure/cloud-run/deploy-ml.sh
+#
+# To change access without rebuilding the image -- set up federation on a
+# service that is already deployed, or rotate the API's key:
+#
+#   SKIP_DEPLOY=1 bash infrastructure/cloud-run/deploy-ml.sh
 #
 # It asks for DATABASE_URL and ML_SERVICE_TOKEN without echoing them, so they
 # reach neither the screen nor shell history. On a re-deploy, press Enter at
@@ -69,9 +84,21 @@ fi
 INVOKER_EMAIL="$INVOKER@$PROJECT.iam.gserviceaccount.com"
 echo "Project: $PROJECT   Region: $REGION   Service: $SERVICE"
 
-echo "Enabling Cloud Run, Cloud Build, Artifact Registry and IAM (no-op if already on)..."
+echo "Enabling the APIs this needs (no-op if already on)..."
+# sts and iamcredentials are the two halves of the federated exchange.
 gcloud services enable run.googleapis.com cloudbuild.googleapis.com \
-  artifactregistry.googleapis.com iam.googleapis.com
+  artifactregistry.googleapis.com iam.googleapis.com \
+  sts.googleapis.com iamcredentials.googleapis.com
+
+# `deploy --source` builds as the project's default compute service account,
+# and new projects no longer grant that account broad rights: the first real
+# run failed with 403 storage.objects.get on its own uploaded source. Cloud
+# Run Builder is the role Google documents for this account and this job.
+# Idempotent; a re-run re-asserts it.
+PROJECT_NUMBER="$(gcloud projects describe "$PROJECT" --format 'value(projectNumber)')"
+gcloud projects add-iam-policy-binding "$PROJECT" \
+  --member "serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+  --role roles/run.builder --condition None --quiet >/dev/null
 
 EXISTS=false
 if gcloud run services describe "$SERVICE" --region "$REGION" >/dev/null 2>&1; then
@@ -106,41 +133,45 @@ ask_secret() {
   printf '%s' "$value"
 }
 
-REQUIRED=true
-[ "$EXISTS" = true ] && REQUIRED=false
+# Collect the secrets, then build and deploy the image. A function so that
+# SKIP_DEPLOY can step over it whole.
+deploy_service() {
+  REQUIRED=true
+  [ "$EXISTS" = true ] && REQUIRED=false
 
-echo
-echo "Paste each value and press Enter once. Nothing is shown as you paste,"
-echo "but each answer reports how many characters arrived."
-DB_URL="$(ask_secret "DATABASE_URL (same as Render's): " "$REQUIRED")"
-TOKEN="$(ask_secret "ML_SERVICE_TOKEN (Render > Env Groups > eai-shared): " "$REQUIRED")"
+  echo
+  echo "Paste each value and press Enter once. Nothing is shown as you paste,"
+  echo "but each answer reports how many characters arrived."
+  local DB_URL TOKEN
+  DB_URL="$(ask_secret "DATABASE_URL (same as Render's): " "$REQUIRED")"
+  TOKEN="$(ask_secret "ML_SERVICE_TOKEN (Render > Env Groups > eai-shared): " "$REQUIRED")"
 
-ENV_ARGS=()
-if [ -z "$DB_URL" ] && [ -z "$TOKEN" ] && [ "$EXISTS" = true ]; then
-  echo "Both blank: keeping the service's current environment."
-elif [ -z "$DB_URL" ] || [ -z "$TOKEN" ]; then
-  [ -z "$DB_URL" ] && echo "DATABASE_URL arrived empty." >&2
-  [ -z "$TOKEN" ] && echo "ML_SERVICE_TOKEN arrived empty." >&2
-  echo "Both are required on a first deploy. Run the script again and paste the missing one." >&2
-  exit 1
-else
-  case "$DB_URL" in
-    mysql://*) ;;
-    *) echo "DATABASE_URL should start with mysql://" >&2; exit 1 ;;
-  esac
-  # A blank token turns the service's auth middleware into a no-op. Google's
-  # check is the outer layer now, but the token is still the inner one.
-  if [ "${#TOKEN}" -lt 16 ]; then
-    echo "ML_SERVICE_TOKEN looks too short to be the generated one." >&2
+  ENV_ARGS=()
+  if [ -z "$DB_URL" ] && [ -z "$TOKEN" ] && [ "$EXISTS" = true ]; then
+    echo "Both blank: keeping the service's current environment."
+  elif [ -z "$DB_URL" ] || [ -z "$TOKEN" ]; then
+    [ -z "$DB_URL" ] && echo "DATABASE_URL arrived empty." >&2
+    [ -z "$TOKEN" ] && echo "ML_SERVICE_TOKEN arrived empty." >&2
+    echo "Both are required on a first deploy. Run the script again and paste the missing one." >&2
     exit 1
-  fi
+  else
+    case "$DB_URL" in
+      mysql://*) ;;
+      *) echo "DATABASE_URL should start with mysql://" >&2; exit 1 ;;
+    esac
+    # A blank token turns the service's auth middleware into a no-op. Google's
+    # check is the outer layer now, but the token is still the inner one.
+    if [ "${#TOKEN}" -lt 16 ]; then
+      echo "ML_SERVICE_TOKEN looks too short to be the generated one." >&2
+      exit 1
+    fi
 
-  # The values go through a file, not --set-env-vars: that flag splits on
-  # commas, and a DSN's query string is not guaranteed to be free of them.
-  # JSON is valid YAML, and json.dumps handles any quoting the DSN needs.
-  ENV_FILE="$(umask 077; mktemp)"
-  trap 'rm -f "$ENV_FILE"' EXIT
-  DB_URL="$DB_URL" TOKEN="$TOKEN" python3 - "$ENV_FILE" <<'PY'
+    # The values go through a file, not --set-env-vars: that flag splits on
+    # commas, and a DSN's query string is not guaranteed to be free of them.
+    # JSON is valid YAML, and json.dumps handles any quoting the DSN needs.
+    ENV_FILE="$(umask 077; mktemp)"
+    trap 'rm -f "$ENV_FILE"' EXIT
+    DB_URL="$DB_URL" TOKEN="$TOKEN" python3 - "$ENV_FILE" <<'PY'
 import json, os, sys
 env = {
     "DATABASE_URL": os.environ["DB_URL"],
@@ -155,25 +186,40 @@ env = {
 with open(sys.argv[1], "w") as f:
     json.dump(env, f)
 PY
-  ENV_ARGS=(--env-vars-file "$ENV_FILE")
-fi
-unset DB_URL TOKEN
+    ENV_ARGS=(--env-vars-file "$ENV_FILE")
+  fi
+  unset DB_URL TOKEN
 
-echo
-echo "Building and deploying. The first build takes about five minutes."
-gcloud run deploy "$SERVICE" \
-  --source "$SOURCE_DIR" \
-  --region "$REGION" \
-  --no-allow-unauthenticated \
-  --memory 1Gi \
-  --cpu 1 \
-  --cpu-throttling \
-  --cpu-boost \
-  --min-instances 0 \
-  --max-instances 1 \
-  --timeout 300 \
-  --quiet \
-  "${ENV_ARGS[@]}"
+  echo
+  echo "Building and deploying. The first build takes about five minutes."
+  gcloud run deploy "$SERVICE" \
+    --source "$SOURCE_DIR" \
+    --region "$REGION" \
+    --no-allow-unauthenticated \
+    --memory 1Gi \
+    --cpu 1 \
+    --cpu-throttling \
+    --cpu-boost \
+    --min-instances 0 \
+    --max-instances 1 \
+    --timeout 300 \
+    --quiet \
+    "${ENV_ARGS[@]}"
+
+  # Gone as soon as it has been read. The trap is a fallback for a failed
+  # deploy, and the key step below replaces it with its own.
+  if [ -n "${ENV_FILE:-}" ]; then rm -f "$ENV_FILE"; fi
+}
+
+if [ "${SKIP_DEPLOY:-}" = 1 ]; then
+  if [ "$EXISTS" != true ]; then
+    echo "SKIP_DEPLOY=1, but $SERVICE is not deployed yet. Run without it first." >&2
+    exit 1
+  fi
+  echo "SKIP_DEPLOY=1: leaving the deployed service as it is; setting up access only."
+else
+  deploy_service
+fi
 
 # ── The API's identity ──────────────────────────────────────────────────────
 # One permission, on one resource: invoke this service. If the key leaks, it
@@ -183,8 +229,31 @@ if ! gcloud iam service-accounts describe "$INVOKER_EMAIL" >/dev/null 2>&1; then
   gcloud iam service-accounts create "$INVOKER" \
     --display-name "EAI API (Render) - invokes eai-ml"
 fi
-gcloud run services add-iam-policy-binding "$SERVICE" --region "$REGION" \
-  --member "serviceAccount:$INVOKER_EMAIL" --role roles/run.invoker --quiet >/dev/null
+# Grant an IAM role, retrying while a just-created principal propagates.
+# A new service account or identity pool takes a moment to exist everywhere:
+# the first real run bound the invoker two seconds after creating it and was
+# told it "does not exist". Any other refusal -- an organization policy, say
+# -- will not change with waiting, so it stops at once with Google's words.
+grant() {
+  local what="$1" err="" attempt
+  shift
+  for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    if err="$(gcloud "$@" --quiet 2>&1 >/dev/null)"; then return 0; fi
+    case "$err" in
+      *"does not exist"*|*"not found"*|*NOT_FOUND*) ;;
+      *) break ;;
+    esac
+    echo "  not visible to Google yet, retrying ($attempt/12)..."
+    sleep 10
+  done
+  echo "Could not grant $what. Google said:" >&2
+  echo "$err" >&2
+  exit 1
+}
+
+grant "$INVOKER_EMAIL access to $SERVICE" \
+  run services add-iam-policy-binding "$SERVICE" --region "$REGION" \
+  --member "serviceAccount:$INVOKER_EMAIL" --role roles/run.invoker
 
 # Keep the two newest images and delete the rest. Keep rules win over delete
 # rules, so the delete-everything rule only reaches what the keep rule leaves.
@@ -213,34 +282,99 @@ echo "With your credentials (must answer):"
 curl -sS --max-time 90 -H "Authorization: Bearer $(gcloud auth print-identity-token)" "$URL/health" || true
 echo
 
-# ── A key for the API ───────────────────────────────────────────────────────
-# Render is not Google, so the API cannot borrow a Google identity the way a
-# Cloud Run service can; it needs a key. Made only when none exists, because
-# every key is another credential to keep track of.
-EXISTING_KEYS="$(gcloud iam service-accounts keys list --iam-account "$INVOKER_EMAIL" \
-  --managed-by user --format 'value(name)' | wc -l)"
+# ── How the API proves it is the API ───────────────────────────────────────
+# Workload Identity Federation with an uploaded JWKS; see the header. The
+# issuer is a name, not a URL Google fetches -- with the keys uploaded, it
+# never asks the issuer for them -- so it only has to match the API's JWT.
+POOL="eai-pool"
+PROVIDER="eai-api"
+SUBJECT="eai-api"
+ISSUER="${API_ISSUER:-https://eai-api-q3u3.onrender.com}"
+PROVIDER_AUD="https://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/$POOL/providers/$PROVIDER"
+PRINCIPAL="principal://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/$POOL/subject/$SUBJECT"
+
+if ! gcloud iam workload-identity-pools describe "$POOL" --location global >/dev/null 2>&1; then
+  gcloud iam workload-identity-pools create "$POOL" --location global \
+    --display-name "EAI API on Render"
+fi
+
+PROVIDER_EXISTS=false
+if gcloud iam workload-identity-pools providers describe "$PROVIDER" \
+    --workload-identity-pool "$POOL" --location global >/dev/null 2>&1; then
+  PROVIDER_EXISTS=true
+fi
+
+# A new key pair only when there is no provider yet, or when asked: uploading
+# one replaces the old, and the credential Render holds stops working.
 MAKE_KEY=true
-if [ "$EXISTING_KEYS" -gt 0 ]; then
-  read -rp "$INVOKER already has $EXISTING_KEYS key(s). Make a new one? [y/N] " ANSWER
+if [ "$PROVIDER_EXISTS" = true ]; then
+  read -rp "The API already has a signing key. Replace it (Render's stops working until updated)? [y/N] " ANSWER
   [ "${ANSWER:-n}" = "y" ] || MAKE_KEY=false
 fi
+
+if [ "$MAKE_KEY" = true ]; then
+  KEY_DIR="$(umask 077; mktemp -d)"
+  trap 'rm -rf "$KEY_DIR"' EXIT
+  KID="eai-api-$(date -u +%Y%m%d%H%M%S)"
+  openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$KEY_DIR/key.pem" 2>/dev/null
+  # The public half as a JWKS. openssl prints the modulus as hex; the exponent
+  # is genpkey's default, 65537, which is "AQAB" in base64url.
+  MODULUS="$(openssl rsa -in "$KEY_DIR/key.pem" -noout -modulus 2>/dev/null | cut -d= -f2)"
+  KID="$KID" MODULUS="$MODULUS" python3 - "$KEY_DIR/jwks.json" <<'PY'
+import base64, json, os, sys
+n = base64.urlsafe_b64encode(bytes.fromhex(os.environ["MODULUS"])).rstrip(b"=").decode()
+jwk = {"kty": "RSA", "alg": "RS256", "use": "sig", "kid": os.environ["KID"], "n": n, "e": "AQAB"}
+json.dump({"keys": [jwk]}, open(sys.argv[1], "w"))
+PY
+
+  if [ "$PROVIDER_EXISTS" = true ]; then
+    gcloud iam workload-identity-pools providers update-oidc "$PROVIDER" \
+      --workload-identity-pool "$POOL" --location global \
+      --jwk-json-path "$KEY_DIR/jwks.json" --quiet
+  else
+    gcloud iam workload-identity-pools providers create-oidc "$PROVIDER" \
+      --workload-identity-pool "$POOL" --location global \
+      --issuer-uri "$ISSUER" \
+      --allowed-audiences "$PROVIDER_AUD" \
+      --attribute-mapping "google.subject=assertion.sub" \
+      --attribute-condition "assertion.sub == '$SUBJECT'" \
+      --jwk-json-path "$KEY_DIR/jwks.json"
+  fi
+fi
+
+# The federated identity may mint ID tokens as the invoker, and nothing else:
+# not access tokens, not keys, not anything on any other account.
+grant "the federated identity the right to act as $INVOKER_EMAIL" \
+  iam service-accounts add-iam-policy-binding "$INVOKER_EMAIL" \
+  --member "$PRINCIPAL" --role roles/iam.serviceAccountOpenIdTokenCreator
 
 echo
 echo "Next, in Render > eai-api > Environment:"
 echo "  ML_SERVICE_URL        = $URL"
 if [ "$MAKE_KEY" = true ]; then
-  KEY_FILE="$(umask 077; mktemp)"
-  gcloud iam service-accounts keys create "$KEY_FILE" --iam-account "$INVOKER_EMAIL" --quiet
   echo "  ML_SERVICE_GOOGLE_KEY = the line between the markers below"
   echo
   echo "----- copy from the next line -----"
-  base64 -w0 "$KEY_FILE"; echo
+  KEY_PEM="$(cat "$KEY_DIR/key.pem")" KID="$KID" ISSUER="$ISSUER" SUBJECT="$SUBJECT" \
+    AUD="$PROVIDER_AUD" SA="$INVOKER_EMAIL" python3 - <<'PY'
+import base64, json, os
+credential = {
+    # Read by parseGoogleCredential in server/services/google-id-token.ts.
+    "type": "eai_workload_identity_federation",
+    "private_key": os.environ["KEY_PEM"] + "\n",
+    "key_id": os.environ["KID"],
+    "issuer": os.environ["ISSUER"],
+    "subject": os.environ["SUBJECT"],
+    "audience": os.environ["AUD"],
+    "service_account": os.environ["SA"],
+}
+print(base64.b64encode(json.dumps(credential).encode()).decode())
+PY
   echo "----- to the line above -----"
   echo
   echo "That line is a credential. Paste it into Render and nowhere else."
-  rm -f "$KEY_FILE"
 else
-  echo "  ML_SERVICE_GOOGLE_KEY = (unchanged -- the key Render already has)"
+  echo "  ML_SERVICE_GOOGLE_KEY = (unchanged -- the credential Render already has)"
 fi
 echo
 echo "Saving those redeploys the API. Then suspend eai-ml on Render."

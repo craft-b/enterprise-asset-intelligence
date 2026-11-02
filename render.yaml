@@ -105,10 +105,11 @@ services:
       - key: ML_SERVICE_URL
         sync: false
 
-      # The eai-api-invoker service account key, base64, as deploy-ml.sh
-      # prints it. Each ML request then carries a Google ID token, without
-      # which Cloud Run refuses it unbilled. Unset: no Google auth, which is
-      # right for any ML service that is not private Cloud Run.
+      # The line deploy-ml.sh prints: a Workload Identity Federation
+      # credential (no Google-issued key exists). Each ML request then
+      # carries a Google ID token, without which Cloud Run refuses it
+      # unbilled. Unset: no Google auth, which is right for any ML service
+      # that is not private Cloud Run.
       - key: ML_SERVICE_GOOGLE_KEY
         sync: false
 
