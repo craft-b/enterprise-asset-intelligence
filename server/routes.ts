@@ -26,7 +26,7 @@ import { mlFetch, describeMlFailure, ML_SLOW_TIMEOUT_MS, ML_SERVICE_URL, rateLim
 import { wakeAndWait, nudgeMlAwake, nudgeHoldingSince, REQUEST_WAKE_BUDGET_MS, REQUEST_WAKE_PROBE_MS, RETRY_AFTER_SECONDS, RATE_LIMIT_RETRY_SECONDS } from "./services/ml-wake";
 import { getMlHealth } from "./services/ml-health-cache";
 import { cachedMl, invalidateMlCache, ML_CACHE_TTL_MS, type MlOutcome } from "./services/ml-response-cache";
-import { apiRateLimit, clientKey, createLoginThrottle, refuseThrottledLogin, registerRateLimit } from "./services/request-limits";
+import { apiRateLimit, createLoginThrottle, refuseThrottledLogin, registerRateLimit, whoIsAsking } from "./services/request-limits";
 import { getModelStatus } from "./services/model-status";
 import { timingSafeEqual } from "crypto";
 import { registerTestLogin } from "./test-login";
@@ -539,14 +539,14 @@ export async function registerRoutes(
   app.post(api.auth.login.path, asyncRoute(async (req, res) => {
     const { username, password } = api.auth.login.input.parse(req.body);
     // Checked before bcrypt, so a refused attempt costs no hashing either.
-    const client = clientKey(req);
-    if (refuseThrottledLogin(res, loginThrottle.blockedFor(client, username))) return;
+    const who = whoIsAsking(req);
+    if (refuseThrottledLogin(res, loginThrottle.blockedFor(who, username))) return;
     const user = await storage.getUserByUsername(username);
     if (!user || !bcrypt.compareSync(password, user.password)) {
-      loginThrottle.recordFailure(client, username);
+      loginThrottle.recordFailure(who, username);
       return res.status(401).json({ message: "Invalid credentials" });
     }
-    loginThrottle.recordSuccess(client, username);
+    loginThrottle.recordSuccess(who, username);
     req.session.userId = user.id;
     req.session.role = user.role;
     res.json(toPublicUser(user));
@@ -2250,7 +2250,11 @@ export async function registerRoutes(
     //
     //   neutral          — can this instance reach the internet at all? If
     //                      this fails too, the problem is egress, not the ML
-    //                      service.
+    //                      service. Google's connectivity check, which answers
+    //                      204 to anyone: this used to be api.github.com, whose
+    //                      60-an-hour unauthenticated limit is per address, and
+    //                      Render's outbound address is shared, so it reported
+    //                      403 for other people's traffic.
     //   ml               — our ordinary request, every credential attached.
     //   mlUnauthenticated — same URL, no headers. On a private Cloud Run
     //                      service this must be refused (403) by Google; a
@@ -2289,7 +2293,7 @@ export async function registerRoutes(
     };
 
     const results = Object.fromEntries(await Promise.all([
-      timed("neutral", bounded("https://api.github.com/zen")),
+      timed("neutral", bounded("https://www.google.com/generate_204")),
       timed("ml", () => probeHostDirectly(10_000)),
       timed("mlUnauthenticated", bounded(`${ML_SERVICE_URL}/health`)),
     ]));
@@ -2298,11 +2302,13 @@ export async function registerRoutes(
       mlAuth: ML_AUTH_MODE,
       gate: rateLimitState(),
       nudgeHoldingForMs: nudgeHoldingSince() === null ? null : Date.now() - nudgeHoldingSince()!,
-      // What the rate limits count this request as. If `key` is a proxy's
-      // address rather than yours, every visitor shares one limit -- see
-      // clientKey in services/request-limits.ts.
+      // What the rate limits count this request as: `visitor` should be your
+      // address whichever way you came in (directly, or through the site's
+      // Vercel proxy), and `hop` is what Cloudflare saw -- you directly, a
+      // Vercel address through the site. See whoIsAsking() in
+      // services/request-limits.ts.
       client: {
-        key: clientKey(req),
+        ...whoIsAsking(req),
         reqIp: req.ip ?? null,
         cfConnectingIp: req.headers["cf-connecting-ip"] ?? null,
         forwardedFor: req.headers["x-forwarded-for"] ?? null,

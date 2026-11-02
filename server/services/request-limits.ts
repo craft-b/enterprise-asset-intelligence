@@ -20,10 +20,16 @@
 //   Registration: 5 an hour per client. Every viewer account is a row in the
 //   users table and a bcrypt hash computed on the API's one small CPU.
 //
+// Each per-client limit counts twice: per visitor, which is fair but can be
+// forged by someone calling Render directly, and per hop -- the address
+// Cloudflare saw -- which cannot be forged, at ten times the allowance
+// because Vercel's proxy puts many visitors behind each one. whoIsAsking()
+// has the detail. The per-username login limit needs no address at all.
+//
 // None of this is the financial guarantee. That is ml-response-cache.ts,
 // which bounds ML work however the requests arrive. These limits keep the
 // database quota and the API's CPU from being spent by one client, and a
-// client that rotates addresses gets around them -- which is acceptable
+// client with many real addresses gets around them -- which is acceptable
 // precisely because the bill does not depend on them.
 //
 // In memory, because there is one API instance. A second would need a shared
@@ -93,22 +99,85 @@ export function createFixedWindowLimiter(opts: {
 }
 
 /**
- * Who is asking, for counting purposes.
+ * Who is asking, counted two ways.
  *
- * `trust proxy` is 1, so req.ip is the address the nearest proxy saw. Render
- * puts Cloudflare in front of its own proxy, so that address may be a
- * Cloudflare edge rather than the visitor -- which would make every visitor
- * behind one edge a single client. Cloudflare's CF-Connecting-IP carries the
- * visitor's address, and Cloudflare overwrites any value a client sends, so
- * it is preferred when present and well-formed.
+ *   hop      the address Cloudflare saw connect (CF-Connecting-IP), which
+ *            Cloudflare overwrites, so no client can choose it. For a visitor
+ *            on the live site that is not the visitor: the SPA reaches this
+ *            API through Vercel's proxy, so the hop is a Vercel address that
+ *            many visitors share.
  *
- * What the API actually sees is reported by the admin diagnostic, so this is
- * checked against the deployment rather than assumed.
+ *   visitor  the address one entry before the hop in X-Forwarded-For. Vercel
+ *            overwrites X-Forwarded-For with the address it saw, so through
+ *            Vercel this is the person in the browser. A request sent to
+ *            Render directly can put anything there, so it is the fair key
+ *            but not a trustworthy one. With nothing before the hop -- a
+ *            direct request -- the visitor is the hop.
+ *
+ * Observed on the deployment (admin diagnostic): direct, X-Forwarded-For was
+ * "you, Cloudflare edge, Render internal" with CF-Connecting-IP = you. Through
+ * Vercel it gains Vercel's address after yours, and CF-Connecting-IP becomes
+ * Vercel's. req.ip, under `trust proxy` 1, is Render's internal hop and the
+ * same for everyone -- the first version of this keyed on it.
  */
-export function clientKey(req: Request): string {
+export interface Asker {
+  visitor: string;
+  hop: string;
+}
+
+export function whoIsAsking(req: Request): Asker {
   const cf = req.headers["cf-connecting-ip"];
-  if (typeof cf === "string" && isIP(cf.trim())) return cf.trim();
-  return req.ip ?? req.socket.remoteAddress ?? "unknown";
+  const hop = typeof cf === "string" && isIP(cf.trim())
+    ? cf.trim()
+    : req.ip ?? req.socket?.remoteAddress ?? "unknown";
+
+  const forwarded = req.headers["x-forwarded-for"];
+  const chain = (Array.isArray(forwarded) ? forwarded.join(",") : forwarded ?? "")
+    .split(",").map(s => s.trim()).filter(Boolean);
+  const at = chain.lastIndexOf(hop);
+  const before = at > 0 ? chain[at - 1] : undefined;
+
+  return { visitor: before && isIP(before) ? before : hop, hop };
+}
+
+/** The visitor key alone, for the admin diagnostic. */
+export function clientKey(req: Request): string {
+  return whoIsAsking(req).visitor;
+}
+
+/**
+ * How much more a hop may do than one visitor. Vercel funnels every visitor
+ * near one of its regions through a few addresses, so a hop limit equal to a
+ * visitor's would make strangers share one allowance. Ten visitors' worth is
+ * room for a busy moment, and still a ceiling on someone who bypasses Vercel
+ * to forge the visitor key.
+ */
+export const HOP_FACTOR = 10;
+
+export interface PairLimiter {
+  hit(who: Asker, now?: number): { allowed: boolean; retryAfterMs: number };
+  blockedFor(who: Asker, now?: number): number;
+  /** Forgives the visitor only: one success says nothing about the others on its hop. */
+  reset(who: Asker): void;
+}
+
+/** `limit` per visitor, and HOP_FACTOR times that per hop. Both count every event. */
+export function createPairLimiter(opts: { limit: number; windowMs: number }): PairLimiter {
+  const visitors = createFixedWindowLimiter(opts);
+  const hops = createFixedWindowLimiter({ ...opts, limit: opts.limit * HOP_FACTOR });
+  return {
+    hit(who, now = Date.now()) {
+      const v = visitors.hit(who.visitor, now);
+      const h = hops.hit(who.hop, now);
+      return { allowed: v.allowed && h.allowed, retryAfterMs: Math.max(v.retryAfterMs, h.retryAfterMs) };
+    },
+    blockedFor(who, now = Date.now()) {
+      return Math.max(visitors.blockedFor(who.visitor, now), hops.blockedFor(who.hop, now));
+    },
+    reset(who) {
+      visitors.reset(who.visitor);
+    },
+  };
 }
 
 function refuse(res: Response, retryAfterMs: number, message: string) {
@@ -125,10 +194,10 @@ export const API_LIMIT = { limit: 300, windowMs: 60_000 } as const;
  * and CORS preflights, which are the browser's overhead rather than the
  * client's requests.
  */
-export function apiRateLimit(limiter: FixedWindowLimiter = createFixedWindowLimiter(API_LIMIT)) {
+export function apiRateLimit(limiter: PairLimiter = createPairLimiter(API_LIMIT)) {
   return (req: Request, res: Response, next: NextFunction) => {
     if (req.method === "OPTIONS" || req.path === "/health") return next();
-    const { allowed, retryAfterMs } = limiter.hit(clientKey(req));
+    const { allowed, retryAfterMs } = limiter.hit(whoIsAsking(req));
     if (!allowed) return refuse(res, retryAfterMs, "Too many requests. Slow down and try again shortly.");
     next();
   };
@@ -139,24 +208,24 @@ export const LOGIN_LIMITS = {
   perUsername: { limit: 30, windowMs: 15 * 60_000 },
 } as const;
 
-/** Failed sign-in accounting. Only failures count; success clears both counters. */
+/** Failed sign-in accounting. Only failures count; success clears the visitor's and the username's. */
 export function createLoginThrottle(
-  byClient = createFixedWindowLimiter(LOGIN_LIMITS.perClient),
-  byUsername = createFixedWindowLimiter(LOGIN_LIMITS.perUsername),
+  byClient: PairLimiter = createPairLimiter(LOGIN_LIMITS.perClient),
+  byUsername: FixedWindowLimiter = createFixedWindowLimiter(LOGIN_LIMITS.perUsername),
 ) {
   // Case-folded: "Admin" and "admin" are one account to someone guessing.
   const user = (username: string) => username.trim().toLowerCase();
   return {
     /** Milliseconds until a sign-in may be attempted, or 0. Checked before bcrypt runs. */
-    blockedFor(client: string, username: string, now = Date.now()): number {
-      return Math.max(byClient.blockedFor(client, now), byUsername.blockedFor(user(username), now));
+    blockedFor(who: Asker, username: string, now = Date.now()): number {
+      return Math.max(byClient.blockedFor(who, now), byUsername.blockedFor(user(username), now));
     },
-    recordFailure(client: string, username: string, now = Date.now()): void {
-      byClient.hit(client, now);
+    recordFailure(who: Asker, username: string, now = Date.now()): void {
+      byClient.hit(who, now);
       byUsername.hit(user(username), now);
     },
-    recordSuccess(client: string, username: string): void {
-      byClient.reset(client);
+    recordSuccess(who: Asker, username: string): void {
+      byClient.reset(who);
       byUsername.reset(user(username));
     },
   };
@@ -174,9 +243,9 @@ export function refuseThrottledLogin(res: Response, retryAfterMs: number): boole
 
 export const REGISTER_LIMIT = { limit: 5, windowMs: 60 * 60_000 } as const;
 
-export function registerRateLimit(limiter: FixedWindowLimiter = createFixedWindowLimiter(REGISTER_LIMIT)) {
+export function registerRateLimit(limiter: PairLimiter = createPairLimiter(REGISTER_LIMIT)) {
   return (req: Request, res: Response, next: NextFunction) => {
-    const { allowed, retryAfterMs } = limiter.hit(clientKey(req));
+    const { allowed, retryAfterMs } = limiter.hit(whoIsAsking(req));
     if (!allowed) return refuse(res, retryAfterMs, "Too many accounts created from this address. Try again later.");
     next();
   };
