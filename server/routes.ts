@@ -1831,25 +1831,12 @@ export async function registerRoutes(
   async function requestProjection(equipmentId: number, snapshotTs: Date): Promise<MlOutcome> {
     const snapshot = await enhancedFeatureService.generateSnapshot(equipmentId, snapshotTs);
 
-    const mlPayload = {
-      equipment_id: snapshot.equipmentId, snapshot_ts: snapshot.snapshotTs,
-      category: snapshot.category, asset_age_years: snapshot.assetAgeYears,
-      total_hours_lifetime: snapshot.totalHoursLifetime, hours_used_30d: snapshot.hoursUsed30d,
-      hours_used_90d: snapshot.hoursUsed90d, rental_days_30d: snapshot.rentalDays30d,
-      rental_days_90d: snapshot.rentalDays90d, avg_rental_duration: snapshot.avgRentalDuration,
-      maintenance_events_90d: snapshot.maintenanceEvents90d, maintenance_cost_180d: snapshot.maintenanceCost180d,
-      avg_downtime_per_event: snapshot.avgDowntimePerEvent, days_since_last_maintenance: snapshot.daysSinceLastMaintenance,
-      mean_time_between_failures: snapshot.meanTimeBetweenFailures, vendor_reliability_score: snapshot.vendorReliabilityScore,
-      jobsite_risk_score: snapshot.jobSiteRiskScore, usage_intensity: snapshot.usageIntensity,
-      usage_trend: snapshot.usageTrend, utilization_vs_expected: snapshot.utilizationVsExpected,
-      wear_rate: snapshot.wearRate, aging_factor: snapshot.agingFactor, maint_overdue: snapshot.maintOverdue,
-      cost_per_event: snapshot.costPerEvent, maint_burden: snapshot.maintBurden,
-      mechanical_wear_score: snapshot.mechanicalWearScore, abuse_score: snapshot.abuseScore,
-      neglect_score: snapshot.neglectScore, wear_rate_velocity: snapshot.wearRateVelocity,
-      maint_frequency_trend: snapshot.maintFrequencyTrend, cost_trend: snapshot.costTrend,
-      hours_velocity: snapshot.hoursVelocity, neglect_acceleration: snapshot.neglectAcceleration,
-      sensor_degradation_rate: snapshot.sensorDegradationRate,
-    };
+    // The batch path's builder, not a hand-copied field list. The copy sent
+    // nulls through untouched, and SnapshotInput rejects a null, so every unit
+    // without a failure history (no mean time between failures) got a 502 here
+    // while the same unit scored fine in a batch -- no projection on the asset
+    // page and no cost callout on the forecast dialog.
+    const mlPayload = toMlSnapshot(equipmentId, snapshot);
 
     const mlResponse = await mlFetch("/predict/project", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(mlPayload),

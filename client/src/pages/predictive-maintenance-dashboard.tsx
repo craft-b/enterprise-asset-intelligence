@@ -197,7 +197,10 @@ function PipelineStatusCard() {
           <Alert className="border-green-200 bg-green-50">
             <CheckCircle className="h-4 w-4 text-green-600" />
             <AlertDescription className="text-green-800">
-              <strong>Ready for ML training!</strong> {status.snapshots.labeled} labeled samples across all horizons.
+              {/* Only a count: whether training may run is the data-quality
+                  gate's call, and "Ready" sat beside a gate reading FAIL. */}
+              <strong>Labeled data in place.</strong> {status.snapshots.labeled} labeled samples across all horizons;
+              the data-quality gate checks them before every training run.
             </AlertDescription>
           </Alert>
         ) : (
