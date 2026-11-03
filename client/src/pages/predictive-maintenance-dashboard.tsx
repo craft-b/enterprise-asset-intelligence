@@ -333,7 +333,7 @@ function FleetCostSummaryCard({
           Cost Model — Intervention Analysis
         </CardTitle>
         <CardDescription>
-          Expected failure cost vs. scheduled PM cost · 7-day downtime assumption
+          Expected failure cost vs. scheduled PM cost (60d horizon) · 7-day downtime assumption
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -344,7 +344,7 @@ function FleetCostSummaryCard({
           </div>
           <div>
             <div className="text-2xl font-bold text-red-600">{highCount}</div>
-            <div className="text-xs text-muted-foreground">HIGH risk — intervene immediately</div>
+            <div className="text-xs text-muted-foreground">HIGH risk within 60 days</div>
           </div>
           <div>
             <div className="text-2xl font-bold text-green-700">${totalSavings.toLocaleString()}</div>

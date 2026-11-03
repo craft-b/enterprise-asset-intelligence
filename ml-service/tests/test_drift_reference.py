@@ -165,6 +165,42 @@ class TestSelfCheckIsNotARecordedReading:
         assert "persist=False" in block[:600]
 
 
+class TestPredictionReferencePerHorizon:
+    """
+    The reference used one probability per asset for all three horizons.
+    Cumulative risk rises with the window, so the 10d batch read as HIGH share
+    falling and the 60d batch as rising -- ALERT on both, from the reference.
+    """
+
+    def frame(self):
+        import pandas as pd
+        return pd.DataFrame({
+            "prob_10d": [0.05, 0.10, 0.20, 0.30],
+            "risk_level_10d": ["LOW", "LOW", "LOW", "MEDIUM"],
+            "prob_30d": [0.20, 0.40, 0.55, 0.70],
+            "risk_level_30d": ["LOW", "MEDIUM", "MEDIUM", "HIGH"],
+            "prob_60d": [0.50, 0.65, 0.80, 0.90],
+            "risk_level_60d": ["MEDIUM", "HIGH", "HIGH", "HIGH"],
+        })
+
+    def test_each_horizon_gets_its_own_distribution(self):
+        refs = dd.prediction_reference_by_horizon(self.frame())
+        assert set(refs) == {"10", "30", "60"}
+        assert refs["10"]["scores"] == [0.05, 0.10, 0.20, 0.30]
+        assert refs["60"]["scores"] == [0.50, 0.65, 0.80, 0.90]
+        assert refs["10"]["high_pct"] == 0.0
+        assert refs["30"]["high_pct"] == 0.25
+        assert refs["60"]["high_pct"] == 0.75
+
+    def test_a_batch_like_the_reference_is_stable_on_every_horizon(self):
+        import numpy as np
+        f = self.frame()
+        refs = dd.prediction_reference_by_horizon(f)
+        for h, entry in refs.items():
+            psi = dd.compute_psi(np.array(entry["scores"]), f[f"prob_{h}d"].to_numpy(float))
+            assert dd._psi_status(psi) == "STABLE", h
+
+
 class TestGateConstants:
     def test_building_a_reference_and_scoring_a_batch_are_separate_floors(self):
         # These were one constant. Collapsing them back would restore a state

@@ -303,21 +303,28 @@ def _check_duplicate_snapshots(df: pd.DataFrame) -> list[dict]:
     if "snapshot_ts" not in df.columns:
         return []
 
-    # Look for (equipment_id, date) duplicates if equipment_id column exists
-    # The training df won't have equipment_id, but snapshot_ts duplicates
-    # on the same day suggest a seeding bug
+    # A duplicate is the same asset twice on one date. Every asset is
+    # snapshotted on the same simulated day, so counting dates alone flagged
+    # 98% of a sixty-unit fleet as duplicates when none were. load_training_data
+    # selects equipment_id; date-only remains the fallback without it.
     dates = pd.to_datetime(df["snapshot_ts"], errors="coerce").dt.date
-    dup_count = int(dates.duplicated().sum())
+    if "equipment_id" in df.columns:
+        keys = pd.DataFrame({"equipment_id": df["equipment_id"], "date": dates})
+        dup_count = int(keys.duplicated().sum())
+        what = "repeat an asset's snapshot date"
+    else:
+        dup_count = int(dates.duplicated().sum())
+        what = "share a snapshot date with another row"
     total = len(df)
     dup_rate = dup_count / total if total else 0
 
     if dup_rate > 0.30:
         return [_check("duplicate_snapshots", "WARN",
-            f"{dup_count:,} rows ({dup_rate*100:.1f}%) share a snapshot date with another row — "
+            f"{dup_count:,} rows ({dup_rate*100:.1f}%) {what} — "
             f"may indicate a seeding loop ran multiple times",
             {"duplicate_rows": dup_count, "dup_rate": round(dup_rate, 4)})]
     return [_check("duplicate_snapshots", "PASS",
-        f"Snapshot date distribution looks normal ({dup_rate*100:.1f}% same-date rows)",
+        f"Snapshot date distribution looks normal ({dup_rate*100:.1f}% duplicate rows)",
         {"duplicate_rows": dup_count})]
 
 

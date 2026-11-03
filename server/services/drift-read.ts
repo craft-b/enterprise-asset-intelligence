@@ -83,6 +83,15 @@ async function latestReference() {
   };
 }
 
+/**
+ * Only readings taken since the reference in force. Resetting the baseline is
+ * meant to start the readings over, but "latest row per feature" kept showing
+ * rows measured against the old one -- including a feature the new reference
+ * does not track, which then read ALERT on every visit with nothing able to
+ * replace it. With no reference row, every reading counts.
+ */
+const SINCE_REFERENCE = sql`checked_at >= COALESCE((SELECT MAX(computed_at) FROM drift_reference), '1970-01-01')`;
+
 /** Most recent PSI row per monitored feature. */
 export async function featureDrift() {
   const result = rows<any>(await db.execute(sql`
@@ -90,6 +99,7 @@ export async function featureDrift() {
     INNER JOIN (
       SELECT feature, MAX(id) AS latest_id FROM drift_metrics
       WHERE feature IN (${sql.join(MONITORED_FEATURES.map(f => sql`${f}`), sql`, `)})
+        AND ${SINCE_REFERENCE}
       GROUP BY feature
     ) d2 ON d1.id = d2.latest_id
     ORDER BY d1.psi DESC
@@ -121,7 +131,8 @@ export async function predictionDrift() {
   const result = rows<any>(await db.execute(sql`
     SELECT p1.* FROM prediction_drift_metrics p1
     INNER JOIN (
-      SELECT horizon, MAX(id) AS latest_id FROM prediction_drift_metrics GROUP BY horizon
+      SELECT horizon, MAX(id) AS latest_id FROM prediction_drift_metrics
+      WHERE ${SINCE_REFERENCE} GROUP BY horizon
     ) p2 ON p1.id = p2.latest_id
     ORDER BY p1.horizon
   `));
@@ -150,7 +161,7 @@ export async function biasDrift() {
     SELECT b1.* FROM bias_drift_metrics b1
     INNER JOIN (
       SELECT category, horizon, MAX(id) AS latest_id FROM bias_drift_metrics
-      WHERE horizon = ${BIAS_HORIZON} GROUP BY category, horizon
+      WHERE horizon = ${BIAS_HORIZON} AND ${SINCE_REFERENCE} GROUP BY category, horizon
     ) b2 ON b1.id = b2.latest_id
     ORDER BY b1.deviation DESC
   `));

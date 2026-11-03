@@ -353,6 +353,23 @@ class TestDuplicateSnapshots:
         if dup:
             assert dup["status"] == "WARN"
 
+    def test_a_fleet_snapshotted_on_one_day_is_not_duplicated(self):
+        # Sixty assets per simulated day is the design, not a seeding loop.
+        df = _base_df(n=600)
+        df["equipment_id"] = np.arange(600) % 60
+        df["snapshot_ts"] = [datetime(2024, 1, 1) + timedelta(days=i // 60) for i in range(600)]
+        dup = next(c for c in run(df)["checks"] if c["check"] == "duplicate_snapshots")
+        assert dup["status"] == "PASS"
+        assert dup["detail"]["duplicate_rows"] == 0
+
+    def test_the_same_asset_twice_on_one_day_is(self):
+        df = _base_df(n=600)
+        df["equipment_id"] = np.arange(600) % 60
+        df["snapshot_ts"] = "2024-06-01"
+        dup = next(c for c in run(df)["checks"] if c["check"] == "duplicate_snapshots")
+        assert dup["status"] == "WARN"
+        assert dup["detail"]["duplicate_rows"] == 540
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # OVERALL STATUS LOGIC

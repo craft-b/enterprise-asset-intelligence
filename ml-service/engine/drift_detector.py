@@ -128,6 +128,31 @@ def compute_psi(reference: np.ndarray, current: np.ndarray, n_bins: int = N_BINS
     return round(max(psi, 0.0), 6)
 
 
+def prediction_reference_by_horizon(df: pd.DataFrame) -> dict[str, dict]:
+    """
+    Score and band distribution per horizon, from prob_{h}d / risk_level_{h}d
+    columns. Each horizon is its own reference: cumulative probabilities rise
+    with the window, so one shared distribution cannot describe all three.
+    """
+    refs: dict[str, dict] = {}
+    for h in HORIZONS:
+        prob_col, band_col = f"prob_{h}d", f"risk_level_{h}d"
+        if prob_col not in df.columns or band_col not in df.columns:
+            continue
+        scores = pd.to_numeric(df[prob_col], errors="coerce").dropna().tolist()
+        labels = df[band_col].tolist()
+        if not scores or not labels:
+            continue
+        n = len(labels)
+        refs[str(h)] = {
+            "scores":     [round(float(s), 6) for s in scores],
+            "high_pct":   round(sum(1 for lbl in labels if lbl == "HIGH")   / n, 4),
+            "medium_pct": round(sum(1 for lbl in labels if lbl == "MEDIUM") / n, 4),
+            "low_pct":    round(sum(1 for lbl in labels if lbl == "LOW")    / n, 4),
+        }
+    return refs
+
+
 def _psi_status(psi: float) -> str:
     if psi >= PSI_ALERT_THRESHOLD:
         return "ALERT"
@@ -591,8 +616,9 @@ class DriftDetector:
         """
         Build all three reference distributions from current DB state.
         - Feature reference from asset_feature_snapshots
-        - Prediction score + label distribution from asset_risk_predictions
-        - Bias reference from asset_risk_predictions joined with equipment
+        - Prediction score + label distribution per horizon, from
+          equipment_failure_predictions
+        - Bias reference from the same rows (30d) joined with equipment
         Stores the result in the drift_reference table (store of record) and
         drops a copy in registry/ for local inspection. Safe to call repeatedly;
         each call appends a row, and the newest row is the one in force.
@@ -607,7 +633,7 @@ class DriftDetector:
                 engine
             )
 
-            # ── Prediction reference from asset_risk_predictions ──────────────
+            # ── Prediction reference from equipment_failure_predictions ───────
             #
             # One row per asset: its most recent prediction. The unfiltered
             # query counted every scoring run ever stored, so an asset scored
@@ -616,20 +642,31 @@ class DriftDetector:
             # output from a superseded payload builder. "Most recent per asset"
             # is also exactly what the dashboards read, so the reference now
             # describes the same distribution the UI shows.
+            #
+            # This table, not asset_risk_predictions: that one holds a single
+            # probability per asset, which was copied in as the reference for
+            # all three horizons. Cumulative risk rises with the window, so the
+            # 10d batch always read as a fall in HIGH share and the 60d batch
+            # as a rise -- ALERT on both, from the reference alone.
             df_pred = pd.read_sql(
-                """SELECT arp.failure_probability, arp.risk_band,
-                          arp.equipment_id, e.category
-                   FROM asset_risk_predictions arp
-                   JOIN equipment e ON e.id = arp.equipment_id
-                   WHERE arp.id = (
-                       SELECT i.id FROM asset_risk_predictions i
-                       WHERE i.equipment_id = arp.equipment_id
+                """SELECT efp.prob_10d, efp.risk_level_10d,
+                          efp.prob_30d, efp.risk_level_30d,
+                          efp.prob_60d, efp.risk_level_60d,
+                          efp.equipment_id, e.category
+                   FROM equipment_failure_predictions efp
+                   JOIN equipment e ON e.id = efp.equipment_id
+                   WHERE efp.id = (
+                       SELECT i.id FROM equipment_failure_predictions i
+                       WHERE i.equipment_id = efp.equipment_id
                        ORDER BY i.predicted_at DESC, i.id DESC
                        LIMIT 1
                    )
-                   ORDER BY arp.equipment_id""",
+                   ORDER BY efp.equipment_id""",
                 engine
             )
+            # Bias drift is read on the 30d horizon (see check_bias_drift).
+            df_pred["failure_probability"] = df_pred["prob_30d"]
+            df_pred["risk_band"] = df_pred["risk_level_30d"]
 
             # Fleet size, to judge coverage rather than raw row count.
             fleet_size = int(pd.read_sql(
@@ -649,8 +686,8 @@ class DriftDetector:
                     features[feat] = [round(v, 6) for v in vals]
                     self.reference[feat] = np.array(features[feat])
 
-        # Prediction reference (use failure_probability as proxy for all horizons
-        # since DB only stores one prediction per equipment — treat as 30d canonical)
+        # Prediction reference: one distribution per horizon (see
+        # prediction_reference_by_horizon).
         #
         # Gated on fleet coverage: enough assets in absolute terms, and nearly
         # all of the fleet represented. A row-count gate of 20 could never be
@@ -666,23 +703,13 @@ class DriftDetector:
 
         pred_ref: dict[str, dict] = {}
         if pred_ref_ok:
-            scores = pd.to_numeric(df_pred["failure_probability"], errors="coerce").dropna().tolist()
-            n      = len(scores)
-            labels = df_pred["risk_band"].tolist()
-            pred_ref_entry = {
-                "scores":     [round(s, 6) for s in scores],
-                "high_pct":   round(sum(1 for lbl in labels if lbl == "HIGH")   / n, 4),
-                "medium_pct": round(sum(1 for lbl in labels if lbl == "MEDIUM") / n, 4),
-                "low_pct":    round(sum(1 for lbl in labels if lbl == "LOW")    / n, 4),
-            }
-            # Use same distribution as proxy for all horizons
-            for h in HORIZONS:
-                pred_ref[str(h)] = pred_ref_entry
-                self.pred_reference[h] = {
-                    "scores":     np.array(pred_ref_entry["scores"], dtype=float),
-                    "high_pct":   pred_ref_entry["high_pct"],
-                    "medium_pct": pred_ref_entry["medium_pct"],
-                    "low_pct":    pred_ref_entry["low_pct"],
+            pred_ref = prediction_reference_by_horizon(df_pred)
+            for h_str, entry in pred_ref.items():
+                self.pred_reference[int(h_str)] = {
+                    "scores":     np.array(entry["scores"], dtype=float),
+                    "high_pct":   entry["high_pct"],
+                    "medium_pct": entry["medium_pct"],
+                    "low_pct":    entry["low_pct"],
                 }
 
         # Bias reference — per-category HIGH%
