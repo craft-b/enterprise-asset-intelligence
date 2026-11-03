@@ -279,7 +279,10 @@ export default function AssetDetail() {
                 <span className="ml-2 inline-flex items-center gap-1 align-middle">
                   <TrendIcon trend={trend} />
                   <span className="text-xs">
-                    {trend === "INCREASING" ? "escalating without intervention" : "stable across horizons"}
+                    {/* INCREASING means p60 - p10 > 0.10, which a repair can leave
+                        true, so "escalating without intervention" read wrong
+                        right after one was logged. */}
+                    {trend === "INCREASING" ? "climbs sharply from 10 to 60 days" : "stable across horizons"}
                   </span>
                 </span>
               ) : null}
