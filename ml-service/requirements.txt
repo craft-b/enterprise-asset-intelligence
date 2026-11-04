@@ -21,7 +21,9 @@ pymysql==1.1.2
 mysql-connector-python==9.5.0
 
 # ── LLM Providers ─────────────────────────────────────────────────────────────
-groq==0.11.0
+# 0.11.0 passed `proxies` to httpx, which 0.28 removed: a fresh install (the
+# Cloud Run build) resolved httpx 0.28 and the client failed to construct.
+groq==1.7.0
 requests==2.32.3
 
 # ---- TLS ----------------------------------------------------------------
