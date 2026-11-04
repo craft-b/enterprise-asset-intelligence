@@ -62,7 +62,7 @@ import { scoreFleetMultiHorizon } from "./multi-horizon-scoring";
  * I argued this base rate was why the risk queue had no LOW row, reasoning
  * that a calibrated model centres its output on the rate it was trained on.
  * That is true of a model trained here, and nothing is: the demo always scores
- * with the v1.17 champion shipped in the ML image, trained offline on 10,828
+ * with the v2.0 champion shipped in the ML image, trained offline on 23,040
  * snapshots.
  *
  * At ten assets this seed produced about 230 labelled rows, under the
@@ -790,6 +790,10 @@ async function seedEquipment(cursorDate: Date) {
       const nextDue   = new Date(cursorDate.getTime() + 60 * 24 * 3600 * 1000)
         .toISOString().split("T")[0];
 
+      // A minor service, not an inspection: days_since_last_maintenance counts
+      // services (see feature-engineering-enhanced.ts), so a unit whose only
+      // history was an inspection would read as never serviced at all.
+      //
       // created_at is set to the event's own date, not the moment of seeding.
       //
       // The risk queue discounts a unit's displayed probability when
@@ -803,8 +807,8 @@ async function seedEquipment(cursorDate: Date) {
         INSERT INTO maintenance_events
           (equipment_id, maintenance_date, maintenance_type, event_source, cost, description, next_due_date, created_at)
         VALUES
-          (${eqId}, ${lastMaint}, 'INSPECTION', 'SCHEDULED_PM', 150.00,
-           ${'Pre-seed inspection — ' + e.category}, ${nextDue}, ${lastMaint + " 09:00:00"})
+          (${eqId}, ${lastMaint}, 'MINOR_SERVICE', 'SCHEDULED_PM', 320.00,
+           ${'Pre-seed service — ' + e.category}, ${nextDue}, ${lastMaint + " 09:00:00"})
       `);
     } catch (err) {
       // Only a duplicate is expected here; anything else is a real failure and
@@ -979,7 +983,7 @@ async function seedFailureEvents(
     //
     // It is NOT, as I first claimed, a fix for the missing LOW row. That
     // argument assumed the seeded labels set the model's calibration, and they
-    // set nothing -- the demo scores with a champion trained offline on 10,828
+    // set nothing -- the demo scores with a champion trained offline on 23,040
     // rows, because the data-quality gate refuses training below 500 labelled
     // rows and this seed makes a couple of hundred. Fewer breakdowns do lower
     // the scores a little, through features like maintenance_events_90d and

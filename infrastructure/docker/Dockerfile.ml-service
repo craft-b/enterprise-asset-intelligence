@@ -41,7 +41,7 @@ COPY ml-service/ .
 # requests from cloud egress addresses with 502 while the same URL fetches in
 # two seconds from a laptop. MODEL_BUNDLE_URL still works as an override.
 ARG MODEL_BUNDLE_URL=""
-ARG MODEL_BUNDLE_SHA256="2ac9c74f87ce7610229fdb9c31fbd9fef1a9c5439d0337d8615fc09cc3900ed4"
+ARG MODEL_BUNDLE_SHA256="6189d489f1bf23753972adc86b44381d835ca115c38fdf3eccb1e3ab8861ee4c"
 ARG SKIP_MODEL_BAKE=""
 RUN if [ -n "$SKIP_MODEL_BAKE" ]; then         echo '[BUILD] SKIP_MODEL_BAKE set - entrypoint will extract at startup';     else         MODEL_BUNDLE_FILE="$(find models -maxdepth 1 -name "*.tar.gz" | head -1)"         MODEL_BUNDLE_URL="$MODEL_BUNDLE_URL"         MODEL_BUNDLE_SHA256="$MODEL_BUNDLE_SHA256"         REGISTRY_DIR=/app/ml-service/registry         python fetch-models.py;     fi
 

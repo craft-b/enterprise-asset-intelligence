@@ -1,3 +1,5 @@
+import { RISK_BANDS } from "@shared/risk-bands";
+
 // ProjectionPoint inlined here to avoid a circular import with the dashboard page.
 interface ProjectionPoint { day: number; "10d": number; "30d": number; "60d": number; }
 
@@ -38,7 +40,7 @@ export function computeOptimalIntervention(
   const failureCost = dailyRate * FAILURE_DOWNTIME_DAYS;
   const breakEvenProbability = pmCost / failureCost;
 
-  const alreadyHighRisk = curve.length > 0 && curve[0]["60d"] >= 0.60;
+  const alreadyHighRisk = curve.length > 0 && curve[0]["60d"] >= RISK_BANDS[60].HIGH;
 
   // Walk the curve — find first day where P(60d) × failure_cost > pm_cost
   let optimalDay: number | null = null;

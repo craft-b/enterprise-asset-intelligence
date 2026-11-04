@@ -1,9 +1,10 @@
 {
-  "champion": "v1.17",
+  "champion": "v2.0",
   "challenger": null,
   "retired": [
     "v1.15",
-    "v1.16"
+    "v1.16",
+    "v1.17"
   ],
   "history": [
     {
@@ -35,6 +36,18 @@
       "new_champion": "v1.17",
       "old_champion": "v1.15",
       "timestamp": "2026-07-09T04:21:12.412151+00:00"
+    },
+    {
+      "event": "registered",
+      "version": "v2.0",
+      "role": "challenger",
+      "timestamp": "2026-11-04T18:51:31.220064+00:00"
+    },
+    {
+      "event": "promoted",
+      "new_champion": "v2.0",
+      "old_champion": "v1.17",
+      "timestamp": "2026-11-04T18:54:55.829603+00:00"
     }
   ]
 }

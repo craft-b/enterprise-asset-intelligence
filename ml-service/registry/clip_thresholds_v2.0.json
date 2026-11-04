@@ -1,0 +1,27 @@
+{
+  "clip_thresholds": {
+    "asset_age_years": 21.075000000000003,
+    "maintenance_events_90d": 7.5,
+    "days_since_last_maintenance": 1170.0,
+    "vendor_reliability_score": 1.4249999999999998,
+    "jobsite_risk_score": 0.44999999999999996,
+    "usage_trend": 1.5,
+    "wear_rate": 0.5041800000000017,
+    "aging_factor": 1.5,
+    "maint_overdue": 1.5,
+    "mechanical_wear_score": 15.0,
+    "neglect_score": 15.0,
+    "maint_frequency_trend": 4.43835,
+    "cost_trend": 12.7791,
+    "hours_velocity": 1.5,
+    "neglect_acceleration": 4.5,
+    "sensor_degradation_rate": 0.3498990000000005,
+    "category_encoded": 13.5,
+    "log_total_hours_lifetime": 14.643912303147433,
+    "log_maintenance_cost_180d": 14.399920596224835,
+    "log_cost_per_event": 13.38682874393713,
+    "log_maint_burden": 1.8835795202970589,
+    "log_mean_time_between_failures": 9.324909151627297
+  },
+  "version": "v2.0"
+}

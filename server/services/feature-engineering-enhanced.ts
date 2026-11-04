@@ -292,14 +292,29 @@ class EnhancedFeatureEngineeringService {
     const maintenanceCost180d = avgEventCost * Math.min(maint180.length, 12);
     const avgDowntimePerEvent = maint90.length > 0 ? 8 : 0;
 
-    // Days since last maintenance (as of the snapshot date, not "ever")
+    // Days since the last SERVICE (as of the snapshot date, not "ever").
+    //
+    // Inspections are excluded, as they are from the counts above. A yard
+    // inspects roughly monthly, so counting them held this near 30 days on
+    // every unit and maint_overdue at zero: the gap that actually decides
+    // condition -- since anything was last rebuilt or replaced -- never
+    // reached the model. An inspection finds problems; a service fixes them.
+    //
+    // Breakdown repairs are excluded too, though they are MAJOR_SERVICE rows.
+    // A repair fixes the failed part, not the unit's overall wear, and
+    // counting it meant the units that broke down most always looked the
+    // most recently serviced -- a confound that hid most of the effect of
+    // real service from the model. Repairs still count in the event and cost
+    // windows above, and in mean time between failures.
     const [lastMaint] = await db
       .select()
       .from(maintenanceEvents)
       .where(
         and(
           eq(maintenanceEvents.equipmentId, equipmentId),
-          sql`${maintenanceEvents.maintenanceDate} <= ${nowStr}`
+          sql`${maintenanceEvents.maintenanceDate} <= ${nowStr}`,
+          sql`${maintenanceEvents.maintenanceType} IN ('MAJOR_SERVICE', 'MINOR_SERVICE')`,
+          sql`${maintenanceEvents.eventSource} <> 'REACTIVE_REPAIR'`
         )
       )
       .orderBy(desc(maintenanceEvents.maintenanceDate))

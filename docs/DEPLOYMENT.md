@@ -140,7 +140,7 @@ over the `DB_*` vars and rewrites the TLS parameter into pymysql's spelling.
 ## 2. Model bundle
 
 Nothing to do — the champion bundle is committed at
-`ml-service/models/eai-models-v1.17.tar.gz` (16MB) and extracted into the image
+`ml-service/models/eai-models-v2.0.tar.gz` (50MB) and extracted into the image
 at build time.
 
 It used to be fetched from a GitHub release to keep artifacts out of git
@@ -355,7 +355,7 @@ The ML service (in Cloud Run's logs, or Render's for `eai-ml`) should report:
 [ENTRYPOINT] registry is empty — fetching model bundle
 [ENTRYPOINT] checksum verified
 [ENTRYPOINT] extracted 3 model files
-[STARTUP] Champion: v1.17
+[STARTUP] Champion: v2.0
 ```
 
 ## 6. Seed the demo data

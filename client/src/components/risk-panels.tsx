@@ -5,6 +5,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useState } from "react";
+import { RISK_BANDS } from "@shared/risk-bands";
 import { ChevronDown, ChevronRight, Loader2 } from "lucide-react";
 import {
   LineChart,
@@ -214,7 +215,8 @@ export function ProjectionSparkline({ equipmentId }: { equipmentId: number }) {
             {...CHART.tooltip}
           />
           {/* HIGH band threshold — the only semantic color on this plot */}
-          <ReferenceLine y={0.60} stroke={CHART.risk.high} strokeDasharray="3 3" strokeWidth={1} />
+          {/* The bands are per horizon; this is 60d's, the bold line. */}
+          <ReferenceLine y={RISK_BANDS[60].HIGH} stroke={CHART.risk.high} strokeDasharray="3 3" strokeWidth={1} />
           {/* Horizons are identities → fixed categorical order */}
           <Line type="monotone" dataKey="10d" stroke={CHART.categorical[0]} strokeWidth={1.5} dot={false} name="10d" />
           <Line type="monotone" dataKey="30d" stroke={CHART.categorical[1]} strokeWidth={1.5} dot={false} name="30d" />

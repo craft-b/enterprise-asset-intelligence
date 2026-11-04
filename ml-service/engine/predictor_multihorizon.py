@@ -24,9 +24,11 @@ HORIZONS = [10, 30, 60]
 # Monotonic enforcement (p10 ≤ p30 ≤ p60) guarantees risk levels are also
 # non-decreasing — no separate per-horizon compensation needed.
 RISK_THRESHOLDS = {
-    10: {"HIGH": 0.60, "MEDIUM": 0.30},
-    30: {"HIGH": 0.60, "MEDIUM": 0.30},
-    60: {"HIGH": 0.60, "MEDIUM": 0.30},
+    # Mirrors shared/risk-bands.ts, which explains the values;
+    # tests/test_risk_band_parity.py keeps the two in step.
+    10: {"HIGH": 0.20, "MEDIUM": 0.10},
+    30: {"HIGH": 0.45, "MEDIUM": 0.25},
+    60: {"HIGH": 0.70, "MEDIUM": 0.45},
 }
 
 # Confidence labels are derived from each loaded model's own holdout ROC-AUC
@@ -97,7 +99,12 @@ class MultiHorizonPredictor:
                     print(f"[MH-PREDICTOR] SHAP init failed for {h}d: {e}")
 
         # Use 30d model's feature names as canonical (all horizons share same features)
-        model_data_30 = joblib.load(sorted(REGISTRY.glob("rf_30d_*.pkl"), key=_version_key, reverse=True)[0])
+        # The 30d model that was actually loaded above -- a pinned version
+        # included. This re-globbed for the latest file, so a predictor pinned
+        # to an older champion reported the newest version's name.
+        path_30 = (REGISTRY / f"rf_30d_{self._pin_version}.pkl" if self._pin_version
+                   else sorted(REGISTRY.glob("rf_30d_*.pkl"), key=_version_key, reverse=True)[0])
+        model_data_30 = joblib.load(path_30)
         self.feature_names: list = model_data_30["feature_names"]
         self.version: str = model_data_30["version"]
 

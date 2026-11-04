@@ -141,8 +141,8 @@ this table went stale without anyone noticing.
 |---|---|---|
 | Multi-horizon forecasts | **60 assets** at 10 / 30 / 60 days | scoring run ran to completion |
 | Risk bands after scoring | **15 HIGH** of 60 | read off the risk queue |
-| Model serving | **v1.17**, `model_loaded: true` | `GET /health`, unauthenticated |
-| Model label on the dashboard | **`ml-v1.17`** | was wrongly `rule-based`; fixed in `4342e72` |
+| Model serving | **v2.0**, `model_loaded: true` | `GET /health`, unauthenticated |
+| Model label on the dashboard | **`ml-v2.0`** | was wrongly `rule-based`; fixed in `4342e72` |
 | Drift batch size | **batch of 60** | drift card header, after `a2bb7c4` |
 | Drift monitors | all three populated | first run to clear `MIN_BATCH_SIZE = 20` |
 | Cold-start banner | clears unaided at **~70s** | after `7a67e5c` |
@@ -156,7 +156,7 @@ this table went stale without anyone noticing.
 | Risk bands | **14 HIGH / 27 MEDIUM / 19 LOW** | — |
 | Rentals / invoices / swaps | **15 / 10 / 2** | 15 / 10 / 2 |
 | Job sites / vendors | **6 / 4** | 6 / 4 |
-| Model metrics | **dataset_size 10,828**, 3 horizons, 2 CV splits | v1.17, 96 rows, dataset_size 10,828 |
+| Model metrics | **dataset_size 23,040**, 3 horizons, 2 CV splits | v2.0, dataset_size 23,040 |
 
 Two things the pass could not read, and they come out of this table rather than
 being guessed at: the **metrics row count**, which the Model Performance page
@@ -175,11 +175,12 @@ features are degenerate for them. This is invisible on screen — the asset
 History card merges maintenance with rentals and maintenance *did* scale — so
 nothing looks wrong. See `docs/ML_KNOWN_WORK.md`.
 
-`dataset_size` is also unchanged at 10,828, which means the champion was trained
-on the ten-asset seed and is scoring sixty assets. That is defensible and the
-by-asset CV split on the same page is the evidence for it — the model is tested
-against machines it has never seen. It is worth saying out loud before someone
-works it out.
+`dataset_size` is 23,040, and none of it is the demo seed: the v2.0 champion
+was trained on a separate simulated history of 160 units over three years
+(`scripts/generate-training-history.ts`) and is scoring the sixty-unit yard.
+That is defensible and the by-asset CV split on the same page is the evidence
+for it -- the model is tested against machines it has never seen. It is worth
+saying out loud before someone works it out.
 
 ---
 
@@ -201,7 +202,7 @@ works it out.
   Also a recommendation string, which is the deterministic template, not an LLM.
 - **Rentals** — 15 rentals, 2 swaps, same-category. Covers only the first ten
   assets; see the note under section 2.
-- **Model page** — v1.17, Training Dataset Size **10,828**, metrics across
+- **Model page** — v2.0, Training Dataset Size **23,040**, metrics across
   three horizons and two CV splits (temporal and by-asset).
 - **ML dashboard** — all three drift monitors should now carry readings, and
   each alerting card should explain why it is alerting. See section 4 before

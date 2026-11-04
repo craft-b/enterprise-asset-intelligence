@@ -372,10 +372,10 @@ describe("the sensor seed's query count", () => {
 });
 
 describe("seeded maintenance is dated honestly", () => {
-  // The risk queue discounts a unit's displayed probability when maintenance
-  // was logged in the last 24 hours (x0.75 major, x0.87 minor, x0.95
-  // inspection). That is a real feature: log a repair during a session and
-  // watch the risk fall.
+  // The risk queue used to discount a unit's displayed probability when
+  // maintenance was logged in the last 24 hours, keyed on created_at. The
+  // discount is gone (the model responds to service itself), but created_at
+  // still says when a record was entered and should not lie.
   //
   // Seeded history let created_at default to now, so a January inspection
   // looked like it had just been entered. Six units came out 25% below what
@@ -384,7 +384,7 @@ describe("seeded maintenance is dated honestly", () => {
   // thing this project cannot afford to do.
   const SRC = readFileSync(join(__dirname, "seed-orchestrator.ts"), "utf-8");
 
-  it("sets created_at on the pre-seed inspection", () => {
+  it("sets created_at on the pre-seed service", () => {
     const stmt = SRC.match(/INSERT INTO maintenance_events[\s\S]*?'SCHEDULED_PM'[\s\S]*?`\);/)![0];
     expect(stmt).toMatch(/created_at/);
     expect(stmt).toMatch(/lastMaint \+ " 09:00:00"/);
@@ -402,7 +402,7 @@ describe("seeded maintenance is dated honestly", () => {
     expect(inserts.length).toBeGreaterThanOrEqual(2);
     for (const stmt of inserts) {
       expect(stmt, "a seeded maintenance row without created_at defaults to " +
-        "now and trips the post-maintenance discount").toMatch(/created_at/);
+        "to now and claims it was just entered").toMatch(/created_at/);
     }
   });
 });

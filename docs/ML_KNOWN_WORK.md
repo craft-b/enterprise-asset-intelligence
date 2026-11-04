@@ -2,7 +2,7 @@
 
 Defects found in the feature set that are real, understood, and deliberately
 not fixed yet. Each one needs a retrain, which is a scored change — the
-champion is v1.17 and its metrics are recorded against the current columns.
+champion is v2.0 and its metrics are recorded against the current columns.
 
 Written down rather than quietly carried, because an unlisted problem is
 indistinguishable from an unnoticed one.

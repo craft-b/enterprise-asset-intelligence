@@ -228,7 +228,7 @@ describe("the committed bundle matches its pinned checksum", () => {
     // without updating the ARG would otherwise fail inside a Docker build --
     // the slowest, least informative place to discover it, and on the compose
     // path, one nobody runs.
-    const bundle = readFileSync(join(ROOT, "ml-service", "models", "eai-models-v1.17.tar.gz"));
+    const bundle = readFileSync(join(ROOT, "ml-service", "models", "eai-models-v2.0.tar.gz"));
     const actual = createHash("sha256").update(bundle).digest("hex");
     expect(actual).toBe(shaArg(ML_PROD));
   });

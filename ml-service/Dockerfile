@@ -28,7 +28,7 @@ COPY . .
 # MODEL_BUNDLE_URL still works as a fallback for a build without the bundle,
 # and the entrypoint still fetches at startup if the registry ends up empty.
 ARG MODEL_BUNDLE_URL=""
-ARG MODEL_BUNDLE_SHA256="2ac9c74f87ce7610229fdb9c31fbd9fef1a9c5439d0337d8615fc09cc3900ed4"
+ARG MODEL_BUNDLE_SHA256="6189d489f1bf23753972adc86b44381d835ca115c38fdf3eccb1e3ab8861ee4c"
 ARG SKIP_MODEL_BAKE=""
 RUN if [ -n "$SKIP_MODEL_BAKE" ]; then \
         echo '[BUILD] SKIP_MODEL_BAKE set - entrypoint will fetch at startup'; \

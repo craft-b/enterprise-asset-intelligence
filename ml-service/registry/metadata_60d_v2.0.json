@@ -1,0 +1,131 @@
+{
+  "version": "v2.0",
+  "horizon_days": 60,
+  "algorithm": "Random Forest (calibrated, isotonic)",
+  "trained_at": "2026-11-04T13:51:29.133326",
+  "data_source": "simulated",
+  "metrics_framing": "pipeline verification on synthetic data \u2014 pending real fleet labels",
+  "label_definition": "REACTIVE_REPAIR event in (ts, ts+horizon]; day-0 excluded; intervention-censored rows excluded (label_status)",
+  "embargo_days": 60,
+  "embargoed_rows": 1312,
+  "operator_metrics_temporal": {
+    "recall_failure_operating": 0.5756247259973696,
+    "precision_at_budget": 0.8299071618037136,
+    "lead_time_median_days": 56.0,
+    "lead_time_failures_flagged_pct": 0.7253521126760564,
+    "lead_time_failures_evaluable": 568,
+    "operating_threshold": 0.6,
+    "budget_fraction": 0.1
+  },
+  "by_asset": {
+    "roc_auc": 0.7175855679137003,
+    "pr_auc": 0.6753980317361816,
+    "positive_rate": 0.44427083333333334,
+    "n_evaluated": 23040,
+    "n_folds": 5,
+    "recall_failure_operating": 0.38892145369284875,
+    "precision_at_budget": 0.8038194444444444,
+    "lead_time_median_days": 56.0,
+    "lead_time_failures_flagged_pct": 0.5583075335397317,
+    "lead_time_failures_evaluable": 1938,
+    "operating_threshold": 0.6,
+    "budget_fraction": 0.1
+  },
+  "accuracy": 0.6697,
+  "train_accuracy": 0.9058,
+  "roc_auc": 0.7435,
+  "pr_auc": 0.7379,
+  "cv_roc_auc": "0.7359 \u00b1 0.0103",
+  "positive_rate": 0.4443,
+  "samples_train": 17120,
+  "samples_test": 4608,
+  "calibration": {
+    "brier": 0.2074,
+    "ece": 0.0481,
+    "ece_gate_passed": true,
+    "resampling": "none (class_weight=balanced)",
+    "reliability_curve": [
+      {
+        "mean_predicted": 0.0899,
+        "fraction_positive": 0.0
+      },
+      {
+        "mean_predicted": 0.1757,
+        "fraction_positive": 0.1667
+      },
+      {
+        "mean_predicted": 0.2562,
+        "fraction_positive": 0.2573
+      },
+      {
+        "mean_predicted": 0.351,
+        "fraction_positive": 0.33
+      },
+      {
+        "mean_predicted": 0.4478,
+        "fraction_positive": 0.3298
+      },
+      {
+        "mean_predicted": 0.5413,
+        "fraction_positive": 0.4665
+      },
+      {
+        "mean_predicted": 0.647,
+        "fraction_positive": 0.5916
+      },
+      {
+        "mean_predicted": 0.7452,
+        "fraction_positive": 0.7722
+      },
+      {
+        "mean_predicted": 0.8429,
+        "fraction_positive": 0.8176
+      },
+      {
+        "mean_predicted": 0.9246,
+        "fraction_positive": 0.9103
+      }
+    ]
+  },
+  "hyperparameters": {
+    "n_estimators": 200,
+    "max_depth": 12,
+    "min_samples_split": 5,
+    "min_samples_leaf": 3,
+    "max_features": "sqrt",
+    "class_weight": "balanced",
+    "calibration": "isotonic"
+  },
+  "confusion_matrix": {
+    "TN": 1383,
+    "FP": 944,
+    "FN": 578,
+    "TP": 1703
+  },
+  "per_class": {
+    "no_failure": {
+      "precision": 0.7053,
+      "recall": 0.5943,
+      "f1": 0.6451,
+      "support": 2327
+    },
+    "failure": {
+      "precision": 0.6434,
+      "recall": 0.7466,
+      "f1": 0.6912,
+      "support": 2281
+    }
+  },
+  "top_features": [
+    "log_total_hours_lifetime",
+    "asset_age_years",
+    "mechanical_wear_score",
+    "aging_factor",
+    "wear_rate_velocity",
+    "wear_rate",
+    "log_mean_time_between_failures",
+    "log_maintenance_cost_180d",
+    "log_maint_burden",
+    "days_since_last_maintenance"
+  ]
+}

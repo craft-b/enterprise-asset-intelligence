@@ -78,7 +78,7 @@ export function SwapEquipmentDialog({ open, onOpenChange, rental }: Props) {
               <SelectContent>
                 {availableEquipment?.map((eq) => (
                   <SelectItem key={eq.id} value={eq.id.toString()}>
-                    {eq.name} ({eq.category}) — ${eq.dailyRate}/day
+                    {eq.name} · {eq.equipmentId} ({eq.category}) — ${eq.dailyRate}/day
                   </SelectItem>
                 ))}
               </SelectContent>

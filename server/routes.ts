@@ -33,6 +33,8 @@ import { registerTestLogin } from "./test-login";
 import { getSimulationDate } from "./services/simulation-clock";
 import { scoreFleetMultiHorizon, toMlSnapshot } from "./services/multi-horizon-scoring";
 import { IMPUTATION_DEFAULTS, isColdStart, coldStartMultiHorizon } from "./services/imputation";
+import { riskBand } from "@shared/risk-bands";
+import { conditionFromHistory, dailyFailureProbability, type ServiceKind } from "./services/failure-hazard";
 
 declare module "express-session" {
   interface SessionData {
@@ -257,48 +259,45 @@ export async function registerRoutes(
           const purchaseDate  = equip.purchaseDate ? new Date(equip.purchaseDate) : new Date('2020-01-01');
           const ageYears      = (cursorDate.getTime() - purchaseDate.getTime()) / (365.25 * 24 * 3600 * 1000);
 
+          // The hour meter, as the feature service reads it. Summing the sensor
+          // log gave a 9,800-hour crane the 180 days of readings it has.
           const [hoursRow] = await db.execute(sql`
-            SELECT COALESCE(SUM(operating_hours), 0) as total_hours
-            FROM sensor_data_logs
-            WHERE equipment_id = ${equip.id} AND timestamp <= ${dateStr}
+            SELECT current_mileage AS total_hours FROM equipment WHERE id = ${equip.id}
           `) as any;
           const totalHours = parseFloat(hoursRow[0]?.total_hours ?? 0);
 
-          const [maintRow] = await db.execute(sql`
-            SELECT MAX(maintenance_date) as last_maint
+          // Condition is replayed from the unit's service history, so a service
+          // logged in the app lowers the breakdown rate the simulator draws
+          // from -- the same process the champion was trained on
+          // (services/failure-hazard.ts).
+          const [maintRows] = await db.execute(sql`
+            SELECT maintenance_date, maintenance_type, event_source
             FROM maintenance_events
             WHERE equipment_id = ${equip.id} AND maintenance_date <= ${dateStr}
+              AND maintenance_type IN ('MAJOR_SERVICE', 'MINOR_SERVICE')
           `) as any;
-          const lastMaint      = maintRow[0]?.last_maint ? new Date(maintRow[0].last_maint) : purchaseDate;
-          const daysSinceMaint = (cursorDate.getTime() - lastMaint.getTime()) / (24 * 3600 * 1000);
-
-          // Weibull-inspired hazard function
-          const ageHazard     = Math.min(0.01 * Math.exp(0.55 * Math.max(0, ageYears - 1.5)), 0.25);
-          const hoursHazard   = Math.min(0.005 * Math.exp(0.0004 * Math.max(0, totalHours - 3000)), 0.20);
-          const neglectHazard = daysSinceMaint > 120
-            ? Math.min(0.002 * Math.pow(daysSinceMaint - 90, 1.4), 0.15)
-            : 0;
-
-          const dailyFailureProb = Math.min(ageHazard + hoursHazard + neglectHazard, 0.30);
-          const finalFailureProb = Math.min(dailyFailureProb * (isStressed ? 1.8 : 1.0), 0.35);
+          const condition = conditionFromHistory(
+            (maintRows as any[]).map(m => ({
+              date: new Date(m.maintenance_date),
+              kind: (m.event_source === "REACTIVE_REPAIR" ? "REPAIR" : m.maintenance_type) as ServiceKind,
+            })),
+            cursorDate,
+          );
+          const finalFailureProb = dailyFailureProbability(ageYears, totalHours, condition, isStressed);
 
           if (Math.random() < finalFailureProb) {
-            const rand = Math.random();
-            const type = rand < 0.15 ? "MAJOR_SERVICE" : rand < 0.70 ? "MINOR_SERVICE" : "INSPECTION";
-            const cost = type === "MAJOR_SERVICE"
-              ? parseFloat((800 + Math.random() * 1200).toFixed(2))
-              : type === "MINOR_SERVICE"
-              ? parseFloat((150 + Math.random() * 350).toFixed(2))
-              : parseFloat((80 + Math.random() * 120).toFixed(2));
-            const nextDueDays = type === "MAJOR_SERVICE" ? 180 : type === "MINOR_SERVICE" ? 90 : 60;
-            const nextDue     = new Date(cursorDate.getTime() + nextDueDays * 24 * 3600 * 1000).toISOString().split("T")[0];
+            // A breakdown, recorded as one. This used to pick a random type
+            // with the column default SCHEDULED_PM, so the simulator's own
+            // failures never became failure labels.
+            const cost    = parseFloat((800 + Math.random() * 1700).toFixed(2));
+            const nextDue = new Date(cursorDate.getTime() + 180 * 24 * 3600 * 1000).toISOString().split("T")[0];
 
             await db.execute(sql`
               INSERT INTO maintenance_events
-                (equipment_id, maintenance_date, maintenance_type, cost, description, next_due_date)
+                (equipment_id, maintenance_date, maintenance_type, event_source, cost, description, next_due_date)
               VALUES (
-                ${equip.id}, ${dateStr}, ${type}, ${cost},
-                ${`Simulated ${type.toLowerCase().replace(/_/g, " ")} — age ${ageYears.toFixed(1)}y / ${Math.round(totalHours)}h`},
+                ${equip.id}, ${dateStr}, 'MAJOR_SERVICE', 'REACTIVE_REPAIR', ${cost},
+                ${`Simulated breakdown repair — age ${ageYears.toFixed(1)}y / ${Math.round(totalHours)}h`},
                 ${nextDue}
               )
             `);
@@ -1243,11 +1242,6 @@ export async function registerRoutes(
 
   app.get('/api/risk-score/multi-horizon/latest', requireAuth, async (req, res) => {
     try {
-      const [stateRows] = await db.execute(sql`SELECT cursor_date FROM simulation_state WHERE id = 1`) as any;
-      const cursorStr: string = stateRows[0]?.cursor_date
-        ? String(stateRows[0].cursor_date).substring(0, 10)
-        : new Date().toISOString().split('T')[0];
-
       const [predRows] = await db.execute(sql`
         SELECT efp.*, e.name, e.equipment_id as equipment_code, e.category, e.status
         FROM equipment_failure_predictions efp
@@ -1261,79 +1255,28 @@ export async function registerRoutes(
       const rows: any[] = predRows || [];
       if (rows.length === 0) { res.json([]); return; }
 
-      // Get the BEST maintenance type logged by a user in the last 24h per equipment,
-      // within 30 sim-days of the cursor.  Using the best type (not just most recent)
-      // prevents oscillation when someone logs MINOR after MAJOR — the stronger
-      // MAJOR discount sticks for the rest of the session window.
-      const [maintRows] = await db.execute(sql`
-        SELECT
-          equipment_id,
-          CASE MAX(CASE maintenance_type
-                WHEN 'MAJOR_SERVICE' THEN 3
-                WHEN 'MINOR_SERVICE' THEN 2
-                ELSE 1
-               END)
-            WHEN 3 THEN 'MAJOR_SERVICE'
-            WHEN 2 THEN 'MINOR_SERVICE'
-            ELSE 'INSPECTION'
-          END AS best_type,
-          MIN(DATEDIFF(${cursorStr}, maintenance_date)) AS days_since
-        FROM maintenance_events
-        WHERE created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
-          AND DATEDIFF(${cursorStr}, maintenance_date) BETWEEN 0 AND 30
-        GROUP BY equipment_id
-      `) as any;
-
-      const maintMap = new Map<number, { type: string; days: number }>();
-      for (const m of (maintRows || [])) {
-        maintMap.set(Number(m.equipment_id), { type: m.best_type, days: Number(m.days_since) });
-      }
-
-      // Post-maintenance discount: reduce displayed probability to reflect that
-      // the maintenance event addresses neglect/scheduling risk.  Physical wear
-      // factors (age, hours) are unchanged, so we apply a partial reduction only.
-      const HIGH = 0.60, MED = 0.30;
-      const FACTORS: Record<string, number> = {
-        MAJOR_SERVICE: 0.75,
-        MINOR_SERVICE: 0.87,
-        INSPECTION:    0.95,
-      };
-      const band = (p: number) => p >= HIGH ? 'HIGH' : p >= MED ? 'MEDIUM' : 'LOW';
+      // The stored prediction, as the model made it. There used to be a
+      // display discount here -- x0.75 / 0.87 / 0.95 for a major service,
+      // minor service or inspection logged in the last 24 hours -- because the
+      // champion did not respond to maintenance and logging a repair otherwise
+      // moved nothing. The model now does (services/failure-hazard.ts), and a
+      // service logged in the app triggers a rescore, so the discount would
+      // count the same service twice.
 
       const result = rows.map((row: any) => {
-        const maint = maintMap.get(Number(row.equipment_id));
-
-        // Always enforce cumulative-probability monotonicity: P(fail≤10d) ≤ P(fail≤30d) ≤ P(fail≤60d)
+        // Cumulative-probability monotonicity: P(fail<=10d) <= P(fail<=30d) <= P(fail<=60d).
         // Stale DB rows may violate this if they were stored before monotonicity enforcement was added.
-        if (!maint) {
-          const p10 = parseFloat(row.prob_10d);
-          const p30 = Math.max(parseFloat(row.prob_30d), p10);
-          const p60 = Math.max(parseFloat(row.prob_60d), p30);
-          return {
-            ...row,
-            prob_10d:       p10.toFixed(4),
-            prob_30d:       p30.toFixed(4),
-            prob_60d:       p60.toFixed(4),
-            risk_level_10d: band(p10),
-            risk_level_30d: band(p30),
-            risk_level_60d: band(p60),
-            days_since_last_maint: null,
-          };
-        }
-
-        const f = FACTORS[maint.type] ?? 1.0;
-        const p10 = Math.max(0, parseFloat(row.prob_10d) * f);
-        const p30 = Math.max(Math.max(0, parseFloat(row.prob_30d) * f), p10);
-        const p60 = Math.max(Math.max(0, parseFloat(row.prob_60d) * f), p30);
+        const p10 = parseFloat(row.prob_10d);
+        const p30 = Math.max(parseFloat(row.prob_30d), p10);
+        const p60 = Math.max(parseFloat(row.prob_60d), p30);
         return {
           ...row,
           prob_10d:       p10.toFixed(4),
           prob_30d:       p30.toFixed(4),
           prob_60d:       p60.toFixed(4),
-          risk_level_10d: band(p10),
-          risk_level_30d: band(p30),
-          risk_level_60d: band(p60),
-          days_since_last_maint: maint.days,
+          risk_level_10d: riskBand(p10, 10),
+          risk_level_30d: riskBand(p30, 30),
+          risk_level_60d: riskBand(p60, 60),
         };
       });
 

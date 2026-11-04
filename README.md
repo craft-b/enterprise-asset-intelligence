@@ -78,114 +78,136 @@ React SPA (Vite, port 5173)
 
 ---
 
-## ML Models — v1.17
+## ML Models — v2.0
 
-> **⚠️ Data source: simulated, and the short-horizon metrics are saturated.**
->
-> Operational data comes from a fleet simulator whose failures are Bernoulli draws from a
-> closed-form hazard over three variables — asset age, lifetime hours, and days since
-> maintenance (`server/routes.ts`). The model receives all three directly, plus features
-> derived from them, plus counts and costs of prior draws from the same hazard. The learning
-> task is therefore to recover a known monotone function of its own inputs.
->
-> That caps how informative the AUC can be. Because labels are Bernoulli draws, even an oracle
-> that knows the exact probability cannot reach 1.0. `ml-service/analysis/bayes_ceiling.py`
-> computes that ceiling by reproducing the hazard verbatim:
->
-> | Horizon | Ceiling (oracle) | Reported | Reading |
-> |---|---|---|---|
-> | 10d | 0.84 – 0.92 | 0.9272 | inside the band — **saturated** |
-> | 30d | 0.86 – 0.95 | 0.8823 | inside the band — **saturated** |
-> | 60d | 0.87 – 0.95 | 0.8024 | below the band — headroom remains |
->
-> The ceiling is a range because the simulator's fleet risk spread is not recorded; the range
-> spans plausible spreads. Note that no model can beat an oracle, so 10d landing above the
-> baseline estimate means the assumed spread is too narrow, not that the model won.
->
-> **What this means.** At 10d and 30d the metric confirms the snapshot → label → train → serve
-> pipeline wires up correctly and *cannot distinguish a good model from an adequate one* — any
-> competent learner given these features lands in the same place, and tuning against those
-> numbers would mean nothing. The 60d model is the one with real headroom left, which is also
-> the horizon whose lead time is operationally useful.
->
-> Nothing here is field predictive performance. See
+> **⚠️ Data source: simulated.** Nothing here is field predictive performance. See
 > [docs/REAL_DATA_VALIDATION.md](docs/REAL_DATA_VALIDATION.md) for what has to happen before any
 > metric can be quoted as such.
->
-> ```bash
-> cd ml-service && python -m analysis.bayes_ceiling
-> ```
 
 Three separate binary classifiers, one per prediction horizon. Each is a Random Forest calibrated on
-the **real class prevalence** (no resampling — see calibration note below), trained on an embargoed
-temporal holdout split with TimeSeriesSplit cross-validation, plus a by-asset grouped evaluation
-(GroupKFold over equipment). One shared feature transform runs at train and serve time, and each
-model serves its own version-pinned preprocessing artifacts.
+the **real class prevalence** (no resampling), trained on an embargoed temporal holdout split, plus a
+by-asset grouped evaluation (GroupKFold over equipment). One shared feature transform runs at train
+and serve time, and each model serves its own version-pinned preprocessing artifacts.
 
-**Training data:** 10,828 observed-outcome snapshots · 31 features · 2024–2032 simulation timeline
-(45 rows censored for in-window predictive interventions, 630 horizon-censored). Labels derive only
-from `REACTIVE_REPAIR` breakdown events in `(ts, ts+h]` — scheduled PM and model-driven
-interventions are never counted as failures.
+### Why v2.0 exists: v1.17 could not see maintenance
 
-**v1.17 performance (simulated data):**
+Logging a service in the app did not move v1.17's score. The cause was the data, not the model. The
+simulator that generated its training set added an age term, an hours term and a "neglect" term and
+capped the sum. Neglect only switched on after 120 days without service, the age term alone reached
+the cap for a ten-year-old unit, and breakdown repairs were recorded as scheduled maintenance, so the
+simulator's own failures never became failure labels. In that data, service almost never changed
+whether a machine failed, and the model learned exactly that: `days_since_last_maintenance` carried
+**1.2%** of the 30-day model's importance and `maint_overdue` **0.04%**. It rated all 60 units in the
+demo yard HIGH at 60 days.
 
-| Horizon | Split | ROC-AUC | PR-AUC | Recall @ HIGH | Brier | ECE |
-|---|---|---|---|---|---|---|
-| 10d | temporal | 0.9272 | 0.8111 | 89.2% | 0.072 | 0.074 |
-| 10d | by-asset | 0.9602 | — | — | — | — |
-| 30d | temporal | 0.8823 | 0.8079 | 77.2% | 0.080 | **0.032** ✓ |
-| 30d | by-asset | 0.9335 | — | — | — | — |
-| 60d | temporal | 0.8024 | 0.7847 | 64.1% | 0.122 | 0.054 |
-| 60d | by-asset | 0.9030 | — | — | — | — |
+v2.0 replaces the data-generating process and retrains:
 
-*(v1.17 = v1.16 + the ML-12 config fix — `maintenance_config.recommended_interval_days` now
-actually drives `maint_overdue`/`neglect_score`. Both are low-importance features, so metrics are
-within noise of v1.16; the point is that train and serve now compute them identically.)*
+- **A hazard where maintenance is causal** ([`server/services/failure-hazard.ts`](server/services/failure-hazard.ts)).
+  Daily breakdown probability = *base(age, hours)* × *condition*. Condition worsens with use and is
+  restored by scheduled work: a major service most, a minor service some. An inspection restores
+  nothing (it finds problems, it does not fix them), and neither does a breakdown repair (it fixes
+  the failed part, not the unit's wear). One module drives both the training-history generator and
+  the in-app day simulator, so the model is scored on the physics it learned.
+- **A fleet with mixed maintenance habits.** [`scripts/generate-training-history.ts`](scripts/generate-training-history.ts)
+  simulates 160 units for ~3 years, each kept to a diligent, average or neglectful policy. Without
+  that spread, days-since-service carries no information however strongly it drives failure.
+  Snapshots are taken **in step with the simulation** through the same `enhancedFeatureService` the
+  API scores with (a backfill would read today's hour meter into old snapshots), then labelled with
+  the same `labelSnapshots()`. Seeded, so the dataset is reproducible.
+- **`days_since_last_maintenance` counts scheduled services only.** Counting monthly inspections
+  held it near 30 days on every unit, and counting breakdown repairs made the units that fail most
+  look the most recently serviced, a confound that hid most of the effect of service. The UI already
+  labelled the feature "Days since last service"; now it is.
 
-Recall @ HIGH = failure-class recall at the 0.60 HIGH-band operating threshold. ECE = expected
-calibration error (gate: < 0.05). The **temporal split** answers "same fleet, next quarter"; the
-**by-asset split** (every asset scored by a model that never saw it) answers "a new customer's fleet,
-day one". Precision@budget and lead-time (operator metrics) are on the ML dashboard per horizon.
+Observed 30-day failure rate in the v2.0 training set, by age and days since service, showing the
+signal the model now has to learn:
 
-**Calibration (ML-5) — before/after dropping SMOTE.** SMOTE was applied before the calibrator, so it
-fit on a ~50% synthetic prevalence and the emitted probability was systematically inflated. Measured
-on the holdout (mean predicted probability − actual failure rate):
+| Age | < 30 d | 30–90 d | 90–180 d | 180 d + |
+|---|---|---|---|---|
+| < 4 years | 7% | 12% | 17% | 15% |
+| 4–8 years | 9% | 15% | 19% | 25% |
+| 8 + years | 25% | 31% | 40% | 52% |
 
-| Horizon | Inflation before (SMOTE) | Inflation after (no SMOTE) | ECE before → after |
-|---|---|---|---|
-| 10d | +0.025 | +0.073 | 0.027 → 0.074 |
-| 30d | +0.085 | **+0.005** | 0.085 → **0.034** |
-| 60d | +0.066 | **−0.001** | 0.066 → 0.053 |
+**What logging a service does now** (one five-year-old generator, 150 days since service;
+`python -m analysis.maintenance_response v1.17 v2.0`):
 
-Dropping SMOTE eliminates the resampling-driven inflation at 30d/60d (the 30d probability goes from
-+8.5 points over-confident to essentially honest, and clears the ECE gate). The 10d row moves the
-other way: its calibrator is fit on the 41%-positive dev set but the 10d holdout is only 22% positive
-(the aging fleet shifts prevalence across the temporal boundary), so residual over-prediction there is
-distribution shift, not resampling — the by-asset and CV numbers are the fairer read for 10d.
+| Scenario | v1.17 10d / 30d / 60d | v2.0 10d / 30d / 60d |
+|---|---|---|
+| As is | 36% / 69% / 81% | 12% / 30% / 56% |
+| After an inspection | 36% / 69% / 81% | 12% / 30% / 56% |
+| After a minor service | 27% / 57% / **81%** | **5% / 15% / 36%** |
+| After a major service | 25% / 54% / **81%** | **5% / 15% / 36%** |
 
-**Honest observations these numbers surface:**
+End to end on the local stack, logging a major service on the riskiest demo unit (EQ-011) moved it
+from 21% / 51% / 82% to 9% / 30% / 51% on the automatic rescore.
 
-- The 10d model's median lead time (~6 days) sits *below* the ~7-day PM scheduling latency — the
-  30d model (26-day median lead) is the operationally actionable horizon.
-- These metrics are substantially lower than the originally published v1.14 numbers
-  (e.g. 30d holdout ROC-AUC 0.9297 → 0.8728, CV 0.9853 → 0.9232). The v1.14 numbers were inflated by
-  three defects, all fixed from v1.15 on: feature windows unbounded by snapshot date (features could
-  see the label event — ML-1), no embargo at the holdout boundary (ML-3), and a training set where
-  52% of rows were snapshots of assets before they existed — trivially predictable filler (11,713 of
-  22,585 rows, removed in regeneration).
-- Positive rates (41–58%) are far above real fleet failure rates. That is the simulator's hazard
-  process, and one more reason none of this is quotable as field performance.
+### v2.0 performance (simulated data)
+
+**Training data:** 23,040 observed-outcome snapshots · 160 units · 31 features · 1,440 horizon-censored.
+Labels derive only from `REACTIVE_REPAIR` breakdown events in `(ts, ts+h]`; scheduled PM and
+model-driven interventions are never counted as failures.
+
+| Horizon | Split | ROC-AUC | PR-AUC | Brier | ECE |
+|---|---|---|---|---|---|
+| 10d | temporal | 0.706 | 0.251 | 0.105 | 0.009 ✓ |
+| 10d | by-asset | 0.711 | — | — | — |
+| 30d | temporal | 0.724 | 0.541 | 0.187 | 0.037 ✓ |
+| 30d | by-asset | 0.715 | — | — | — |
+| 60d | temporal | 0.744 | 0.738 | 0.207 | 0.048 ✓ |
+| 60d | by-asset | 0.718 | — | — | — |
+
+ECE = expected calibration error (gate: < 0.05). The **temporal split** answers "same fleet, next
+quarter"; the **by-asset split** (every asset scored by a model that never saw it) answers "a new
+customer's fleet, day one". Precision@budget and lead time are on the ML dashboard per horizon.
+
+**These AUCs are lower than v1.17's (0.80–0.93), and that is the right direction.** v1.17's task was
+mostly "read the age off the record", which is easy to score well on and useless for deciding when to
+service. `ml-service/analysis/bayes_ceiling.py` estimates what an oracle that knows each unit's true
+condition could reach on the new process: **0.75–0.79**. The model sees condition only through
+service history, so 0.71–0.74 is close to what the data allows.
+
+```bash
+cd ml-service && python -m analysis.bayes_ceiling
+```
+
+### Risk bands are per horizon
+
+The bands used to be 30% / 60% at every horizon. Once the model was calibrated, an honest 10-day
+probability almost never reached 60%, so the queue would show no HIGH units at 10d or 30d however bad
+a unit was. [`shared/risk-bands.ts`](shared/risk-bands.ts) now sets them per horizon (mirrored in the
+ML service, with a parity test): MEDIUM starts at the horizon's base rate across the training
+timeline, and HIGH is where the holdout's observed failure rate runs 1.6–2× the base rate.
+
+| Horizon | Base rate | MEDIUM ≥ | HIGH ≥ | Observed failure rate in HIGH (holdout) |
+|---|---|---|---|---|
+| 10d | 11% | 10% | 20% | 26% |
+| 30d | 27% | 25% | 45% | 56% |
+| 60d | 44% | 45% | 70% | 81% |
+
+The seeded demo yard scores 1 HIGH / 16 MEDIUM / 43 LOW at 30 days (v1.17: 30 HIGH / 30 MEDIUM).
+The 24-hour post-maintenance display discount the risk queue used to apply is gone: it existed
+because the model ignored service, and with a model that responds it would count the same service
+twice.
 
 **Evaluation methodology:** each horizon's holdout is a single **temporal** split (most recent ~20%
-of snapshots) with a per-horizon **embargo** — dev rows whose label window `[ts, ts+h]` crosses the
-holdout boundary are dropped (80/239/451 rows for 10/30/60d). 5-fold `TimeSeriesSplit` CV
-(gap = horizon days) runs on the dev portion for a variance estimate. The **by-asset** numbers are
-pooled out-of-fold predictions from `GroupKFold(5)` over `equipment_id`. Rows whose outcome window
-contains a `PREDICTIVE_INTERVENTION` before any failure are **censored** (`label_status`), not
-labeled negative — otherwise the model's own successes would poison its future labels.
+of snapshots) with a per-horizon **embargo**: dev rows whose label window `[ts, ts+h]` crosses the
+holdout boundary are dropped (192/672/1,312 rows for 10/30/60d). The **by-asset** numbers are pooled
+out-of-fold predictions from `GroupKFold(5)` over `equipment_id`. Rows whose outcome window contains a
+`PREDICTIVE_INTERVENTION` before any failure are **censored** (`label_status`), not labelled
+negative, because otherwise the model's own successes would poison its future labels.
 **Retrain triggers:** `monitor.py` polls `/api/agent/model-health` and auto-triggers retraining when
 any monitored feature's PSI reaches the ALERT threshold (≥ 0.20) or when prediction/bias drift
 crosses the same threshold; an admin can also trigger retraining manually via `POST /api/ml/train`.
+
+**Rebuilding the champion** (into an empty database of its own; the generator refuses one that
+already has equipment):
+
+```bash
+export DATABASE_URL=mysql://user:pass@localhost:3306/eai_training
+npx drizzle-kit migrate
+npx tsx scripts/generate-training-history.ts
+cd ml-service && python training/train_model_multihorizon.py
+```
 
 ---
 
@@ -207,7 +229,7 @@ log_mean_time_between_failures
 
 Seven skewed features are log-transformed at training and inference time. Derived columns (aging_factor, wear_rate, mechanical_wear_score, etc.) are recomputed fresh at inference rather than stored — avoids staleness from schema drift.
 
-> **⚠️ `sensor_degradation_rate` carried no information in v1.17.**
+> **⚠️ `sensor_degradation_rate` carried no information through v1.17.**
 >
 > The two queries that read `sensor_data_logs` used column names from a schema
 > that was replaced when Drizzle took ownership of DDL — `engine_temperature`
@@ -243,7 +265,7 @@ All four stages are triggerable from the admin panel in the UI (ADMINISTRATOR ro
 ```
 1. Generate Snapshots   →  Backfills feature vectors across full simulation timeline (7-day intervals)
 2. Label Snapshots      →  Marks 10d/30d/60d failure outcomes on each snapshot
-3. Retrain Models       →  Trains v1.17+ models, hot-swaps on completion (~3 min)
+3. Retrain Models       →  Trains new model versions, hot-swaps on completion (~3 min)
 4. Run Predictions      →  Scores all active fleet units with latest models
 ```
 
@@ -304,11 +326,11 @@ A discrete-event simulator advances a cursor date day by day:
 │   │   ├── test_data_quality.py       # all 8 DQ checks + report structure
 │   │   └── test_model_registry.py     # champion/challenger/promote/metrics (in-memory)
 │   └── registry/                  # Versioned model artifacts
-│       ├── rf_{h}d_v1.17.pkl
-│       ├── clip_thresholds_v1.17.json
-│       ├── feature_cols_v1.17.json
-│       ├── metadata_{h}d_v1.17.json
-│       └── feature_importance_{h}d_v1.17.json
+│       ├── rf_{h}d_v2.0.pkl
+│       ├── clip_thresholds_v2.0.json
+│       ├── feature_cols_v2.0.json
+│       ├── metadata_{h}d_v2.0.json
+│       └── feature_importance_{h}d_v2.0.json
 │
 ├── monitor.py                     # Local cron script — polls agent API, auto-triggers retrain; --loop mode
 ├── .github/workflows/ml-ci.yml   # CI: lint (ruff), ML smoke-test, typecheck (tsc), Node unit tests (vitest)
@@ -535,8 +557,8 @@ that gate — so the step now attempts a real training run rather than being tur
 away. On a 512MB instance it is expected to fail anyway, on memory rather than
 rows, partway through three 200-tree forests with SHAP loaded. Either way the
 fleet is
-scored by the v1.17 champion that ships inside the ML image — trained offline
-on 10,828 snapshots — and its metrics are copied into `model_metrics` so the ML
+scored by the v2.0 champion that ships inside the ML image — trained offline
+on 23,040 snapshots — and its metrics are copied into `model_metrics` so the ML
 dashboard shows what the system actually has. Nothing here is trained on the
 demo data, and the seed log says so rather than letting a green checkmark imply
 otherwise.
@@ -767,13 +789,18 @@ Storing derived columns (aging_factor, wear_rate, mechanical_wear_score) creates
 
 **How is the risk distribution shaped, and what was not done to shape it?**
 
+> *Written for v1.17 on the original ten-unit yard, with one 30% / 60% cut for every horizon.*
+> *Under v2.0 and per-horizon bands the sixty-unit yard scores 43 LOW / 16 MEDIUM / 1 HIGH at 30*
+> *days; see [ML Models](#ml-models--v20). The reasoning below about what does and does not set*
+> *the floor still holds.*
+
 A representative seeded run scores **1 LOW / 6 MEDIUM / 3 HIGH**, spanning 0.253 to 0.671.
 
 For a long time it scored no LOW rows at all, and the reason is worth recording because the obvious
 explanation was wrong. The LOW/MEDIUM cut sits at 0.30 and the 30-day model's test-split positive
 rate is 0.29, so LOW means *less likely to fail than a randomly chosen asset-period* — and it is
 tempting to conclude that the seeded label base rate is what sets the floor. It is not. The demo
-always scores with the v1.17 champion shipped in the ML service image, trained offline on 10,828
+always scores with the v2.0 champion shipped in the ML service image, trained offline on 23,040
 snapshots; a seed produces a couple of hundred labelled rows and the data-quality gate fails
 training below 500, so **the seeded labels never train anything**. They exist so the pipeline has a
 training set to display.
