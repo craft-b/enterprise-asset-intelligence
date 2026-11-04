@@ -9,7 +9,8 @@ from typing import Optional
 
 
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq").lower()
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+# llama-3.1-8b-instant was retired from Groq (404 model_not_found).
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 
@@ -87,13 +88,25 @@ def _call_groq(prompt: str) -> str:
         raise ValueError("GROQ_API_KEY not set in environment")
 
     client = Groq(api_key=api_key)
+    kwargs = {}
+    max_tokens = 300
+    if _is_reasoning_model(GROQ_MODEL):
+        # Reasoning tokens count against max_tokens: at 300 the model can spend
+        # the whole budget thinking and return empty content.
+        kwargs["reasoning_effort"] = "low"
+        max_tokens = 1500
     response = client.chat.completions.create(
         model=GROQ_MODEL,
         messages=[{"role": "user", "content": prompt}],
-        max_tokens=300,
+        max_tokens=max_tokens,
         temperature=0.3,   # low temp = consistent, professional tone
+        **kwargs,
     )
-    return response.choices[0].message.content.strip()
+    return (response.choices[0].message.content or "").strip()
+
+
+def _is_reasoning_model(model: str) -> bool:
+    return "gpt-oss" in model.lower()
 
 
 def _call_ollama(prompt: str) -> str:

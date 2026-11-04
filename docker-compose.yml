@@ -123,7 +123,7 @@ services:
       LLM_PROVIDER: ${LLM_PROVIDER:-groq}
       GROQ_API_KEY: ${GROQ_API_KEY}
       # llama3-8b-8192 is deprecated on Groq — default to the current model
-      GROQ_MODEL: ${GROQ_MODEL:-llama-3.1-8b-instant}
+      GROQ_MODEL: ${GROQ_MODEL:-openai/gpt-oss-20b}
       # LLM-1: recommendations are opt-in; off = deterministic template only
       GENAI_RECOMMENDATIONS: ${GENAI_RECOMMENDATIONS:-off}
       # Local stack: docs are useful here and nothing is exposed beyond the

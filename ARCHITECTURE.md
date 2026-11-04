@@ -472,7 +472,7 @@ The `modelStatus` field in `/api/ml/pipeline-status` uses alphabetic sort on reg
 | Monitoring | `monitor.py` cron script | Three-layer drift logging, auto-triggers retrain, Slack webhook alerts; `--loop` mode |
 | Simulation | Custom discrete-event engine, Weibull hazard function, fleet renewal | 2,900+ simulated days (2024–2032) |
 | Model Registry | Filesystem (pkl + json), glob-based version resolution | `ml-service/registry/` |
-| LLM | Groq (llama-3.1-8b-instant) | Maintenance recommendations |
+| LLM | Groq (openai/gpt-oss-20b) | Maintenance recommendations |
 
 ---
 

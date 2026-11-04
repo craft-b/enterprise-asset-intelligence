@@ -74,7 +74,7 @@ React SPA (Vite, port 5173)
 | Model Governance | Champion-challenger registry, shadow scoring, zero-downtime promotion |
 | Data Quality | 8-check pre-training gate (row count, balance, nulls, bounds, temporal spread) |
 | CI | GitHub Actions — lint (ruff), ML smoke-test, TypeScript typecheck (tsc), Node unit tests (vitest) |
-| LLM | Groq (llama-3.1-8b-instant) |
+| LLM | Groq (openai/gpt-oss-20b) |
 
 ---
 
@@ -559,7 +559,7 @@ pipeline, and generating predictions in the right order.
 | `SESSION_SECRET` | ✅ | Express session signing key, 32+ chars. Enforced at boot: with `NODE_ENV=production` the server exits if it is unset, too short, or still a placeholder. Outside production an unset value falls back to a random per-process secret, so logins do not survive a restart. |
 | `GROQ_API_KEY` | ✅ | Groq API key for LLM recommendations |
 | `AGENT_API_KEY` | ✅ | Bearer token for agent API (`/api/agent/*`). Generate: `python -c "import secrets; print(secrets.token_hex(32))"` |
-| `GROQ_MODEL` | — | Groq model ID (default: `llama-3.1-8b-instant`) |
+| `GROQ_MODEL` | — | Groq model ID (default: `openai/gpt-oss-20b`) |
 | `LLM_PROVIDER` | — | `groq` or `ollama` (default: `groq`) |
 | `MLFLOW_TRACKING_URI` | — | MLflow server URI. If unset, MLflow logging is skipped (safe no-op). |
 | `SLACK_WEBHOOK_URL` | — | Incoming webhook URL for `monitor.py` alerts. If unset, Slack notifications are silently skipped. |

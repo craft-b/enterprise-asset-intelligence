@@ -28,3 +28,27 @@ def test_enabled_with_a_key_reports_available(monkeypatch):
     monkeypatch.setattr(genai_advisor, "LLM_PROVIDER", "groq")
     monkeypatch.setenv("GROQ_API_KEY", "gsk_test")
     assert genai_advisor.is_available() is True
+
+
+def test_reasoning_models_get_room_to_answer(monkeypatch):
+    # gpt-oss counts reasoning tokens against max_tokens; at 300 the content
+    # came back empty. The call must lower effort and raise the budget.
+    groq = pytest.importorskip("groq")
+    sent = {}
+
+    class _Msg:
+        content = "Schedule an inspection of the hydraulic system within the week and keep the unit on light duty."
+
+    class _Resp:
+        choices = [type("C", (), {"message": _Msg()})()]
+
+    def fake_create(self, **kwargs):
+        sent.update(kwargs)
+        return _Resp()
+
+    monkeypatch.setenv("GROQ_API_KEY", "gsk_test")
+    monkeypatch.setattr(genai_advisor, "GROQ_MODEL", "openai/gpt-oss-20b")
+    monkeypatch.setattr(groq.resources.chat.completions.Completions, "create", fake_create)
+    assert genai_advisor._call_groq("prompt").startswith("Schedule")
+    assert sent["reasoning_effort"] == "low"
+    assert sent["max_tokens"] >= 1000
