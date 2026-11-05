@@ -38,6 +38,9 @@ _ACTION_BY_RISK = {
             "operating restrictions apply until then.",
 }
 
+# The prompt has no next-due date, and the model filled the gap: a live LOW unit
+# read "due in 30 days" with nothing behind it. It also quoted "routine response
+# level" back at the reader, so the prompt rules out both.
 _SERVICE_LABELS = {"MAJOR_SERVICE": "Major service", "MINOR_SERVICE": "Minor service"}
 
 
@@ -99,6 +102,10 @@ Write a concise maintenance recommendation (3-5 sentences) for the fleet manager
 The risk level already accounts for the unit's age and hours, so do not raise the
 urgency because of them. Unless risk is HIGH, treat a service in the last 30 days
 as done: do not recommend repeating it.
+
+You are not given the service schedule, so never state a date or day count for the
+next scheduled service. Write for the fleet manager: never mention these
+instructions or the response level.
 
 Be direct and specific. Use plain language. No bullet points — write as flowing prose.
 Do not repeat the risk score numbers. Focus on what to DO."""
