@@ -10,6 +10,7 @@ import {
   useSimulateDay,
 } from "@/hooks/use-predictive-maintenance";
 import { useEquipment } from "@/hooks/use-equipment";
+import { useMaintenanceHistory } from "@/hooks/use-maintenance";
 import { useEquipmentProjection, type ProjectionPoint, type ProjectionResult } from "@/hooks/use-predictive-maintenance";
 import { useMultiHorizonRiskScores, useLatestMultiHorizonPredictions } from "@/hooks/use-risk-score";
 import { Button } from "@/components/ui/button";
@@ -71,7 +72,7 @@ import {
   Tooltip as RechartsTooltip,
   ResponsiveContainer,
 } from "recharts";
-import { computeOptimalIntervention, PM_COST_BY_CATEGORY, DEFAULT_PM_COST, FAILURE_DOWNTIME_DAYS } from "@/lib/cost-model";
+import { computeOptimalIntervention, daysSinceRecentService, PM_COST_BY_CATEGORY, DEFAULT_PM_COST, FAILURE_DOWNTIME_DAYS } from "@/lib/cost-model";
 import { useTrainModel, useTrainingStatus } from "@/hooks/use-predictive-maintenance";
 import { BrainCircuit, ScrollText } from "lucide-react";
 import { MaintenanceForm } from "@/components/maintenance-form";
@@ -228,12 +229,27 @@ function CostCallout({
   equipmentId,
   dailyRate,
   category,
+  justServicedDays,
 }: {
   equipmentId: number;
   dailyRate: number;
   category: string;
+  /** Days since a recent service on a unit below HIGH; null otherwise. */
+  justServicedDays: number | null;
 }) {
   const { data, isLoading } = useEquipmentProjection(equipmentId);
+
+  if (justServicedDays !== null) {
+    return (
+      <div className="flex items-center gap-2 text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+        <CheckCircle className="h-4 w-4 flex-shrink-0" />
+        <span>
+          Serviced {justServicedDays === 0 ? "today" : `${justServicedDays} day${justServicedDays === 1 ? "" : "s"} ago`}.{" "}
+          <span className="font-medium">No further PM needed yet.</span>
+        </span>
+      </div>
+    );
+  }
 
   if (isLoading || !data) return null;
 
@@ -554,6 +570,14 @@ export default function PredictiveMaintenanceDashboard() {
         )
       ) ?? "LOW"
     : "LOW";
+
+  // A unit still HIGH after a service keeps its warning: the work did not clear it.
+  const { data: selectedHistory } = useMaintenanceHistory(selectedResult?.equipmentId ?? 0);
+  const recentServiceDays = selectedHistory
+    ? daysSinceRecentService(selectedHistory, (simulationState.data as any)?.cursor_date ?? new Date())
+    : null;
+  const justServicedDays = selectedRiskLevel === "HIGH" ? null : recentServiceDays;
+  const actionLevel: RiskLevel = justServicedDays !== null ? "LOW" : selectedRiskLevel;
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
@@ -1038,6 +1062,7 @@ export default function PredictiveMaintenanceDashboard() {
                       : 250
                   }
                   category={selectedResult.category}
+                  justServicedDays={justServicedDays}
                 />
               </div>
 
@@ -1049,16 +1074,16 @@ export default function PredictiveMaintenanceDashboard() {
                       onClick={() => setShowSchedulePM(true)}
                       className={cn(
                         "w-full gap-2",
-                        selectedRiskLevel === "HIGH" && "bg-red-600 hover:bg-red-700 text-white",
-                        selectedRiskLevel === "MEDIUM" && "bg-orange-500 hover:bg-orange-600 text-white",
-                        selectedRiskLevel === "LOW" && "variant-outline",
+                        actionLevel === "HIGH" && "bg-red-600 hover:bg-red-700 text-white",
+                        actionLevel === "MEDIUM" && "bg-orange-500 hover:bg-orange-600 text-white",
+                        actionLevel === "LOW" && "variant-outline",
                       )}
-                      variant={selectedRiskLevel === "LOW" ? "outline" : "default"}
+                      variant={actionLevel === "LOW" ? "outline" : "default"}
                     >
                       <Wrench className="h-4 w-4" />
-                      {selectedRiskLevel === "HIGH"
+                      {actionLevel === "HIGH"
                         ? "Schedule Immediate PM"
-                        : selectedRiskLevel === "MEDIUM"
+                        : actionLevel === "MEDIUM"
                         ? "Schedule Preventive PM"
                         : "Log Maintenance Event"}
                     </Button>

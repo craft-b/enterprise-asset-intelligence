@@ -76,6 +76,25 @@ def test_the_response_level_follows_the_band(level, expected):
     assert expected in _prompt(level)
 
 
+@pytest.mark.parametrize("level", ["LOW", "MEDIUM"])
+def test_a_recent_service_replaces_the_bands_timeframe(level):
+    # A MEDIUM crane serviced that day was told to book a service in two weeks.
+    prompt = _prompt(level, last_service_type="MAJOR_SERVICE", days_since_last_maintenance=1)
+    assert "Just serviced" in prompt
+    assert "within about two weeks" not in prompt
+
+
+def test_a_high_unit_is_still_told_to_act_after_a_service():
+    prompt = _prompt("HIGH", last_service_type="MAJOR_SERVICE", days_since_last_maintenance=1)
+    assert "Act now" in prompt
+    assert "Just serviced" not in prompt
+
+
+def test_an_older_service_keeps_the_bands_timeframe():
+    prompt = _prompt("MEDIUM", last_service_type="MINOR_SERVICE", days_since_last_maintenance=45)
+    assert "within about two weeks" in prompt
+
+
 def test_the_prompt_forbids_an_invented_due_date():
     prompt = _prompt("LOW")
     assert "never state a date or day count" in prompt

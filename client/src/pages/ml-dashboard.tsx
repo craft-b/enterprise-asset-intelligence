@@ -1520,7 +1520,7 @@ export default function MLPerformanceDashboard() {
                     ? "No holdout metrics recorded for this horizon."
                     : ok
                       ? `Catches most failures in the ${r.label} window at the current threshold; ${r.confusion.fn.toLocaleString()} missed on the holdout set.`
-                      : `Below the 70% operating target — ${r.confusion.fn.toLocaleString()} failures missed on the holdout set. Longer horizons are inherently harder; review threshold choice before acting on ${r.label} scores.`
+                      : `Below the 70% operating target at the 0.5 cutoff — ${r.confusion.fn.toLocaleString()} failures missed on the holdout set. Shorter windows carry lower probabilities, so few units reach that cutoff; the app's risk bands sit lower. Judge ${r.label} scores by ROC-AUC and calibration, not this recall.`
                   }
                 </div>
               </div>

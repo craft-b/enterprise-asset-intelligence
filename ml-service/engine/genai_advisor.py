@@ -38,6 +38,16 @@ _ACTION_BY_RISK = {
             "operating restrictions apply until then.",
 }
 
+# A MEDIUM unit fresh from a major service was told to book a service within two
+# weeks: the band's timeframe outranked a softer "do not repeat it" line. Below
+# HIGH, a recent service replaces the band's response level outright.
+_RECENT_SERVICE_DAYS = 30
+_RECENTLY_SERVICED = (
+    "Just serviced. That work is done, so do not book another service or "
+    "inspection. Name what to watch for in normal operation, and return the unit "
+    "to its regular schedule. No operating restrictions."
+)
+
 # The prompt has no next-due date, and the model filled the gap: a live LOW unit
 # read "due in 30 days" with nothing behind it. It also quoted "routine response
 # level" back at the reader, so the prompt rules out both.
@@ -67,6 +77,8 @@ def _build_prompt(snapshot: dict, prediction: dict, horizon_days: int = 30) -> s
     drivers_text = "\n".join(f"- {d}" for d in drivers) if drivers else "- No specific drivers flagged"
     action = _ACTION_BY_RISK.get(risk_level, _ACTION_BY_RISK["MEDIUM"])
     service_label = _SERVICE_LABELS.get(snapshot.get("last_service_type"))
+    if service_label and risk_level != "HIGH" and days_since_maint <= _RECENT_SERVICE_DAYS:
+        action = _RECENTLY_SERVICED
     service_line = (
         f"Last service: {service_label}, {int(days_since_maint)} days ago"
         if service_label else f"Days since last maintenance: {int(days_since_maint)} days"
@@ -100,8 +112,7 @@ Write a concise maintenance recommendation (3-5 sentences) for the fleet manager
 3. Any operational restrictions if risk is HIGH
 
 The risk level already accounts for the unit's age and hours, so do not raise the
-urgency because of them. Unless risk is HIGH, treat a service in the last 30 days
-as done: do not recommend repeating it.
+urgency because of them.
 
 You are not given the service schedule, so never state a date or day count for the
 next scheduled service. Write for the fleet manager: never mention these
