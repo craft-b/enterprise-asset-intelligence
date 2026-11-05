@@ -135,27 +135,17 @@ export function useCreateMaintenance() {
       queryClient.invalidateQueries({ queryKey: [api.equipment.list.path] });
       queryClient.invalidateQueries({ queryKey: ['/api/maintenance/due-soon'] });
 
-      // Trigger an explicit ML rescore for this equipment so predictions reflect
-      // the new maintenance event (days_since_last_maintenance resets → lower risk).
-      // Invalidate prediction caches only after the rescore is stored in DB.
-      fetch('/api/risk-score/multi-horizon/batch', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ equipmentIds: [variables.equipmentId] }),
-      }).then(() => {
-        queryClient.invalidateQueries({ queryKey: ["/api/risk-score/multi-horizon/latest"] });
-        queryClient.invalidateQueries({
-          queryKey: ["/api/equipment/:id/projection", variables.equipmentId],
-        });
-      }).catch(() => {
-        // ML service offline — still refresh so stale predictions are cleared
-        queryClient.invalidateQueries({ queryKey: ["/api/risk-score/multi-horizon/latest"] });
+      // The server rescored this unit before answering, so the new prediction
+      // is already stored. Do not rescore here through batch: batch never calls
+      // the LLM, and its newer row would replace the recommendation.
+      queryClient.invalidateQueries({ queryKey: ["/api/risk-score/multi-horizon/latest"] });
+      queryClient.invalidateQueries({
+        queryKey: ["/api/equipment/:id/projection", variables.equipmentId],
       });
 
       toast({
         title: "Maintenance logged",
-        description: "Risk scores will update shortly."
+        description: "Risk scores updated."
       });
     }
   });

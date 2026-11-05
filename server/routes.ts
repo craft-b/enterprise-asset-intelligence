@@ -1103,48 +1103,54 @@ export async function registerRoutes(
 
       const event = await storage.createMaintenanceEvent(input);
 
-      // Non-blocking multi-horizon rescore — fires after response is sent
-      setImmediate(async () => {
-        try {
-          const snapshotDate = await getSimulationDate();
-          const snapshot = await enhancedFeatureService.generateSnapshot(input.equipmentId, snapshotDate);
-          // Same clamped payload the batch path builds; one definition in
-          // services/multi-horizon-scoring.ts so the bounds cannot drift apart.
-          const payload = toMlSnapshot(input.equipmentId, snapshot);
+      // Rescore before answering, as the only writer for this event.
+      //
+      // This ran after the response, so the client could not tell when it had
+      // landed and followed up with its own batch rescore of the same unit.
+      // Batch never calls the LLM and the newest row wins, so the template
+      // overwrote the recommendation written here, with nothing in any log.
+      // Failure is still not fatal: the event is stored either way.
+      try {
+        const snapshotDate = await getSimulationDate();
+        const snapshot = await enhancedFeatureService.generateSnapshot(input.equipmentId, snapshotDate);
+        // Same clamped payload the batch path builds; one definition in
+        // services/multi-horizon-scoring.ts so the bounds cannot drift apart.
+        const payload = toMlSnapshot(input.equipmentId, snapshot);
 
-          const fastapiRes = await mlFetch('/predict/multi-horizon', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
+        const fastapiRes = await mlFetch('/predict/multi-horizon', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+
+        if (fastapiRes.ok) {
+          const pred = await fastapiRes.json();
+          const p = pred.predictions;
+          await db.insert(equipmentFailurePredictions).values({
+            equipmentId:    input.equipmentId,
+            modelVersion:   pred.model_version,
+            riskTrend:      pred.risk_trend,
+            prob10d:        p['10d'].failure_probability.toString(),
+            riskLevel10d:   p['10d'].risk_level,
+            prob30d:        p['30d'].failure_probability.toString(),
+            riskLevel30d:   p['30d'].risk_level,
+            prob60d:        p['60d'].failure_probability.toString(),
+            riskLevel60d:   p['60d'].risk_level,
+            topDrivers10d:  JSON.stringify(Object.keys(p['10d'].top_risk_drivers || {})),
+            topDrivers30d:  JSON.stringify(Object.keys(p['30d'].top_risk_drivers || {})),
+            topDrivers60d:  JSON.stringify(Object.keys(p['60d'].top_risk_drivers || {})),
+            shapAttribution10d: JSON.stringify(p['10d'].shap_attribution || {}),
+            shapAttribution30d: JSON.stringify(p['30d'].shap_attribution || {}),
+            shapAttribution60d: JSON.stringify(p['60d'].shap_attribution || {}),
+            recommendation: pred.recommendation,
           });
-
-          if (fastapiRes.ok) {
-            const pred = await fastapiRes.json();
-            const p = pred.predictions;
-            await db.insert(equipmentFailurePredictions).values({
-              equipmentId:    input.equipmentId,
-              modelVersion:   pred.model_version,
-              riskTrend:      pred.risk_trend,
-              prob10d:        p['10d'].failure_probability.toString(),
-              riskLevel10d:   p['10d'].risk_level,
-              prob30d:        p['30d'].failure_probability.toString(),
-              riskLevel30d:   p['30d'].risk_level,
-              prob60d:        p['60d'].failure_probability.toString(),
-              riskLevel60d:   p['60d'].risk_level,
-              topDrivers10d:  JSON.stringify(Object.keys(p['10d'].top_risk_drivers || {})),
-              topDrivers30d:  JSON.stringify(Object.keys(p['30d'].top_risk_drivers || {})),
-              topDrivers60d:  JSON.stringify(Object.keys(p['60d'].top_risk_drivers || {})),
-              shapAttribution10d: JSON.stringify(p['10d'].shap_attribution || {}),
-              shapAttribution30d: JSON.stringify(p['30d'].shap_attribution || {}),
-              shapAttribution60d: JSON.stringify(p['60d'].shap_attribution || {}),
-              recommendation: pred.recommendation,
-            });
-            console.log(`[MAINTENANCE] Risk rescore complete for EQ-${input.equipmentId}`);
-          }
-        } catch (e) {
-          console.warn(`[MAINTENANCE] Risk rescore failed for EQ-${input.equipmentId}:`, e);
+          console.log(`[MAINTENANCE] Risk rescore complete for EQ-${input.equipmentId} (${pred.recommendation_source ?? 'unknown'} recommendation)`);
+        } else {
+          console.warn(`[MAINTENANCE] Risk rescore refused for EQ-${input.equipmentId}: HTTP ${fastapiRes.status}`);
         }
-      });
+      } catch (e) {
+        console.warn(`[MAINTENANCE] Risk rescore failed for EQ-${input.equipmentId}:`, e);
+      }
 
       res.status(201).json(event);
     } catch (error) {

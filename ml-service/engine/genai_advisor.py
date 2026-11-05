@@ -102,7 +102,12 @@ def _call_groq(prompt: str) -> str:
         temperature=0.3,   # low temp = consistent, professional tone
         **kwargs,
     )
-    return (response.choices[0].message.content or "").strip()
+    choice = response.choices[0]
+    # The finish reason is what separates "ran out of tokens while reasoning"
+    # from a model that answered; an empty reply is otherwise invisible.
+    print(f"[ADVISOR] {GROQ_MODEL} finish_reason={choice.finish_reason} "
+          f"chars={len(choice.message.content or '')}")
+    return (choice.message.content or "").strip()
 
 
 def _is_reasoning_model(model: str) -> bool:
@@ -133,6 +138,7 @@ def _call_ollama(prompt: str) -> str:
 def _validate(text: Optional[str]) -> Optional[str]:
     """Reject empty / truncated / over-long output; trim to a sane bound."""
     if not text:
+        print("[ADVISOR] Provider returned empty content — discarding")
         return None
     text = text.strip()
     if len(text) < _MIN_RECOMMENDATION_CHARS:

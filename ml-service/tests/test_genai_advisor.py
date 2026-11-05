@@ -40,7 +40,7 @@ def test_reasoning_models_get_room_to_answer(monkeypatch):
         content = "Schedule an inspection of the hydraulic system within the week and keep the unit on light duty."
 
     class _Resp:
-        choices = [type("C", (), {"message": _Msg()})()]
+        choices = [type("C", (), {"message": _Msg(), "finish_reason": "stop"})()]
 
     def fake_create(self, **kwargs):
         sent.update(kwargs)
@@ -52,3 +52,9 @@ def test_reasoning_models_get_room_to_answer(monkeypatch):
     assert genai_advisor._call_groq("prompt").startswith("Schedule")
     assert sent["reasoning_effort"] == "low"
     assert sent["max_tokens"] >= 1000
+
+
+def test_an_empty_reply_is_logged_not_silent(capsys):
+    # The template fallback hid this: no exception, no log, just template text.
+    assert genai_advisor._validate("") is None
+    assert "empty content" in capsys.readouterr().out

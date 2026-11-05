@@ -95,19 +95,9 @@ function RiskCard({ equipmentId, prediction }: { equipmentId: number; prediction
       });
       if (!equipRes.ok) throw new Error('Failed to update equipment status');
 
-      // 3. Re-run ML prediction for this equipment so risk score reflects the
-      //    new maintenance event (days_since_last_maintenance resets → lower risk)
-      try {
-        await fetch('/api/risk-score/multi-horizon/batch', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({ equipmentIds: [equipmentId] }),
-        });
-      } catch {
-        // Non-fatal: ML service may be offline; risk will refresh on next prediction run
-      }
-
+      // 3. POST /api/maintenance has already rescored this unit by the time it
+      //    answers. Rescoring here through batch would replace that row with
+      //    template text, because batch never calls the LLM.
       await queryClient.invalidateQueries({ queryKey: ['/api/equipment'] });
       await queryClient.invalidateQueries({ queryKey: ['maintenance'] });
       await queryClient.invalidateQueries({ queryKey: ['/api/risk-score/multi-horizon/latest'] });
