@@ -33,6 +33,7 @@ export interface EnhancedFeatureSnapshot {
   maintenanceCost180d: number;
   avgDowntimePerEvent: number;
   daysSinceLastMaintenance: number | null;
+  lastServiceType?: string | null;
   meanTimeBetweenFailures: number | null;
 
   // Context
@@ -506,6 +507,7 @@ class EnhancedFeatureEngineeringService {
       maintenanceCost180d,
       avgDowntimePerEvent,
       daysSinceLastMaintenance,
+      lastServiceType: lastMaint?.maintenanceType ?? null,
       meanTimeBetweenFailures,
       vendorReliabilityScore,
       jobSiteRiskScore,

@@ -38,6 +38,8 @@ class SnapshotInput(BaseModel):
     maintenance_cost_180d: float = Field(..., ge=0)
     avg_downtime_per_event: float = Field(default=0.0, ge=0)
     days_since_last_maintenance: float = Field(default=999.0, ge=0)
+    # Context for the advisor's prompt only; not a model feature.
+    last_service_type: Optional[str] = None
     mean_time_between_failures: float = Field(default=500.0, ge=0)
 
     # Context scores

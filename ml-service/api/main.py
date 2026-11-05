@@ -24,7 +24,7 @@ from api.schemas.prediction import (
 
 from api.build_info import BUILD_COMMIT, BOOTED_AT, uptime_seconds
 from engine.genai_advisor import is_available, LLM_PROVIDER, generate_recommendation
-from engine.predictor_multihorizon import MultiHorizonPredictor
+from engine.predictor_multihorizon import MultiHorizonPredictor, worst_horizon
 from engine.projector import project as project_trajectory
 from engine.drift_detector import DriftDetector, MIN_BATCH_SIZE
 from engine.model_registry import (
@@ -217,7 +217,7 @@ def predict_multi_horizon(snapshot: SnapshotInput):
         # (never in batch). Falls back silently to the template on any failure.
         # Grounded in the worst horizon's structured facts.
         if is_available():
-            worst_key = max(result["predictions"], key=lambda k: result["predictions"][k]["failure_probability"])
+            worst_key = worst_horizon(result["predictions"])
             worst = result["predictions"][worst_key]
             llm_text = generate_recommendation(
                 snapshot_dict,

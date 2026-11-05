@@ -25,6 +25,22 @@ _MIN_RECOMMENDATION_CHARS = 40
 _MAX_RECOMMENDATION_CHARS = 1200
 
 
+# What each band asks of the fleet manager, matching the predictor's template.
+# The prompt used to ask for "urgency" without saying how much, so the model took
+# it from age and hours and called a full inspection urgent on a LOW unit that
+# had just been serviced.
+_ACTION_BY_RISK = {
+    "LOW": "Routine. Nothing is urgent: anything worth doing waits for the next "
+           "scheduled service. Set no earlier deadline and no operating restrictions.",
+    "MEDIUM": "Plan ahead. Book preventive service within about two weeks, before "
+              "the next long rental. No operating restrictions.",
+    "HIGH": "Act now. Service the unit before its next rental, and state what "
+            "operating restrictions apply until then.",
+}
+
+_SERVICE_LABELS = {"MAJOR_SERVICE": "Major service", "MINOR_SERVICE": "Minor service"}
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # PROMPT BUILDER
 # Structured context → prompt. Keeping this separate from the API call makes
@@ -46,6 +62,12 @@ def _build_prompt(snapshot: dict, prediction: dict, horizon_days: int = 30) -> s
     maint_cost = snapshot.get("maintenance_cost_180d", 0)
 
     drivers_text = "\n".join(f"- {d}" for d in drivers) if drivers else "- No specific drivers flagged"
+    action = _ACTION_BY_RISK.get(risk_level, _ACTION_BY_RISK["MEDIUM"])
+    service_label = _SERVICE_LABELS.get(snapshot.get("last_service_type"))
+    service_line = (
+        f"Last service: {service_label}, {int(days_since_maint)} days ago"
+        if service_label else f"Days since last maintenance: {int(days_since_maint)} days"
+    )
 
     return f"""You are a senior maintenance engineer advising a construction equipment rental company.
 
@@ -53,7 +75,7 @@ EQUIPMENT PROFILE:
 - Type: {category}
 - Age: {age:.1f} years
 - Lifetime hours: {int(hours):,} hrs
-- Days since last maintenance: {int(days_since_maint)} days
+- {service_line}
 - Usage intensity: {intensity:.1f} hrs/day
 
 RISK ASSESSMENT:
@@ -67,10 +89,16 @@ RISK ASSESSMENT:
 KEY RISK DRIVERS:
 {drivers_text}
 
+REQUIRED RESPONSE LEVEL: {action}
+
 Write a concise maintenance recommendation (3-5 sentences) for the fleet manager. Include:
-1. Urgency and recommended action timeframe
+1. The timeframe from the required response level above
 2. What to inspect or service specifically, given the risk drivers above
 3. Any operational restrictions if risk is HIGH
+
+The risk level already accounts for the unit's age and hours, so do not raise the
+urgency because of them. Unless risk is HIGH, treat a service in the last 30 days
+as done: do not recommend repeating it.
 
 Be direct and specific. Use plain language. No bullet points — write as flowing prose.
 Do not repeat the risk score numbers. Focus on what to DO."""

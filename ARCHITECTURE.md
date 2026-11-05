@@ -222,7 +222,7 @@ The FastAPI predictor loads all three models at startup from the model registry 
 1. Features are clipped to training distribution bounds (prevents extrapolation artifacts)
 2. Each model returns a calibrated failure probability
 3. Risk level classified: HIGH ≥ 0.60, MEDIUM ≥ 0.30, LOW < 0.30
-4. Risk trend computed by comparing 10d → 30d → 60d probabilities
+4. Risk trend computed by comparing the 10d and 60d risk bands (raw probabilities always widen with the window)
 5. Top risk drivers extracted from feature importances
 
 ### Forward Projection

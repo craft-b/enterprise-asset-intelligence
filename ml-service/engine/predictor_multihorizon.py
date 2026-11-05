@@ -44,6 +44,39 @@ def _confidence_label(roc_auc: Optional[float]) -> str:
     return f"low (holdout ROC-AUC {roc_auc:.2f})"
 
 
+_RISK_RANK = {"LOW": 0, "MEDIUM": 1, "HIGH": 2}
+
+
+def risk_trend(predictions: dict) -> str:
+    """
+    INCREASING when the unit sits in a worse band at 60 days than at 10.
+
+    This compared p60 - p10 against 0.10, but the probabilities are cumulative:
+    the 60-day window holds the 10-day one, so the gap is wide on any unit. All
+    60 demo units came back INCREASING, including ones LOW at every horizon.
+    The bands already allow for window length, so comparing them asks whether
+    the risk is getting worse rather than whether the window got longer.
+
+    DECREASING stays unused: a longer window cannot lower the risk.
+    """
+    near = _RISK_RANK[predictions["10d"]["risk_level"]]
+    far = _RISK_RANK[predictions["60d"]["risk_level"]]
+    return "INCREASING" if far > near else "STABLE"
+
+
+def worst_horizon(predictions: dict) -> str:
+    """
+    The horizon in the worst band, then the highest probability among those.
+
+    Probability alone always picks 60d, which hides a unit that is HIGH at 10
+    days but only MEDIUM at 60 under the per-horizon cutoffs.
+    """
+    return max(
+        predictions,
+        key=lambda k: (_RISK_RANK[predictions[k]["risk_level"]], predictions[k]["failure_probability"]),
+    )
+
+
 class MultiHorizonPredictor:
     """
     Loads all three horizon models at startup.
@@ -252,26 +285,14 @@ class MultiHorizonPredictor:
 
             print(f"[MH] EQ-{snapshot['equipment_id']} {h}d: P={failure_prob:.3f} -> {risk_level}")
 
-        # ── Step 4: trend — how steeply does risk escalate without intervention?
-        # DECREASING is impossible for cumulative probabilities (p60 ≥ p10 always).
-        # INCREASING = notable escalation across the horizon span (equipment is
-        #              deteriorating — risk will be materially worse if untreated).
-        # STABLE     = flat curve (already high everywhere, or genuinely low risk).
-        delta = p60 - p10
-        if delta > 0.10:
-            trend = "INCREASING"
-        else:
-            trend = "STABLE"
+        # ── Step 4: trend and recommendation
+        trend = risk_trend(predictions)
 
-        # Recommendation based on worst horizon
-        worst_risk = max(
-            predictions.items(),
-            key=lambda x: x[1]["failure_probability"]
-        )
+        worst_key = worst_horizon(predictions)
         recommendation = self._generate_recommendation(
             snapshot,
-            worst_risk[1]["risk_level"],
-            worst_risk[0]
+            predictions[worst_key]["risk_level"],
+            worst_key
         )
 
         return {

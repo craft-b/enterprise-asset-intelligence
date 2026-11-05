@@ -54,6 +54,36 @@ def test_reasoning_models_get_room_to_answer(monkeypatch):
     assert sent["max_tokens"] >= 1000
 
 
+def _prompt(risk_level, **snapshot):
+    return genai_advisor._build_prompt(
+        snapshot, {"risk_level": risk_level, "failure_probability": 0.2}, horizon_days=60,
+    )
+
+
+def test_a_low_unit_is_not_asked_for_urgency():
+    # An old, just-serviced LOW unit got "urgent ... within the next 14 days".
+    low = _prompt("LOW", asset_age_years=9.0, total_hours_lifetime=14000)
+    assert "Nothing is urgent" in low
+    assert "Act now" not in low
+    assert "do not raise the\nurgency" in low
+
+
+@pytest.mark.parametrize("level,expected", [
+    ("MEDIUM", "within about two weeks"),
+    ("HIGH", "before its next rental"),
+])
+def test_the_response_level_follows_the_band(level, expected):
+    assert expected in _prompt(level)
+
+
+def test_the_prompt_names_the_last_service():
+    assert "Last service: Major service, 3 days ago" in _prompt(
+        "LOW", last_service_type="MAJOR_SERVICE", days_since_last_maintenance=3,
+    )
+    # A snapshot without the field still builds a prompt.
+    assert "Days since last maintenance: 40 days" in _prompt("LOW", days_since_last_maintenance=40)
+
+
 def test_an_empty_reply_is_logged_not_silent(capsys):
     # The template fallback hid this: no exception, no log, just template text.
     assert genai_advisor._validate("") is None

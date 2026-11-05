@@ -93,6 +93,9 @@ export function toMlSnapshot(equipmentId: number, snapshot: any) {
       0,
       safe(snapshot?.daysSinceLastMaintenance, IMPUTATION_DEFAULTS.days_since_last_maintenance),
     ),
+    // For the advisor's prompt; not a model feature. Omitted, not null, for a
+    // unit never serviced.
+    ...(snapshot?.lastServiceType ? { last_service_type: String(snapshot.lastServiceType) } : {}),
     mean_time_between_failures:  safe(snapshot?.meanTimeBetweenFailures, IMPUTATION_DEFAULTS.mean_time_between_failures),
     vendor_reliability_score:    safe(snapshot?.vendorReliabilityScore, 0.5),
     jobsite_risk_score:          safe(snapshot?.jobSiteRiskScore, 0.5),

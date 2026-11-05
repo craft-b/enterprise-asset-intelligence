@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from api.schemas.prediction import SnapshotInput
-from engine.predictor_multihorizon import MultiHorizonPredictor
+from engine.predictor_multihorizon import MultiHorizonPredictor, risk_trend, worst_horizon
 
 HORIZONS = [10, 30, 60]
 
@@ -189,6 +189,33 @@ class TestInference:
         result = predictor.predict_multi_horizon(low_risk_snapshot)
         assert "risk_trend" in result
         assert result["risk_trend"] in {"INCREASING", "STABLE"}
+
+
+class TestTrendAndWorstHorizon:
+    """Cumulative windows always widen, so neither may lean on raw probability."""
+
+    @staticmethod
+    def _preds(*rows):
+        return {
+            f"{h}d": {"risk_level": level, "failure_probability": p}
+            for h, (level, p) in zip(HORIZONS, rows)
+        }
+
+    def test_low_everywhere_is_stable_despite_a_wide_gap(self):
+        preds = self._preds(("LOW", 0.04), ("LOW", 0.10), ("LOW", 0.24))
+        assert risk_trend(preds) == "STABLE"
+
+    def test_a_worse_band_at_60_days_is_increasing(self):
+        preds = self._preds(("LOW", 0.09), ("MEDIUM", 0.30), ("MEDIUM", 0.50))
+        assert risk_trend(preds) == "INCREASING"
+
+    def test_the_worst_band_beats_the_highest_probability(self):
+        preds = self._preds(("HIGH", 0.21), ("MEDIUM", 0.40), ("MEDIUM", 0.60))
+        assert worst_horizon(preds) == "10d"
+
+    def test_within_one_band_the_highest_probability_wins(self):
+        preds = self._preds(("LOW", 0.04), ("LOW", 0.10), ("LOW", 0.24))
+        assert worst_horizon(preds) == "60d"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
