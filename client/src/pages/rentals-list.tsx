@@ -12,6 +12,7 @@ import {
   TableBody,
   TableCell,
   TableHead,
+  stickyActions,
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
@@ -159,7 +160,7 @@ export default function RentalsList() {
               <SortableTableHead sortKey="poNumber" sort={sort} onSort={onSort}>PO #</SortableTableHead>
               <SortableTableHead sortKey="buyRent" sort={sort} onSort={onSort}>Type</SortableTableHead>
               <SortableTableHead sortKey="status" sort={sort} onSort={onSort}>Status</SortableTableHead>
-              <TableHead className="text-right">Actions</TableHead>
+              <TableHead className={cn("text-right", stickyActions, "bg-slate-50")}>Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -236,7 +237,7 @@ export default function RentalsList() {
                       {rental.status}
                     </Badge>
                   </TableCell>
-                  <TableCell className="text-right">
+                  <TableCell className={cn("text-right", stickyActions)}>
                     <div className="flex justify-end gap-2">
                       <Button 
                         size="sm" 

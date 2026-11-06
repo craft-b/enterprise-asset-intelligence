@@ -13,6 +13,7 @@ import {
   TableBody,
   TableCell,
   TableHead,
+  stickyActions,
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
@@ -28,6 +29,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Plus, Edit, Trash2, Building2, MapPin, Mail } from "lucide-react";
 import { VendorForm } from "@/components/vendor-form";
+import { cn } from "@/lib/utils";
 
 export default function VendorsList() {
   const { user } = useAuth();
@@ -102,7 +104,7 @@ export default function VendorsList() {
               <SortableTableHead sortKey="address" sort={sort} onSort={onSort}>Location</SortableTableHead>
               <SortableTableHead sortKey="salesPerson" sort={sort} onSort={onSort}>Contact</SortableTableHead>
               <SortableTableHead sortKey="activeRentals" sort={sort} onSort={onSort}>Active Rentals</SortableTableHead>
-              {isAdmin && <TableHead className="text-right">Actions</TableHead>}
+              {isAdmin && <TableHead className={cn("text-right", stickyActions, "bg-slate-50")}>Actions</TableHead>}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -166,7 +168,7 @@ export default function VendorsList() {
                     </Badge>
                   </TableCell>
                   {isAdmin && (
-                    <TableCell className="text-right">
+                    <TableCell className={cn("text-right", stickyActions)}>
                       <div className="flex justify-end gap-2">
                         <Button
                           size="sm"

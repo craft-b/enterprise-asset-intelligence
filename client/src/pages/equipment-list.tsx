@@ -24,6 +24,7 @@ import {
   TableBody,
   TableCell,
   TableHead,
+  stickyActions,
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
@@ -198,7 +199,7 @@ export default function EquipmentList() {
               <SortableTableHead sortKey="risk" sort={sort} onSort={onSort}>Risk Level</SortableTableHead>
               <SortableTableHead sortKey="nextService" sort={sort} onSort={onSort}>Next Service</SortableTableHead>
               <SortableTableHead sortKey="dailyRate" sort={sort} onSort={onSort} align="right">Daily Rate</SortableTableHead>
-              {isAdmin && <TableHead className="text-right">Actions</TableHead>}
+              {isAdmin && <TableHead className={cn("text-right", stickyActions, "bg-slate-50")}>Actions</TableHead>}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -267,7 +268,7 @@ export default function EquipmentList() {
                   </TableCell>
                   <TableCell className="font-semibold">${equip.dailyRate}/day</TableCell>
                   {isAdmin && (
-                    <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                    <TableCell className={cn("text-right", stickyActions)} onClick={(e) => e.stopPropagation()}>
                       <div className="flex justify-end gap-2">
                         <Button
                           size="sm"

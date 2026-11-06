@@ -2,6 +2,10 @@ import * as React from "react"
 
 import { cn } from "@/lib/utils"
 
+// Keeps a row's action buttons on screen when a wide table scrolls sideways.
+const stickyActions =
+  "sticky right-0 z-10 bg-card [tr:hover_&]:bg-slate-50 shadow-[-8px_0_8px_-8px_rgba(15,23,42,0.2)] 2xl:shadow-none"
+
 const Table = React.forwardRef<
   HTMLTableElement,
   React.HTMLAttributes<HTMLTableElement>
@@ -106,6 +110,7 @@ const TableCaption = React.forwardRef<
 TableCaption.displayName = "TableCaption"
 
 export {
+  stickyActions,
   Table,
   TableHeader,
   TableBody,

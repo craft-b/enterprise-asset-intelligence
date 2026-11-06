@@ -32,6 +32,7 @@ import {
   TableBody,
   TableCell,
   TableHead,
+  stickyActions,
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
@@ -58,14 +59,14 @@ const PAGE_SIZE = 10;
 
 type SortKey = "maintenanceDate" | "maintenanceType" | "cost" | "nextDueDate" | "eventSource" | "performedBy";
 
-function MaintSortHead({ col, active, dir, onSort, children, align }: {
+function MaintSortHead({ col, active, dir, onSort, children, align, className }: {
   col: SortKey; active: SortKey; dir: "asc" | "desc";
-  onSort: (k: SortKey) => void; children: React.ReactNode; align?: "right";
+  onSort: (k: SortKey) => void; children: React.ReactNode; align?: "right"; className?: string;
 }) {
   const isActive = active === col;
   return (
     <TableHead
-      className={cn("cursor-pointer select-none whitespace-nowrap", align === "right" && "text-right")}
+      className={cn("cursor-pointer select-none whitespace-nowrap", align === "right" && "text-right", className)}
       onClick={() => onSort(col)}
     >
       <div className={cn("flex items-center gap-1", align === "right" && "justify-end")}>
@@ -344,12 +345,12 @@ export default function MaintenanceLog() {
                 <MaintSortHead col="maintenanceDate" active={sortBy} dir={sortDir} onSort={onSort}>Date</MaintSortHead>
                 <TableHead>Equipment</TableHead>
                 <MaintSortHead col="maintenanceType" active={sortBy} dir={sortDir} onSort={onSort}>Type</MaintSortHead>
-                <MaintSortHead col="eventSource" active={sortBy} dir={sortDir} onSort={onSort}>Source</MaintSortHead>
-                <TableHead>Description</TableHead>
-                <MaintSortHead col="performedBy" active={sortBy} dir={sortDir} onSort={onSort}>Performed By</MaintSortHead>
+                <MaintSortHead col="eventSource" active={sortBy} dir={sortDir} onSort={onSort} className="hidden xl:table-cell">Source</MaintSortHead>
+                <TableHead className="hidden xl:table-cell">Description</TableHead>
+                <MaintSortHead col="performedBy" active={sortBy} dir={sortDir} onSort={onSort} className="hidden 2xl:table-cell">Performed By</MaintSortHead>
                 <MaintSortHead col="cost" active={sortBy} dir={sortDir} onSort={onSort} align="right">Cost</MaintSortHead>
                 <MaintSortHead col="nextDueDate" active={sortBy} dir={sortDir} onSort={onSort}>Next Due</MaintSortHead>
-                {isAdmin && <TableHead className="w-24" />}
+                {isAdmin && <TableHead className={cn("w-24", stickyActions)} />}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -384,14 +385,14 @@ export default function MaintenanceLog() {
                           {formatMaintenanceType(event.maintenanceType)}
                         </Badge>
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="hidden xl:table-cell">
                         <span className="text-xs text-muted-foreground">
                           {event.eventSource
                             ? event.eventSource.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c: string) => c.toUpperCase())
                             : '-'}
                         </span>
                       </TableCell>
-                      <TableCell className="max-w-[200px]">
+                      <TableCell className="hidden max-w-[140px] xl:table-cell 2xl:max-w-[200px]">
                         {event.description ? (
                           <TooltipProvider delayDuration={200}>
                             <Tooltip>
@@ -412,7 +413,7 @@ export default function MaintenanceLog() {
                           <span className="text-sm text-muted-foreground">-</span>
                         )}
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="hidden 2xl:table-cell">
                         <div className="flex items-center gap-1 text-sm">
                           {event.performedBy ? (
                             <>
@@ -441,7 +442,7 @@ export default function MaintenanceLog() {
                         )}
                       </TableCell>
                       {isAdmin && (
-                        <TableCell className="whitespace-nowrap">
+                        <TableCell className={cn("whitespace-nowrap", stickyActions)}>
                           <div className="flex items-center justify-end gap-0.5">
                             <TooltipProvider delayDuration={300}>
                               <Tooltip>
