@@ -405,13 +405,13 @@ Authenticated with `Authorization: Bearer <AGENT_API_KEY>`. Designed for program
 ## Testing
 
 ```bash
-# Python — ml-service (193 tests: inference, training smoke test, point-in-time
+# Python — ml-service (276 tests: inference, training smoke test, point-in-time
 # correctness, leakage canaries, data-quality gate, model registry, drift reference)
 cd ml-service
 pytest tests/ -v
 
-# Node/TypeScript — server + shared client logic (54 files: 637 pass with no
-# database; 48 more need DATABASE_URL pointed at a live one and skip without it)
+# Node/TypeScript — server + shared client logic (77 files: 962 pass with no
+# database; 47 more need DATABASE_URL pointed at a live one and skip without it)
 npm test
 
 # TypeScript type-check
