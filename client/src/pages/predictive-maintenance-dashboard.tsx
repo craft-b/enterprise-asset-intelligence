@@ -10,7 +10,7 @@ import {
   useSimulateDay,
 } from "@/hooks/use-predictive-maintenance";
 import { useEquipment } from "@/hooks/use-equipment";
-import { useMaintenanceHistory } from "@/hooks/use-maintenance";
+import { useMaintenance, useMaintenanceHistory } from "@/hooks/use-maintenance";
 import { useEquipmentProjection, type ProjectionPoint, type ProjectionResult } from "@/hooks/use-predictive-maintenance";
 import { useMultiHorizonRiskScores, useLatestMultiHorizonPredictions } from "@/hooks/use-risk-score";
 import { Button } from "@/components/ui/button";
@@ -72,7 +72,7 @@ import {
   Tooltip as RechartsTooltip,
   ResponsiveContainer,
 } from "recharts";
-import { computeOptimalIntervention, daysSinceRecentService, PM_COST_BY_CATEGORY, DEFAULT_PM_COST, FAILURE_DOWNTIME_DAYS } from "@/lib/cost-model";
+import { computeOptimalIntervention, daysSinceRecentService, recentlyServicedIds, PM_COST_BY_CATEGORY, DEFAULT_PM_COST, FAILURE_DOWNTIME_DAYS } from "@/lib/cost-model";
 import { useTrainModel, useTrainingStatus } from "@/hooks/use-predictive-maintenance";
 import { BrainCircuit, ScrollText } from "lucide-react";
 import { MaintenanceForm } from "@/components/maintenance-form";
@@ -304,13 +304,24 @@ function CostCallout({
 function FleetCostSummaryCard({
   results,
   equipment,
+  asOf,
 }: {
   results: Array<MultiHorizonResult & { name: string; category: string; status: string }>;
   equipment: any[] | undefined;
+  asOf: string | Date;
 }) {
+  // Newest first, so 500 reaches well past the 30-day window on this fleet.
+  const { data: maintenance } = useMaintenance({ limit: 500 });
+  const serviced = recentlyServicedIds(maintenance?.events ?? [], asOf);
+  let justServiced = 0;
+
   const actionable = results.flatMap((r) => {
     const pred = r.predictions?.["60d"];
     if (!pred || pred.risk_level === "LOW") return [];
+    // Same rule as the unit's own callout: no saving is left in repeating the
+    // work, unless the unit is still HIGH after it.
+    const stillHigh = Object.values(r.predictions ?? {}).some((p: any) => p.risk_level === "HIGH");
+    if (serviced.has(r.equipmentId) && !stillHigh) { justServiced++; return []; }
     const equip = equipment?.find((e) => e.id === r.equipmentId);
     const dailyRate = equip?.dailyRate ? Number(equip.dailyRate) : 250;
     const category  = r.category ?? equip?.category ?? "";
@@ -323,6 +334,7 @@ function FleetCostSummaryCard({
 
   const totalSavings = actionable.reduce((s, a) => s + a.savings, 0);
   const highCount    = actionable.filter((a) => a.risk === "HIGH").length;
+  const justServicedNote = `${justServiced} recently serviced unit${justServiced === 1 ? "" : "s"} left out.`;
 
   if (actionable.length === 0) {
     return (
@@ -339,6 +351,9 @@ function FleetCostSummaryCard({
             <CheckCircle className="h-4 w-4" />
             No fleet interventions are economically justified at current risk levels.
           </div>
+          {justServiced > 0 && (
+            <div className="text-xs text-muted-foreground mt-2">{justServicedNote}</div>
+          )}
         </CardContent>
       </Card>
     );
@@ -390,6 +405,7 @@ function FleetCostSummaryCard({
         </div>
         <div className="text-xs text-muted-foreground">
           Formula: E[failure cost] = P(fail≤60d) × daily_rate × 7d. Intervene when E[failure] &gt; PM cost.
+          {justServiced > 0 && ` ${justServicedNote}`}
         </div>
       </CardContent>
     </Card>
@@ -780,7 +796,11 @@ export default function PredictiveMaintenanceDashboard() {
       {/* Cost model + feedback loop cards */}
       {sortedResults.length > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <FleetCostSummaryCard results={sortedResults} equipment={equipment} />
+          <FleetCostSummaryCard
+            results={sortedResults}
+            equipment={equipment}
+            asOf={(simulationState.data as any)?.cursor_date ?? new Date()}
+          />
           <FeedbackLoopCard />
         </div>
       )}

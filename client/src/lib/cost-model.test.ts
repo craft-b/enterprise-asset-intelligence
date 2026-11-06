@@ -1,13 +1,25 @@
 import { readFileSync } from "fs";
 import { join } from "path";
 import { describe, expect, it } from "vitest";
-import { daysSinceRecentService, RECENT_SERVICE_DAYS } from "./cost-model";
+import { daysSinceRecentService, recentlyServicedIds, RECENT_SERVICE_DAYS } from "./cost-model";
 
 // A crane serviced that morning was still told "Schedule PM by Day 0": the
 // projection cannot see a service, only the risk left after it.
 
 const event = (maintenanceDate: string, maintenanceType = "MAJOR_SERVICE", eventSource = "SCHEDULED_PM") =>
   ({ maintenanceDate, maintenanceType, eventSource });
+
+describe("recentlyServicedIds", () => {
+  it("names only the units with a recent service", () => {
+    const events = [
+      { ...event("2026-11-03"), equipmentId: 1 },
+      { ...event("2026-06-01"), equipmentId: 1 },
+      { ...event("2026-06-01"), equipmentId: 2 },
+      { ...event("2026-11-04", "INSPECTION"), equipmentId: 3 },
+    ];
+    expect([...recentlyServicedIds(events, "2026-11-05")]).toEqual([1]);
+  });
+});
 
 describe("daysSinceRecentService", () => {
   it("counts a service inside the window", () => {

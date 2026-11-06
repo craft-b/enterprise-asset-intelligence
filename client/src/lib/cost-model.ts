@@ -49,6 +49,18 @@ export function daysSinceRecentService(
   return latest <= RECENT_SERVICE_DAYS ? latest : null;
 }
 
+/** The units with a recent service, from a fleet-wide event list. */
+export function recentlyServicedIds(
+  events: Array<{ equipmentId: number; maintenanceDate: string | Date; maintenanceType: string; eventSource?: string | null }>,
+  asOf: string | Date,
+): Set<number> {
+  const byUnit = new Map<number, typeof events>();
+  for (const e of events) byUnit.set(e.equipmentId, [...(byUnit.get(e.equipmentId) ?? []), e]);
+  return new Set(
+    Array.from(byUnit).filter(([, unit]) => daysSinceRecentService(unit, asOf) !== null).map(([id]) => id),
+  );
+}
+
 export interface CostModelResult {
   optimalDay: number | null;       // day to intervene; null = already past or never crosses
   expectedSavings: number;         // failure_cost - pm_cost at optimal day
