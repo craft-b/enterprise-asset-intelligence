@@ -588,7 +588,7 @@ async function runSeedPipeline() {
       // but this path is no longer the cheap one it was.
       let registered = "";
       try {
-        const champion = await registerChampionMetrics();
+        const champion = (await registerChampionMetrics())!;
         registered =
           ` Registered ${champion.version} (trained ` +
           `${champion.trainedAt.toISOString().slice(0, 10)}, ` +

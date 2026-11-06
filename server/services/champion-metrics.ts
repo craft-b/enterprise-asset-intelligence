@@ -188,9 +188,11 @@ export function datasetSizeFrom(metricsByHorizon: Record<string, any>): number |
   return orZero(train) + orZero(test) + orZero(embargoed);
 }
 
-/** True when some model's metrics are already registered. */
-export async function hasRegisteredMetrics(): Promise<boolean> {
-  const [rows] = (await db.execute(sql`SELECT 1 FROM model_metrics LIMIT 1`)) as any;
+/** True when this version's metrics are already registered. */
+export async function hasRegisteredMetrics(version: string): Promise<boolean> {
+  const [rows] = (await db.execute(
+    sql`SELECT 1 FROM model_metrics WHERE model_version = ${version} LIMIT 1`,
+  )) as any;
   return (rows as any[]).length > 0;
 }
 
@@ -201,8 +203,13 @@ export async function hasRegisteredMetrics(): Promise<boolean> {
  * a seed twice does not double the table. The table has no unique key on
  * (version, horizon, split, metric), so this is done by delete-then-insert
  * rather than an upsert.
+ *
+ * With onlyIfMissing, a version already in the table is left alone and null
+ * comes back.
  */
-export async function registerChampionMetrics(): Promise<ChampionRegistration> {
+export async function registerChampionMetrics(
+  { onlyIfMissing = false }: { onlyIfMissing?: boolean } = {},
+): Promise<ChampionRegistration | null> {
   const res = await mlFetch("/models/multi-horizon/metrics");
   if (!res.ok) {
     throw new Error(
@@ -219,6 +226,7 @@ export async function registerChampionMetrics(): Promise<ChampionRegistration> {
     metricsByHorizon["10"]?.version ??
     metricsByHorizon["60"]?.version;
   if (!version) throw new Error("The ML service reported no model version");
+  if (onlyIfMissing && (await hasRegisteredMetrics(version))) return null;
 
   const rows = HORIZONS.flatMap(h => flattenHorizonMetadata(h, metricsByHorizon[String(h)]));
   if (rows.length === 0) {
@@ -243,16 +251,18 @@ export async function registerChampionMetrics(): Promise<ChampionRegistration> {
 }
 
 /**
- * Register the champion only if nothing is registered yet.
+ * Register the champion unless its own version is already registered.
  *
- * Called in the background at boot so a deployment that was seeded before this
- * existed heals on its next restart, without a reseed. Never throws: an empty
- * dashboard is a worse outcome than it was, not a reason to fail startup.
+ * Called in the background at boot so a deployment heals on its next restart,
+ * without a reseed. This checked for any rows at all, so a new champion never
+ * arrived on a deployment that already held the old one's: the live page showed
+ * v1.17's 0.88 AUC under a v2.0 champion. Never throws: an empty dashboard is a
+ * worse outcome than it was, not a reason to fail startup.
  */
 export async function registerChampionIfMissing(): Promise<void> {
   try {
-    if (await hasRegisteredMetrics()) return;
-    const result = await registerChampionMetrics();
+    const result = await registerChampionMetrics({ onlyIfMissing: true });
+    if (!result) return;
     console.log(
       `[CHAMPION] Registered ${result.version} from the ML service image — ` +
       `${result.rows} metric rows, trained ${result.trainedAt.toISOString().slice(0, 10)}`
