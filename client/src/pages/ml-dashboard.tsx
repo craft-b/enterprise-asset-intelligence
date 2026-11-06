@@ -765,36 +765,40 @@ function ChampionChallengerCard() {
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        {/* Version badges */}
-        <div className="grid grid-cols-[5rem_1fr_1fr_6rem] gap-2 items-center">
-          <span />
-          <div className="flex items-center gap-2 justify-center">
-            <Trophy className="h-4 w-4 text-risk-medium" />
-            <span className="font-semibold text-sm">{compare.champion.version ?? "—"}</span>
-            <Badge className="bg-yellow-100 text-yellow-800 border-yellow-300 text-xs">champion</Badge>
-          </div>
-          <div className="flex items-center gap-2 justify-center">
-            <Swords className="h-4 w-4 text-muted-foreground" />
-            <span className="font-semibold text-sm">{compare.challenger?.version ?? "—"}</span>
-            {compare.challenger ? (
-              <Badge className="bg-purple-100 text-purple-800 border-purple-300 text-xs">challenger</Badge>
-            ) : (
-              <span className="text-xs text-muted-foreground italic">no challenger</span>
-            )}
-          </div>
-          <div className="text-center text-xs text-muted-foreground font-medium">Δ ROC-AUC</div>
-        </div>
+        <div className="overflow-x-auto">
+          <div className="min-w-[640px] space-y-4">
+            {/* Version badges */}
+            <div className="grid grid-cols-[5rem_1fr_1fr_6rem] gap-2 items-center">
+              <span />
+              <div className="flex items-center gap-2 justify-center">
+                <Trophy className="h-4 w-4 text-risk-medium" />
+                <span className="font-semibold text-sm">{compare.champion.version ?? "—"}</span>
+                <Badge className="bg-yellow-100 text-yellow-800 border-yellow-300 text-xs">champion</Badge>
+              </div>
+              <div className="flex items-center gap-2 justify-center">
+                <Swords className="h-4 w-4 text-muted-foreground" />
+                <span className="font-semibold text-sm">{compare.challenger?.version ?? "—"}</span>
+                {compare.challenger ? (
+                  <Badge className="bg-purple-100 text-purple-800 border-purple-300 text-xs">challenger</Badge>
+                ) : (
+                  <span className="text-xs text-muted-foreground italic">no challenger</span>
+                )}
+              </div>
+              <div className="text-center text-xs text-muted-foreground font-medium">Δ ROC-AUC</div>
+            </div>
 
-        {/* Per-horizon rows */}
-        <div>
-          {horizons.map((h) => (
-            <HorizonRow
-              key={h}
-              horizon={h}
-              champ={compare.champion.metrics?.[h]}
-              chal={compare.challenger?.metrics?.[h]}
-            />
-          ))}
+            {/* Per-horizon rows */}
+            <div>
+              {horizons.map((h) => (
+                <HorizonRow
+                  key={h}
+                  horizon={h}
+                  champ={compare.champion.metrics?.[h]}
+                  chal={compare.challenger?.metrics?.[h]}
+                />
+              ))}
+            </div>
+          </div>
         </div>
 
         {/* History */}

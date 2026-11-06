@@ -42,7 +42,7 @@ export default function VendorsList() {
   const { sort, onSort, page, setPage, rows: pagedVendors, totalPages, total } = useTable(
     vendors,
     { defaultSortKey: "name", defaultDir: "asc",
-      getters: { "activeRentals": (v) => v._count?.rentals ?? 0 } }
+      getters: { "activeRentals": (v) => v._count?.activeRentals ?? 0 } }
   );
 
   const handleDelete = () => {
@@ -162,7 +162,7 @@ export default function VendorsList() {
                   </TableCell>
                   <TableCell>
                     <Badge variant="outline" className="bg-purple-50 text-purple-700 border-purple-200">
-                      {vendor._count?.rentals || 0} rentals
+                      {vendor._count?.activeRentals ?? 0} active
                     </Badge>
                   </TableCell>
                   {isAdmin && (

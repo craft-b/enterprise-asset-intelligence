@@ -13,6 +13,7 @@ import { validateMlServiceUrl, validateMlServiceGoogleKey, ML_AUTH_MODE } from "
 import bcrypt from "bcryptjs";
 import { maintenanceEvents, equipment, equipmentRiskScores, rentals, equipmentFailurePredictions, equipmentSwaps, users } from "@shared/schema";
 import { eq, desc, asc, count, sql, and, like } from "drizzle-orm";
+import type { z } from "zod";
 import { db, pool } from "./db";
 import { predictiveMaintenanceService } from './services/predictive-maintenance-fixed';
 import { featureEngineeringService } from './services/feature-engineering';
@@ -21,7 +22,8 @@ import { enhancedFeatureService } from "./services/feature-engineering-enhanced"
 import { evaluatePMSchedule, generatePMDescription, samplePMCost, MaintenanceTypeKey } from "./services/pm-scheduler";
 import { startSeedJob, getSeedStatus, getLastSeedRun, getSystemStatus, resetSystem } from "./services/seed-orchestrator";
 import { featureDrift, predictionDrift, biasDrift } from "./services/drift-read";
-import { readModelCard } from "./services/model-card";
+import { readModelCard, readRegistryChampion } from "./services/model-card";
+import { modelToShow } from "./services/champion-metrics";
 import { mlFetch, describeMlFailure, ML_SLOW_TIMEOUT_MS, ML_SERVICE_URL, rateLimitState, probeHostDirectly } from "./services/ml-client";
 import { wakeAndWait, nudgeMlAwake, nudgeHoldingSince, REQUEST_WAKE_BUDGET_MS, REQUEST_WAKE_PROBE_MS, RETRY_AFTER_SECONDS, RATE_LIMIT_RETRY_SECONDS } from "./services/ml-wake";
 import { getMlHealth } from "./services/ml-health-cache";
@@ -158,6 +160,71 @@ export async function registerRoutes(
   const shared = (path: string, unavailable: string) =>
     cachedMl(`shared:${path}`, { ttlMs: ML_CACHE_TTL_MS.shared, budgeted: true }, passThrough(path, unavailable));
   const send = (res: Response, outcome: MlOutcome) => res.status(outcome.status).json(outcome.body);
+
+  // The ML service first, as a promoted champion is live before its files are
+  // committed, then the registry on disk.
+  const championVersion = async (): Promise<string | null> => {
+    try {
+      const outcome = await shared('/models/registry', 'Registry unavailable');
+      const champion = outcome.status === 200 ? (outcome.body as any)?.champion : null;
+      if (champion) return champion;
+    } catch {
+      // Asleep or unreachable: the file answers instead.
+    }
+    return readRegistryChampion();
+  };
+
+  // Rescore one unit after its service history changes, as the only writer for
+  // that change. Failure is not fatal: the history is stored either way.
+  const rescoreUnit = async (equipmentId: number) => {
+    try {
+      const snapshotDate = await getSimulationDate();
+      const snapshot = await enhancedFeatureService.generateSnapshot(equipmentId, snapshotDate);
+      // Same clamped payload the batch path builds; one definition in
+      // services/multi-horizon-scoring.ts so the bounds cannot drift apart.
+      const payload = toMlSnapshot(equipmentId, snapshot);
+
+      const fastapiRes = await mlFetch('/predict/multi-horizon', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (fastapiRes.ok) {
+        const pred = await fastapiRes.json();
+        const p = pred.predictions;
+        await db.insert(equipmentFailurePredictions).values({
+          equipmentId,
+          modelVersion:   pred.model_version,
+          riskTrend:      pred.risk_trend,
+          prob10d:        p['10d'].failure_probability.toString(),
+          riskLevel10d:   p['10d'].risk_level,
+          prob30d:        p['30d'].failure_probability.toString(),
+          riskLevel30d:   p['30d'].risk_level,
+          prob60d:        p['60d'].failure_probability.toString(),
+          riskLevel60d:   p['60d'].risk_level,
+          topDrivers10d:  JSON.stringify(Object.keys(p['10d'].top_risk_drivers || {})),
+          topDrivers30d:  JSON.stringify(Object.keys(p['30d'].top_risk_drivers || {})),
+          topDrivers60d:  JSON.stringify(Object.keys(p['60d'].top_risk_drivers || {})),
+          shapAttribution10d: JSON.stringify(p['10d'].shap_attribution || {}),
+          shapAttribution30d: JSON.stringify(p['30d'].shap_attribution || {}),
+          shapAttribution60d: JSON.stringify(p['60d'].shap_attribution || {}),
+          recommendation: pred.recommendation,
+        });
+        console.log(`[MAINTENANCE] Risk rescore complete for EQ-${equipmentId} (${pred.recommendation_source ?? 'unknown'} recommendation)`);
+      } else {
+        console.warn(`[MAINTENANCE] Risk rescore refused for EQ-${equipmentId}: HTTP ${fastapiRes.status}`);
+      }
+    } catch (e) {
+      console.warn(`[MAINTENANCE] Risk rescore failed for EQ-${equipmentId}:`, e);
+    }
+  };
+
+  // The first problem in words, for a form to show.
+  const validationMessage = (error: z.ZodError) => {
+    const issue = error.issues[0];
+    return issue.path.length ? `${issue.path.join('.')}: ${issue.message}` : issue.message;
+  };
 
   // Any successful admin write empties that cache. Writes are where the data
   // and the model change, and they are rare, so flushing everything is both
@@ -870,12 +937,14 @@ export async function registerRoutes(
   });
 
   // ── JOB SITES ─────────────────────────────────────────────────────────────
+  const rentalsActive = sql<number>`COALESCE(SUM(CASE WHEN ${rentals.status} = 'ACTIVE' THEN 1 ELSE 0 END), 0)`;
+
   app.get(api.jobSites.list.path, requireAuth, async (req, res) => {
     try {
       const sites = await storage.listJobSites();
       const sitesWithCounts = await Promise.all(sites.map(async (site) => {
-        const [result] = await db.select({ count: count() }).from(rentals).where(eq(rentals.jobSiteId, site.id));
-        return { ...site, _count: { rentals: result?.count || 0 } };
+        const [result] = await db.select({ count: count(), active: rentalsActive }).from(rentals).where(eq(rentals.jobSiteId, site.id));
+        return { ...site, _count: { rentals: result?.count || 0, activeRentals: Number(result?.active) || 0 } };
       }));
       res.json(sitesWithCounts);
     } catch (error) {
@@ -929,8 +998,8 @@ export async function registerRoutes(
     try {
       const vendors = await storage.listVendors();
       const vendorsWithCounts = await Promise.all(vendors.map(async (vendor) => {
-        const [result] = await db.select({ count: count() }).from(rentals).where(eq(rentals.vendorId, vendor.id));
-        return { ...vendor, _count: { rentals: result?.count || 0 } };
+        const [result] = await db.select({ count: count(), active: rentalsActive }).from(rentals).where(eq(rentals.vendorId, vendor.id));
+        return { ...vendor, _count: { rentals: result?.count || 0, activeRentals: Number(result?.active) || 0 } };
       }));
       res.json(vendorsWithCounts);
     } catch (error) {
@@ -1000,8 +1069,13 @@ export async function registerRoutes(
       const col = colMap[sortBy as string] ?? maintenanceEvents.maintenanceDate;
       const orderFn = (sortDir as string) === 'asc' ? asc : desc;
 
+      const cursorDay = (await getSimulationDate()).toISOString().slice(0, 10);
       const [countRows, events] = await Promise.all([
-        db.select({ total: count() }).from(maintenanceEvents).where(condition),
+        db.select({
+          total: count(),
+          totalCost: sql<string>`COALESCE(SUM(${maintenanceEvents.cost}), 0)`,
+          recentEvents: sql<string>`COALESCE(SUM(CASE WHEN ${maintenanceEvents.maintenanceDate} BETWEEN DATE_SUB(${cursorDay}, INTERVAL 1 MONTH) AND ${cursorDay} THEN 1 ELSE 0 END), 0)`,
+        }).from(maintenanceEvents).where(condition),
         db.select().from(maintenanceEvents)
           .where(condition)
           .orderBy(orderFn(col))
@@ -1009,7 +1083,14 @@ export async function registerRoutes(
           .offset(offset),
       ]);
 
-      res.json({ events, total: countRows[0].total, limit, offset });
+      res.json({
+        events,
+        total: countRows[0].total,
+        limit,
+        offset,
+        totalCost: Number(countRows[0].totalCost),
+        recentEvents: Number(countRows[0].recentEvents),
+      });
     } catch (error) {
       res.status(500).json({ message: 'Failed to fetch maintenance events' });
     }
@@ -1085,18 +1166,23 @@ export async function registerRoutes(
 
   app.post('/api/maintenance', requireAdmin, async (req, res) => {
     try {
-      const input = req.body;
+      const parsed = api.maintenance.create.input.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ message: validationMessage(parsed.error) });
+      const input = parsed.data;
+
+      if (!(await storage.getEquipment(input.equipmentId))) {
+        return res.status(404).json({ message: 'Equipment not found' });
+      }
 
       // Auto-calculate nextDueDate from simulation cursor when not provided
       if (!input.nextDueDate) {
-        const simDate = await getSimulationDate();
         const intervals: Record<string, number> = {
           MAJOR_SERVICE: 180,
           MINOR_SERVICE: 90,
           INSPECTION: 60,
         };
         const days = intervals[input.maintenanceType] ?? 90;
-        const base = new Date(input.maintenanceDate || simDate);
+        const base = new Date(input.maintenanceDate);
         base.setDate(base.getDate() + days);
         input.nextDueDate = base.toISOString().split('T')[0];
       }
@@ -1109,64 +1195,39 @@ export async function registerRoutes(
       // landed and followed up with its own batch rescore of the same unit.
       // Batch never calls the LLM and the newest row wins, so the template
       // overwrote the recommendation written here, with nothing in any log.
-      // Failure is still not fatal: the event is stored either way.
-      try {
-        const snapshotDate = await getSimulationDate();
-        const snapshot = await enhancedFeatureService.generateSnapshot(input.equipmentId, snapshotDate);
-        // Same clamped payload the batch path builds; one definition in
-        // services/multi-horizon-scoring.ts so the bounds cannot drift apart.
-        const payload = toMlSnapshot(input.equipmentId, snapshot);
-
-        const fastapiRes = await mlFetch('/predict/multi-horizon', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-
-        if (fastapiRes.ok) {
-          const pred = await fastapiRes.json();
-          const p = pred.predictions;
-          await db.insert(equipmentFailurePredictions).values({
-            equipmentId:    input.equipmentId,
-            modelVersion:   pred.model_version,
-            riskTrend:      pred.risk_trend,
-            prob10d:        p['10d'].failure_probability.toString(),
-            riskLevel10d:   p['10d'].risk_level,
-            prob30d:        p['30d'].failure_probability.toString(),
-            riskLevel30d:   p['30d'].risk_level,
-            prob60d:        p['60d'].failure_probability.toString(),
-            riskLevel60d:   p['60d'].risk_level,
-            topDrivers10d:  JSON.stringify(Object.keys(p['10d'].top_risk_drivers || {})),
-            topDrivers30d:  JSON.stringify(Object.keys(p['30d'].top_risk_drivers || {})),
-            topDrivers60d:  JSON.stringify(Object.keys(p['60d'].top_risk_drivers || {})),
-            shapAttribution10d: JSON.stringify(p['10d'].shap_attribution || {}),
-            shapAttribution30d: JSON.stringify(p['30d'].shap_attribution || {}),
-            shapAttribution60d: JSON.stringify(p['60d'].shap_attribution || {}),
-            recommendation: pred.recommendation,
-          });
-          console.log(`[MAINTENANCE] Risk rescore complete for EQ-${input.equipmentId} (${pred.recommendation_source ?? 'unknown'} recommendation)`);
-        } else {
-          console.warn(`[MAINTENANCE] Risk rescore refused for EQ-${input.equipmentId}: HTTP ${fastapiRes.status}`);
-        }
-      } catch (e) {
-        console.warn(`[MAINTENANCE] Risk rescore failed for EQ-${input.equipmentId}:`, e);
-      }
+      await rescoreUnit(input.equipmentId);
 
       res.status(201).json(event);
     } catch (error) {
       console.error('Create maintenance error:', error);
-      res.status(400).json({ message: (error instanceof Error ? error.message : String(error)) || 'Failed to create maintenance event' });
+      res.status(500).json({ message: 'Failed to create maintenance event' });
     }
   });
 
+  // Editing or deleting a service changes the history the forecast was built
+  // on, so these rescore too. Without that a deleted service kept its unit
+  // reading "Recently serviced" until the next forecast run.
   app.put('/api/maintenance/:id', requireAdmin, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) return res.status(400).json({ message: 'Invalid maintenance event ID' });
-      const updated = await storage.updateMaintenanceEvent(id, req.body);
+      const parsed = api.maintenance.update.input.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ message: validationMessage(parsed.error) });
+
+      const [existing] = await db.select().from(maintenanceEvents).where(eq(maintenanceEvents.id, id));
+      if (!existing) return res.status(404).json({ message: 'Maintenance event not found' });
+      const movedTo = parsed.data.equipmentId;
+      if (movedTo !== undefined && !(await storage.getEquipment(movedTo))) {
+        return res.status(404).json({ message: 'Equipment not found' });
+      }
+
+      const updated = await storage.updateMaintenanceEvent(id, parsed.data);
+      await rescoreUnit(existing.equipmentId);
+      if (movedTo !== undefined && movedTo !== existing.equipmentId) await rescoreUnit(movedTo);
       res.json(updated);
     } catch (error) {
-      res.status(400).json({ message: (error instanceof Error ? error.message : String(error)) || 'Failed to update maintenance event' });
+      console.error('Update maintenance error:', error);
+      res.status(500).json({ message: 'Failed to update maintenance event' });
     }
   });
 
@@ -1174,10 +1235,14 @@ export async function registerRoutes(
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) return res.status(400).json({ message: 'Invalid maintenance event ID' });
+      const [existing] = await db.select().from(maintenanceEvents).where(eq(maintenanceEvents.id, id));
+      if (!existing) return res.status(404).json({ message: 'Maintenance event not found' });
       await storage.deleteMaintenanceEvent(id);
+      await rescoreUnit(existing.equipmentId);
       res.status(204).send();
     } catch (error) {
-      res.status(400).json({ message: (error instanceof Error ? error.message : String(error)) || 'Failed to delete maintenance event' });
+      console.error('Delete maintenance error:', error);
+      res.status(500).json({ message: 'Failed to delete maintenance event' });
     }
   });
 
@@ -1511,15 +1576,7 @@ export async function registerRoutes(
   app.get('/api/ml/model-metrics', requireAuth, async (req, res) => {
     try {
       const { modelMetrics } = await import('@shared/schema');
-      const [latest] = await db
-        .select({
-          modelVersion: modelMetrics.modelVersion,
-          trainedAt: modelMetrics.trainedAt,
-          datasetSize: modelMetrics.datasetSize,
-        })
-        .from(modelMetrics)
-        .orderBy(desc(modelMetrics.trainedAt))
-        .limit(1);
+      const latest = await modelToShow(await championVersion());
 
       // Honest empty state: no trained model → say so, invent nothing.
       if (!latest) {
@@ -1652,7 +1709,7 @@ export async function registerRoutes(
         // verify the pipeline, not field performance. Surfaced in the UI.
         dataSource: 'simulated',
         version: latest.modelVersion,
-        trainedAt: latest.trainedAt.toISOString(),
+        trainedAt: new Date(latest.trainedAt).toISOString(),
         datasetSize: latest.datasetSize,
         horizons,
         horizonsByAsset,
@@ -1695,12 +1752,7 @@ export async function registerRoutes(
       // table rather than inferred from what is in the snapshots table now.
       let trainedOn: number | null = null;
       try {
-        const { modelMetrics } = await import('@shared/schema');
-        const [champion] = await db
-          .select({ datasetSize: modelMetrics.datasetSize })
-          .from(modelMetrics)
-          .orderBy(desc(modelMetrics.trainedAt))
-          .limit(1);
+        const champion = await modelToShow(await championVersion());
         trainedOn = champion?.datasetSize ?? null;
       } catch {
         // Leave it null; the dashboard omits the clause rather than inventing
@@ -2526,15 +2578,7 @@ export async function registerRoutes(
       const { modelMetrics, assetFeatureSnapshots, assetRiskPredictions } = await import("@shared/schema");
 
       // ── model metrics (long-format table; headline = 30d holdout ROC-AUC) ──
-      const [latestModel] = await db
-        .select({
-          modelVersion: modelMetrics.modelVersion,
-          trainedAt: modelMetrics.trainedAt,
-          datasetSize: modelMetrics.datasetSize,
-        })
-        .from(modelMetrics)
-        .orderBy(desc(modelMetrics.trainedAt))
-        .limit(1);
+      const latestModel = await modelToShow(await championVersion());
 
       let rocAuc30d: number | null = null;
       if (latestModel) {

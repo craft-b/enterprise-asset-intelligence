@@ -53,6 +53,7 @@ import {
   humanizeDriver,
 } from "@/lib/risk-format";
 import { format } from "date-fns";
+import { calendarDate } from "@/lib/calendar-date";
 
 type Horizon = "10d" | "30d" | "60d";
 type Density = "comfortable" | "compact";
@@ -155,7 +156,7 @@ export default function CommandCenter() {
   };
 
   const asOf = sim.data?.cursor_date
-    ? new Date(String(sim.data.cursor_date).substring(0, 10))
+    ? calendarDate(sim.data.cursor_date)
     : new Date();
 
   const rows: FleetRow[] = (predictions ?? []).map((p: any) => {
@@ -385,7 +386,7 @@ export default function CommandCenter() {
           ) : (
             <div>
               {/* Column header */}
-              <div className="hidden md:flex items-center gap-4 px-3 pb-2 mb-1 border-b border-border text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <div className="hidden xl:flex items-center gap-4 px-3 pb-2 mb-1 border-b border-border text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                 <div className="w-[220px] shrink-0">Asset</div>
                 <div className="flex-1 min-w-0 hidden lg:block">Primary risk driver</div>
                 <div className="w-[210px] shrink-0 text-center">Failure probability · 10 / 30 / 60d</div>
@@ -409,7 +410,7 @@ export default function CommandCenter() {
                       )}
                     >
                       {/* Asset */}
-                      <div className="w-[220px] shrink-0 min-w-0">
+                      <div className="min-w-0 flex-1 xl:w-[220px] xl:flex-none xl:shrink-0">
                         <p className="text-sm font-medium truncate text-foreground">
                           {r.name}
                           {ruleScored && (
@@ -436,7 +437,7 @@ export default function CommandCenter() {
                       </div>
 
                       {/* Primary driver */}
-                      <div className="hidden lg:flex flex-1 min-w-0 items-center gap-2">
+                      <div className="hidden xl:flex flex-1 min-w-0 items-center gap-2">
                         <span className={cn("h-1.5 w-1.5 rounded-full shrink-0", RISK_FILL[r.levels["30d"]])} />
                         <span className="truncate text-sm text-muted-foreground">
                           {r.driver ?? <span className="italic opacity-70">No dominant driver</span>}
@@ -444,7 +445,7 @@ export default function CommandCenter() {
                       </div>
 
                       {/* Tri-horizon bars */}
-                      <div className="hidden md:flex items-center gap-3 shrink-0 w-[210px] justify-center">
+                      <div className="hidden xl:flex items-center gap-3 shrink-0 w-[210px] justify-center">
                         {(["10d", "30d", "60d"] as Horizon[]).map((h) => (
                           <TooltipProvider key={h}>
                             <Tooltip>
@@ -475,7 +476,7 @@ export default function CommandCenter() {
                       </div>
 
                       {/* Lead-time estimate: earliest horizon at HIGH */}
-                      <div className="hidden md:block w-[64px] shrink-0 text-center">
+                      <div className="hidden xl:block w-[64px] shrink-0 text-center">
                         {win ? (
                           <span className="font-mono text-xs font-semibold tabular-nums text-risk-high">
                             ≤ {win}
@@ -486,7 +487,7 @@ export default function CommandCenter() {
                       </div>
 
                       {/* Status */}
-                      <div className="flex items-center justify-end gap-2 shrink-0 w-[118px]">
+                      <div className="flex items-center justify-end gap-2 shrink-0 xl:w-[118px]">
                         <TrendIcon trend={r.trend} />
                         <RiskBadge
                           level={r.levels["30d"]}

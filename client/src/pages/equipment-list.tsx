@@ -133,7 +133,7 @@ export default function EquipmentList() {
         </div>
         
         {isAdmin ? (
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
           <SensorUpload />
           <Dialog open={isNewEquipmentOpen} onOpenChange={setIsNewEquipmentOpen}>
             <DialogTrigger asChild>
@@ -153,7 +153,7 @@ export default function EquipmentList() {
           </Dialog>
           </div>
         ) : (
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <ReadOnlyAction variant="outline" size="sm">Import Sensor Data</ReadOnlyAction>
             <ReadOnlyAction>New Equipment</ReadOnlyAction>
           </div>

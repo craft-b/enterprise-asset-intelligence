@@ -8,7 +8,7 @@
 #     (high null rate on a key feature → model learns noise instead of signal)
 #   - A bug in the feature engineering pipeline produces impossible values
 #     (e.g. wear_rate < 0, usage_intensity > 12)
-#   - Class imbalance worsens beyond what SMOTE can rescue
+#   - Class imbalance worsens beyond what class weighting can rescue
 #     (< 5 positives in 60d window → model predicts all-negative)
 #   - The temporal distribution collapses (all snapshots from a single week
 #     → TimeSeriesSplit has no temporal spread → CV metrics are meaningless)
@@ -167,7 +167,7 @@ def _check_class_balance(df: pd.DataFrame) -> list[dict]:
 
         if n_pos < MIN_POSITIVES:
             results.append(_check(f"class_balance_{h}d", "FAIL",
-                f"{h}d: only {n_pos} positive examples — SMOTE requires ≥{MIN_POSITIVES}. "
+                f"{h}d: only {n_pos} positive examples — training requires ≥{MIN_POSITIVES}. "
                 f"Run seedFailureEvents or advance simulation cursor.",
                 {"n_pos": n_pos, "n_total": n_total, "pos_rate": round(rate, 4)}))
         elif rate < MAX_IMBALANCE:
@@ -177,7 +177,7 @@ def _check_class_balance(df: pd.DataFrame) -> list[dict]:
                 {"n_pos": n_pos, "n_total": n_total, "pos_rate": round(rate, 4)}))
         elif n_pos < WARN_POSITIVES or rate < WARN_IMBALANCE:
             results.append(_check(f"class_balance_{h}d", "WARN",
-                f"{h}d: {n_pos} positives ({rate*100:.1f}%) — low but SMOTE will apply",
+                f"{h}d: {n_pos} positives ({rate*100:.1f}%) — low, so estimates will be noisy",
                 {"n_pos": n_pos, "n_total": n_total, "pos_rate": round(rate, 4)}))
         else:
             results.append(_check(f"class_balance_{h}d", "PASS",

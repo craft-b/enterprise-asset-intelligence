@@ -31,6 +31,7 @@ import { useSimulationState } from "@/hooks/use-predictive-maintenance";
 import { Link } from "wouter";
 import { cn } from "@/lib/utils";
 import { CHART, fmtMoney, fmtMoneyCompact } from "@/lib/chart-theme";
+import { calendarDate } from "@/lib/calendar-date";
 
 export default function Dashboard() {
   const { data: equipment } = useEquipment();
@@ -45,7 +46,7 @@ export default function Dashboard() {
 
   const simState = useSimulationState();
   const today = simState.data?.cursor_date
-    ? new Date(String(simState.data.cursor_date).substring(0, 10))
+    ? calendarDate(simState.data.cursor_date)
     : new Date();
   const weekStart = startOfWeek(today, { weekStartsOn: 0 });
   
@@ -97,8 +98,8 @@ export default function Dashboard() {
     }
     
     if (rental.receiveDate) {
-      const startDate = new Date(rental.receiveDate);
-      const endDate = rental.returnDate ? new Date(rental.returnDate) : today;
+      const startDate = calendarDate(rental.receiveDate);
+      const endDate = rental.returnDate ? calendarDate(rental.returnDate) : today;
       const days = differenceInDays(endDate, startDate) + 1;
       const dailyRate = Number(rental.equipment?.dailyRate || 0);
       siteRevenueMap[siteName].revenue += dailyRate * days;
@@ -530,15 +531,15 @@ export default function Dashboard() {
                   const aRevenue = aRentals.reduce((sum, r) => {
                     if (!r.receiveDate) return sum;
                     const days = r.returnDate 
-                      ? differenceInDays(new Date(r.returnDate), new Date(r.receiveDate)) + 1
-                      : differenceInDays(today, new Date(r.receiveDate)) + 1;
+                      ? differenceInDays(calendarDate(r.returnDate), calendarDate(r.receiveDate)) + 1
+                      : differenceInDays(today, calendarDate(r.receiveDate)) + 1;
                     return sum + (Number(a.dailyRate || 0) * days);
                   }, 0);
                   const bRevenue = bRentals.reduce((sum, r) => {
                     if (!r.receiveDate) return sum;
                     const days = r.returnDate 
-                      ? differenceInDays(new Date(r.returnDate), new Date(r.receiveDate)) + 1
-                      : differenceInDays(today, new Date(r.receiveDate)) + 1;
+                      ? differenceInDays(calendarDate(r.returnDate), calendarDate(r.receiveDate)) + 1
+                      : differenceInDays(today, calendarDate(r.receiveDate)) + 1;
                     return sum + (Number(b.dailyRate || 0) * days);
                   }, 0);
                   return bRevenue - aRevenue;
@@ -549,8 +550,8 @@ export default function Dashboard() {
                   const totalRevenue = equipmentRentals.reduce((sum, r) => {
                     if (!r.receiveDate) return sum;
                     const days = r.returnDate 
-                      ? differenceInDays(new Date(r.returnDate), new Date(r.receiveDate)) + 1
-                      : differenceInDays(today, new Date(r.receiveDate)) + 1;
+                      ? differenceInDays(calendarDate(r.returnDate), calendarDate(r.receiveDate)) + 1
+                      : differenceInDays(today, calendarDate(r.receiveDate)) + 1;
                     return sum + (Number(equip.dailyRate || 0) * days);
                   }, 0);
 

@@ -111,14 +111,6 @@ const HORIZON_LABELS: Record<Horizon, string> = {
   "60d": "Next 60 Days",
 };
 
-// Discrimination is best at the short horizon and decays with distance —
-// matches the trained models' holdout metrics (see ML dashboard), not vibes.
-const HORIZON_CONFIDENCE: Record<Horizon, string> = {
-  "10d": "Highest model accuracy",
-  "30d": "High model accuracy",
-  "60d": "Moderate model accuracy",
-};
-
 // Semantic risk tokens live in @/lib/risk-format (shared with the command
 // center). Only the row-outline treatment is specific to this dashboard.
 const RISK_ROW_COLORS: Record<RiskLevel, string> = {
@@ -678,7 +670,7 @@ export default function PredictiveMaintenanceDashboard() {
         <CardHeader>
           <CardTitle>Fleet Failure Predictions — {HORIZON_LABELS[selectedHorizon]}</CardTitle>
           <CardDescription>
-            {HORIZON_CONFIDENCE[selectedHorizon]} · Sorted by failure probability · Click for full horizon breakdown
+            Holdout ROC-AUC {modelMetrics?.horizons?.[selectedHorizon.replace("d", "")]?.rocAuc?.toFixed(2) ?? "n/a"} · Sorted by failure probability · Click for full horizon breakdown
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -689,11 +681,11 @@ export default function PredictiveMaintenanceDashboard() {
           ) : (
             <div>
               {/* Column header — reads as an enterprise data table */}
-              <div className="hidden md:flex items-center gap-4 px-3 pb-2 mb-1 border-b border-border text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <div className="hidden xl:flex items-center gap-4 px-3 pb-2 mb-1 border-b border-border text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                 <div className="w-[240px] shrink-0">Asset</div>
                 <div className="flex-1 min-w-0 hidden lg:block">Primary risk driver</div>
                 <div className="w-[228px] shrink-0 text-center">Failure probability · 10 / 30 / 60d</div>
-                <div className="w-[176px] shrink-0 text-right pr-9">Status</div>
+                <div className="shrink-0 text-right pr-9 lg:w-[232px]">Status</div>
               </div>
 
               <div className="space-y-0.5">
@@ -712,7 +704,7 @@ export default function PredictiveMaintenanceDashboard() {
                     )}
                   >
                     {/* Asset */}
-                    <div className="w-[240px] shrink-0 min-w-0">
+                    <div className="min-w-0 flex-1 xl:w-[240px] xl:flex-none xl:shrink-0">
                       <p className="text-sm font-medium truncate text-foreground">
                         {result.name}
                       </p>
@@ -722,7 +714,7 @@ export default function PredictiveMaintenanceDashboard() {
                     </div>
 
                     {/* Primary driver — plain language, fills available width */}
-                    <div className="hidden lg:flex flex-1 min-w-0 items-center gap-2">
+                    <div className="hidden xl:flex flex-1 min-w-0 items-center gap-2">
                       <span className={cn("h-1.5 w-1.5 rounded-full shrink-0", RISK_FILL[riskLevel])} />
                       <span className="truncate text-sm text-muted-foreground">
                         {driver ?? <span className="italic opacity-70">No dominant driver</span>}
@@ -730,7 +722,7 @@ export default function PredictiveMaintenanceDashboard() {
                     </div>
 
                     {/* Tri-horizon failure probability bars */}
-                    <div className="hidden md:flex items-center gap-3 shrink-0 w-[228px] justify-center">
+                    <div className="hidden xl:flex items-center gap-3 shrink-0 w-[228px] justify-center">
                       {(["10d", "30d", "60d"] as Horizon[]).map((h) => {
                         const p = result.predictions?.[h];
                         if (!p) return null;
@@ -761,7 +753,7 @@ export default function PredictiveMaintenanceDashboard() {
                     </div>
 
                     {/* Status + one-click action */}
-                    <div className="flex items-center justify-end gap-2 shrink-0 w-[176px]">
+                    <div className="flex items-center justify-end gap-2 shrink-0 lg:w-[232px]">
                       <TooltipProvider>
                         <Tooltip>
                           <TooltipTrigger asChild>
@@ -778,7 +770,7 @@ export default function PredictiveMaintenanceDashboard() {
                       <Button
                         variant="ghost"
                         size="sm"
-                        className="h-7 px-2 text-xs opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
+                        className="hidden h-7 px-2 text-xs opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity lg:inline-flex"
                         onClick={(e) => {
                           e.stopPropagation();
                           setShowSchedulePM(true);
@@ -939,7 +931,7 @@ export default function PredictiveMaintenanceDashboard() {
                   );
                 })()}
               </div>
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center gap-3">
                 <div className="flex items-center gap-2">
                   <span className="text-sm text-muted-foreground">Days:</span>
                   <input

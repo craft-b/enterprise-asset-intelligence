@@ -37,6 +37,7 @@ import { format } from "date-fns";
 import { RentalForm } from "@/components/rental-form";
 import { RentalDetailView } from "@/components/rental-detail-view";
 import { cn } from "@/lib/utils";
+import { calendarDate } from "@/lib/calendar-date";
 
 export default function RentalsList() {
   const { user } = useAuth();
@@ -74,7 +75,7 @@ export default function RentalsList() {
     const returnDate = rental.returnDate instanceof Date
       ? rental.returnDate.toISOString().split('T')[0]
       : String(rental.returnDate).split('T')[0];
-    const days = Math.max(1, Math.round((new Date(returnDate).getTime() - new Date(receiveDate).getTime()) / 86400000) + 1);
+    const days = Math.max(1, Math.round((calendarDate(returnDate).getTime() - calendarDate(receiveDate).getTime()) / 86400000) + 1);
     const dailyRate = Number(rental.equipment?.dailyRate || 0);
     const amount = days * dailyRate;
     invoiceMutation.mutate({
@@ -198,13 +199,13 @@ export default function RentalsList() {
                   <TableCell>
                     <div className="flex flex-col text-sm">
                       <span className="text-green-600 font-medium">
-                        {rental.receiveDate ? format(new Date(rental.receiveDate), 'MMM d, yyyy') : 'N/A'}
+                        {rental.receiveDate ? format(calendarDate(rental.receiveDate), 'MMM d, yyyy') : 'N/A'}
                       </span>
                       {rental.returnDate && (
                         <>
                           <span className="text-slate-400 text-xs">to</span>
                           <span className="text-slate-600 font-medium">
-                            {format(new Date(rental.returnDate), 'MMM d, yyyy')}
+                            {format(calendarDate(rental.returnDate), 'MMM d, yyyy')}
                           </span>
                         </>
                       )}

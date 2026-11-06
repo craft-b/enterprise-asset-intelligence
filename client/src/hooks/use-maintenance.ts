@@ -81,6 +81,7 @@ export function useUpdateMaintenance() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['maintenance'] });
       queryClient.invalidateQueries({ queryKey: ['/api/maintenance/due-soon'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/risk-score/multi-horizon/latest'] });
       toast({ title: 'Maintenance updated' });
     },
   });
@@ -104,6 +105,7 @@ export function useDeleteMaintenance() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['maintenance'] });
       queryClient.invalidateQueries({ queryKey: ['/api/maintenance/due-soon'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/risk-score/multi-horizon/latest'] });
       toast({ title: 'Maintenance event deleted' });
     },
   });

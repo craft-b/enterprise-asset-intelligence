@@ -55,6 +55,7 @@ import {
   humanizeDriver,
 } from "@/lib/risk-format";
 import { format } from "date-fns";
+import { calendarDate } from "@/lib/calendar-date";
 
 type Horizon = "10d" | "30d" | "60d";
 
@@ -130,7 +131,7 @@ function SensorMini({
           />
           <RechartsTooltip
             formatter={(value: number) => [`${value} ${unit}`, label]}
-            labelFormatter={(label_: string) => format(new Date(label_), "MMM d, yyyy")}
+            labelFormatter={(label_: string) => format(calendarDate(label_), "MMM d, yyyy")}
             {...CHART.tooltip}
           />
           <Line type="monotone" dataKey={dataKey} stroke={color} strokeWidth={1.5} dot={false} connectNulls />
@@ -194,7 +195,7 @@ export default function AssetDetail() {
       const src = EVENT_SOURCE_STYLES[m.eventSource] ?? EVENT_SOURCE_STYLES.SCHEDULED_PM;
       return {
         key: `m-${m.id}`,
-        date: new Date(m.maintenanceDate),
+        date: calendarDate(m.maintenanceDate),
         kind: "maintenance",
         title: String(m.maintenanceType ?? "").replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (c: string) => c.toUpperCase()),
         badge: src,
@@ -205,7 +206,7 @@ export default function AssetDetail() {
     }),
     ...unitRentals.map((r: any): TimelineEntry => ({
       key: `r-${r.id}`,
-      date: new Date(r.receiveDate),
+      date: calendarDate(r.receiveDate),
       kind: "rental",
       title: `Rental ${r.poNumber ?? `#${r.id}`}`,
       badge: {
@@ -216,7 +217,7 @@ export default function AssetDetail() {
       },
       detail: [
         jobSites?.find((j) => j.id === r.jobSiteId)?.name,
-        r.returnDate ? `${fmtDate(new Date(r.receiveDate))} → ${fmtDate(new Date(r.returnDate))}` : `since ${fmtDate(new Date(r.receiveDate))}`,
+        r.returnDate ? `${fmtDate(calendarDate(r.receiveDate))} → ${fmtDate(calendarDate(r.returnDate))}` : `since ${fmtDate(calendarDate(r.receiveDate))}`,
       ].filter(Boolean).join(" · ") || null,
     })),
   ].sort((a, b) => b.date.getTime() - a.date.getTime());
@@ -248,7 +249,7 @@ export default function AssetDetail() {
               {activeRental ? (
                 <span className="inline-flex items-center gap-1.5">
                   <Truck className="h-3.5 w-3.5" />
-                  On rent at {activeSite} since {fmtDate(new Date(activeRental.receiveDate))}
+                  On rent at {activeSite} since {fmtDate(calendarDate(activeRental.receiveDate))}
                 </span>
               ) : (
                 <span className="inline-flex items-center gap-1.5">
@@ -325,12 +326,12 @@ export default function AssetDetail() {
       {/* Explanation panel — SHAP-only attribution */}
       {pred && (
         <Card>
-          <CardHeader className="flex flex-row items-baseline justify-between gap-2 space-y-0">
+          <CardHeader className="flex flex-col gap-2 space-y-0 sm:flex-row sm:items-baseline sm:justify-between">
             <div>
               <CardTitle>Why this risk score</CardTitle>
               <CardDescription>Per-prediction model attribution, by horizon</CardDescription>
             </div>
-            <span className="shrink-0 text-xs text-muted-foreground">
+            <span className="text-xs text-muted-foreground sm:shrink-0">
               Share of attribution · <span className="text-risk-high">+ pushes toward failure</span> ·{" "}
               <span className="text-risk-low">− protective</span>
             </span>
@@ -377,17 +378,17 @@ export default function AssetDetail() {
           ) : (
             <div className="space-y-0.5">
               {timeline.map((t) => (
-                <div key={t.key} className="flex items-center gap-4 px-3 py-2 rounded-md border border-transparent hover:bg-muted/50 transition-colors">
+                <div key={t.key} className="flex flex-wrap items-center gap-x-4 gap-y-1 px-3 py-2 rounded-md border border-transparent hover:bg-muted/50 transition-colors sm:flex-nowrap">
                   <div className="w-[104px] shrink-0 text-xs font-mono tabular-nums text-muted-foreground">
                     {fmtDate(t.date)}
                   </div>
                   <Badge variant="outline" className={cn("w-[110px] shrink-0 justify-center text-[11px]", t.badge.className)}>
                     {t.badge.label}
                   </Badge>
-                  <div className="min-w-0 flex-1">
+                  <div className="min-w-0 basis-full sm:basis-auto sm:flex-1">
                     <span className="text-sm font-medium text-foreground">{t.title}</span>
                     {t.detail && (
-                      <span className="ml-2 text-xs text-muted-foreground truncate">{t.detail}</span>
+                      <span className="block text-xs text-muted-foreground sm:ml-2 sm:inline">{t.detail}</span>
                     )}
                   </div>
                 </div>
@@ -403,7 +404,7 @@ export default function AssetDetail() {
           <CardTitle>Sensor Trends</CardTitle>
           <CardDescription>
             Daily averages, last {sensors?.days ?? 90} days
-            {sensors?.asOf ? ` · as of ${format(new Date(sensors.asOf), "MMM d, yyyy")}` : ""}
+            {sensors?.asOf ? ` · as of ${format(calendarDate(sensors.asOf), "MMM d, yyyy")}` : ""}
           </CardDescription>
         </CardHeader>
         <CardContent>

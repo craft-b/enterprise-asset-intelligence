@@ -21,8 +21,15 @@ describe("logging maintenance has one rescore writer", () => {
     const start = routes.indexOf("app.post('/api/maintenance'");
     const handler = routes.slice(start, routes.indexOf("app.put('/api/maintenance/:id'", start));
     expect(handler).not.toContain("setImmediate");
-    expect(handler.indexOf("mlFetch('/predict/multi-horizon'")).toBeGreaterThan(-1);
-    expect(handler.indexOf("mlFetch('/predict/multi-horizon'"))
+    expect(handler.indexOf("await rescoreUnit(")).toBeGreaterThan(-1);
+    expect(handler.indexOf("await rescoreUnit("))
       .toBeLessThan(handler.indexOf("res.status(201)"));
+  });
+
+  it("editing or deleting a service rescores the unit too", () => {
+    const routes = read("server/routes.ts");
+    const start = routes.indexOf("app.put('/api/maintenance/:id'");
+    const handlers = routes.slice(start, routes.indexOf("app.get('/api/maintenance/equipment/:id'", start));
+    expect(handlers.match(/await rescoreUnit\(existing\.equipmentId\)/g)).toHaveLength(2);
   });
 });

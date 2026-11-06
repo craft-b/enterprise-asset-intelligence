@@ -288,7 +288,7 @@ class TestTrainingPipeline:
         recall_positive = results[horizon]["metrics"]["recall"][1]  # index 1 = positive class
         assert recall_positive > 0.0, (
             f"{horizon}d model: recall for failures is 0.0. "
-            "Check that SMOTE is applied and there are enough positive samples."
+            "Check that class weighting is applied and there are enough positive samples."
         )
 
     @pytest.mark.parametrize("horizon", HORIZONS)

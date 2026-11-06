@@ -9,7 +9,7 @@ const { execute, mlFetch } = vi.hoisted(() => ({ execute: vi.fn(), mlFetch: vi.f
 vi.mock("../db", () => ({ db: { execute } }));
 vi.mock("./ml-client", () => ({ mlFetch, describeMlFailure: vi.fn() }));
 
-import { registerChampionIfMissing } from "./champion-metrics";
+import { modelToShow, registerChampionIfMissing } from "./champion-metrics";
 
 const statement = (call: any[]) => JSON.stringify(call[0]);
 const inserted = () => execute.mock.calls.some(c => statement(c).includes("INSERT INTO model_metrics"));
@@ -50,5 +50,28 @@ describe("registering the champion at boot", () => {
   it("does not fail startup when the ML service is unreachable", async () => {
     mlFetch.mockRejectedValue(new Error("down"));
     await expect(registerChampionIfMissing()).resolves.toBeUndefined();
+  });
+});
+
+// A seed that passes the gate trains a challenger. Its rows are the newest, and
+// the page showed its AUC while the champion kept serving.
+describe("choosing the model the pages show", () => {
+  const rowsFor = (champion: unknown[], newest: unknown[]) =>
+    execute.mockImplementation(async (query: any) =>
+      [JSON.stringify(query).includes("ORDER BY") ? newest : champion]);
+
+  it("shows the champion over a newer challenger", async () => {
+    rowsFor([{ modelVersion: "v2.0" }], [{ modelVersion: "v2.1" }]);
+    expect((await modelToShow("v2.0"))?.modelVersion).toBe("v2.0");
+  });
+
+  it("falls back to the newest metrics when the champion has none", async () => {
+    rowsFor([], [{ modelVersion: "v2.1" }]);
+    expect((await modelToShow("v2.0"))?.modelVersion).toBe("v2.1");
+  });
+
+  it("falls back to the newest metrics when no champion is known", async () => {
+    rowsFor([{ modelVersion: "v2.0" }], [{ modelVersion: "v2.1" }]);
+    expect((await modelToShow(null))?.modelVersion).toBe("v2.1");
   });
 });

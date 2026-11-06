@@ -6,6 +6,7 @@ import { Package, MapPin, Building2, Calendar, FileText, DollarSign, ArrowRightL
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { useSwapHistory } from "@/hooks/use-rentals";
+import { calendarDate } from "@/lib/calendar-date";
 
 type RentalDetailViewProps = {
   rental: any; // The full rental object with relations
@@ -23,7 +24,7 @@ export function RentalDetailView({ rental }: RentalDetailViewProps) {
   }
 
   const duration = rental.receiveDate && rental.returnDate 
-    ? Math.ceil((new Date(rental.returnDate).getTime() - new Date(rental.receiveDate).getTime()) / (1000 * 60 * 60 * 24))
+    ? Math.ceil((calendarDate(rental.returnDate).getTime() - calendarDate(rental.receiveDate).getTime()) / (1000 * 60 * 60 * 24))
     : null;
 
   return (
@@ -179,7 +180,7 @@ export function RentalDetailView({ rental }: RentalDetailViewProps) {
             <div>
               <div className="text-sm text-muted-foreground mb-1">Received</div>
               <div className="text-lg font-semibold text-green-600">
-                {rental.receiveDate ? format(new Date(rental.receiveDate), 'MMM d, yyyy') : 'N/A'}
+                {rental.receiveDate ? format(calendarDate(rental.receiveDate), 'MMM d, yyyy') : 'N/A'}
               </div>
               {rental.receiveHours && (
                 <div className="text-sm text-muted-foreground mt-1">
@@ -197,7 +198,7 @@ export function RentalDetailView({ rental }: RentalDetailViewProps) {
               {rental.returnDate ? (
                 <>
                   <div className="text-lg font-semibold">
-                    {format(new Date(rental.returnDate), 'MMM d, yyyy')}
+                    {format(calendarDate(rental.returnDate), 'MMM d, yyyy')}
                   </div>
                   {rental.returnHours && (
                     <div className="text-sm text-muted-foreground mt-1">
@@ -258,7 +259,7 @@ export function RentalDetailView({ rental }: RentalDetailViewProps) {
                   <div>
                     <div className="font-mono text-sm font-medium">{invoice.invoiceNumber}</div>
                     <div className="text-xs text-muted-foreground">
-                      {format(new Date(invoice.invoiceDate), 'MMM d, yyyy')} •
+                      {format(calendarDate(invoice.invoiceDate), 'MMM d, yyyy')} •
                       {format(new Date(invoice.periodFrom), 'MMM d')} - {format(new Date(invoice.periodTo), 'MMM d, yyyy')}
                     </div>
                   </div>
@@ -295,7 +296,7 @@ export function RentalDetailView({ rental }: RentalDetailViewProps) {
                       <span className="text-purple-700">{swap.replacementEquipment?.name ?? `#${swap.replacementEquipmentId}`}</span>
                     </div>
                     <div className="text-xs text-muted-foreground">
-                      {swap.swapDate ? format(new Date(swap.swapDate), 'MMM d, yyyy') : ''}
+                      {swap.swapDate ? format(calendarDate(swap.swapDate), 'MMM d, yyyy') : ''}
                     </div>
                   </div>
                   {swap.reason && (

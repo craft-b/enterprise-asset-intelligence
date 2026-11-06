@@ -196,6 +196,33 @@ export async function hasRegisteredMetrics(version: string): Promise<boolean> {
   return (rows as any[]).length > 0;
 }
 
+export interface ShownModel {
+  modelVersion: string;
+  trainedAt: Date | string;
+  datasetSize: number | null;
+}
+
+/**
+ * The model the metrics pages describe: the champion, the one scoring the fleet.
+ *
+ * This took the newest row, so a seed or a retrain that left a challenger put
+ * the challenger's AUC on the page while the champion kept serving. The newest
+ * row is only the answer when the champion has no metrics of its own.
+ */
+export async function modelToShow(champion: string | null): Promise<ShownModel | undefined> {
+  const columns = sql`model_version AS modelVersion, trained_at AS trainedAt, dataset_size AS datasetSize`;
+  if (champion) {
+    const [rows] = (await db.execute(
+      sql`SELECT ${columns} FROM model_metrics WHERE model_version = ${champion} LIMIT 1`,
+    )) as any;
+    if ((rows as any[]).length > 0) return (rows as any[])[0];
+  }
+  const [rows] = (await db.execute(
+    sql`SELECT ${columns} FROM model_metrics ORDER BY trained_at DESC LIMIT 1`,
+  )) as any;
+  return (rows as any[])[0];
+}
+
 /**
  * Copy the ML service's champion metrics into model_metrics.
  *

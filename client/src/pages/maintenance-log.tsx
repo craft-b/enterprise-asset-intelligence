@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useMaintenance, useUpdateMaintenance, useDeleteMaintenance } from "@/hooks/use-maintenance";
-import { useSimulationState } from "@/hooks/use-predictive-maintenance";
 import { useEquipment } from "@/hooks/use-equipment";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
@@ -53,6 +52,7 @@ import {
 import { Plus, Wrench, Calendar, DollarSign, User, ChevronUp, ChevronDown, ChevronsUpDown, Pencil, Trash2, Loader2, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
+import { calendarDate } from "@/lib/calendar-date";
 
 const PAGE_SIZE = 10;
 
@@ -80,7 +80,6 @@ function MaintSortHead({ col, active, dir, onSort, children, align }: {
 
 export default function MaintenanceLog() {
   const { user } = useAuth();
-  const simState = useSimulationState();
   const [selectedEquipmentId, setSelectedEquipmentId] = useState<number | undefined>();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [equipmentForMaintenance, setEquipmentForMaintenance] = useState<any>(null);
@@ -183,19 +182,10 @@ export default function MaintenanceLog() {
       .join(' ');
   };
 
-  // Stats — total from server, cost/recent from loaded events
+  // Stats come from the server: this page holds only one page of events
   const totalEvents = data?.total ?? 0;
-  const totalCost = displayedEvents.reduce((sum: number, event: any) => {
-    return sum + parseFloat(event.cost || '0');
-  }, 0);
-  const cursorDate = simState.data?.cursor_date
-    ? new Date(String(simState.data.cursor_date).substring(0, 10))
-    : new Date();
-  const lastMonth = new Date(cursorDate);
-  lastMonth.setMonth(lastMonth.getMonth() - 1);
-  const recentEvents = displayedEvents.filter((event: any) =>
-    new Date(event.maintenanceDate) >= lastMonth
-  ).length;
+  const totalCost = data?.totalCost ?? 0;
+  const recentEvents = data?.recentEvents ?? 0;
 
   const totalPages = Math.max(1, Math.ceil((data?.total ?? 0) / PAGE_SIZE));
 
@@ -305,7 +295,7 @@ export default function MaintenanceLog() {
             <DollarSign className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">${totalCost.toFixed(2)}</div>
+            <div className="text-2xl font-bold">${totalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
             <p className="text-xs text-muted-foreground">
               Maintenance expenses
             </p>
@@ -382,7 +372,7 @@ export default function MaintenanceLog() {
                     <TableRow key={event.id}>
                       <TableCell>
                         <div className="font-medium">
-                          {format(new Date(event.maintenanceDate), 'MMM d, yyyy')}
+                          {format(calendarDate(event.maintenanceDate), 'MMM d, yyyy')}
                         </div>
                       </TableCell>
                       <TableCell>
@@ -444,7 +434,7 @@ export default function MaintenanceLog() {
                       <TableCell>
                         {event.nextDueDate ? (
                           <div className="text-sm">
-                            {format(new Date(event.nextDueDate), 'MMM d, yyyy')}
+                            {format(calendarDate(event.nextDueDate), 'MMM d, yyyy')}
                           </div>
                         ) : (
                           <span className="text-muted-foreground text-sm">-</span>

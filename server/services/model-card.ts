@@ -44,6 +44,12 @@ async function readJson(name: string): Promise<any | null> {
   }
 }
 
+/** The champion named by the registry on disk, for when the ML service is away. */
+export async function readRegistryChampion(): Promise<string | null> {
+  const registry = await readJson("model_registry.json");
+  return registry?.champion ?? null;
+}
+
 /**
  * Feature importance and hyperparameters for a model version, from disk.
  *

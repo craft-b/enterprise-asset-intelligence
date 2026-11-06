@@ -40,7 +40,7 @@ export default function JobSitesList() {
   const { sort, onSort, page, setPage, rows: pagedSites, totalPages, total } = useTable(
     jobSites,
     { defaultSortKey: "name", defaultDir: "asc",
-      getters: { "activeRentals": (s) => s._count?.rentals ?? 0 } }
+      getters: { "activeRentals": (s) => s._count?.activeRentals ?? 0 } }
   );
 
   const handleDelete = () => {
@@ -158,7 +158,7 @@ export default function JobSitesList() {
                   </TableCell>
                   <TableCell>
                     <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
-                      {site._count?.rentals || 0} rentals
+                      {site._count?.activeRentals ?? 0} active
                     </Badge>
                   </TableCell>
                   {isAdmin && (

@@ -30,6 +30,25 @@ export const errorSchemas = {
 // ============================================
 // API CONTRACT
 // ============================================
+// A calendar day, kept as 'YYYY-MM-DD'. Rows read back from the API carry a time
+// part, which an edit can send straight back, so only the day is kept.
+const calendarDay = z.string()
+  .refine(v => /^\d{4}-\d{2}-\d{2}/.test(v) && !Number.isNaN(Date.parse(v.slice(0, 10))), 'Enter a valid date')
+  .transform(v => v.slice(0, 10));
+
+const maintenanceFields = z.object({
+  equipmentId: z.number().int().positive(),
+  maintenanceDate: calendarDay,
+  maintenanceType: z.enum(['INSPECTION', 'MINOR_SERVICE', 'MAJOR_SERVICE']),
+  eventSource: z.enum(EVENT_SOURCE_VALUES).optional(),
+  description: z.string().nullable().optional(),
+  performedBy: z.string().nullable().optional(),
+  cost: z.union([z.string(), z.number()]).nullable().optional()
+    .refine(v => v == null || v === '' || Number(v) >= 0, 'Cost cannot be negative')
+    .transform(v => (v == null || v === '' ? null : String(v))),
+  nextDueDate: calendarDay.nullable().optional(),
+});
+
 export const api = {
   riskScore: {
     calculate: {
@@ -183,6 +202,7 @@ export const api = {
           createdAt: z.string().nullable(),
           _count: z.object({
             rentals: z.number(),
+            activeRentals: z.number(),
           }).optional(),
         })),
       },
@@ -273,6 +293,7 @@ export const api = {
           createdAt: z.string().nullable(),
           _count: z.object({
             rentals: z.number(),
+            activeRentals: z.number(),
           }).optional(),
         })),
       },
@@ -559,25 +580,30 @@ export const api = {
           total: z.number(),
           limit: z.number(),
           offset: z.number(),
+          // Across every matching event, not just this page
+          totalCost: z.number(),
+          recentEvents: z.number(),
         }),
       },
     },
     create: {
       method: 'POST' as const,
       path: '/api/maintenance',
-      input: z.object({
-        equipmentId: z.number(),
-        maintenanceDate: z.string(),
-        maintenanceType: z.enum(['INSPECTION', 'MINOR_SERVICE', 'MAJOR_SERVICE']),
+      input: maintenanceFields.extend({
         // WHY the maintenance was triggered — feeds the ML feedback loop
         eventSource: z.enum(EVENT_SOURCE_VALUES).optional().default('SCHEDULED_PM'),
-        description: z.string().optional(),
-        performedBy: z.string().optional(),
-        cost: z.string().optional(),
-        nextDueDate: z.string().optional(),
       }),
       responses: {
         201: z.custom<MaintenanceEvent>(),
+        400: errorSchemas.validation,
+      },
+    },
+    update: {
+      method: 'PUT' as const,
+      path: '/api/maintenance/:id',
+      input: maintenanceFields.partial(),
+      responses: {
+        200: z.custom<MaintenanceEvent>(),
         400: errorSchemas.validation,
       },
     },
