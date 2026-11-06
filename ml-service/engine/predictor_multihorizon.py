@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from engine.feature_transform import transform_features
+from engine.genai_advisor import RECENT_SERVICE_DAYS
 
 try:
     import shap
@@ -43,8 +44,6 @@ def _confidence_label(roc_auc: Optional[float]) -> str:
         return f"moderate (holdout ROC-AUC {roc_auc:.2f})"
     return f"low (holdout ROC-AUC {roc_auc:.2f})"
 
-
-from engine.genai_advisor import RECENT_SERVICE_DAYS
 
 _RISK_RANK = {"LOW": 0, "MEDIUM": 1, "HIGH": 2}
 
