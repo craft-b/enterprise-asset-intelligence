@@ -73,7 +73,8 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { computeOptimalIntervention, daysSinceRecentService, recentlyServicedIds, PM_COST_BY_CATEGORY, DEFAULT_PM_COST, FAILURE_DOWNTIME_DAYS } from "@/lib/cost-model";
-import { useTrainModel, useTrainingStatus } from "@/hooks/use-predictive-maintenance";
+import { useModelMetrics, useTrainModel, useTrainingStatus } from "@/hooks/use-predictive-maintenance";
+import { confidenceLabel } from "@/lib/model-confidence";
 import { BrainCircuit, ScrollText } from "lucide-react";
 import { MaintenanceForm } from "@/components/maintenance-form";
 
@@ -530,11 +531,14 @@ export default function PredictiveMaintenanceDashboard() {
 
   const { scores, mutation: mhMutation } = useMultiHorizonRiskScores();
   const { data: latestPredictions } = useLatestMultiHorizonPredictions();
+  const { data: modelMetrics } = useModelMetrics();
+  const confidence = (days: string) => confidenceLabel(modelMetrics?.horizons?.[days]?.rocAuc);
 
   const isAdmin = user?.role === "ADMINISTRATOR";
 
   const resultsWithNames: Array<MultiHorizonResult & { name: string; equipmentCode: string; category: string; status: string }> = (
-    scores.length > 0 ? scores : latestPredictions ?? []
+    // Stored rows first: they stay current, and the last run's results do not.
+    latestPredictions?.length ? latestPredictions : scores
   ).map((result: any) => {
     const equip = equipment?.find((e) => e.id === (result.equipmentId ?? result.equipment_id));
     return {
@@ -549,9 +553,9 @@ export default function PredictiveMaintenanceDashboard() {
       predictions: result.predictions ?? {
         // Reconstructed from a persisted /latest row. Drivers stay a plain name
         // list (no fabricated weights); attribution comes only from real SHAP.
-        "10d": { failure_probability: Number(result.prob_10d), risk_level: result.risk_level_10d, risk_score: Math.round(Number(result.prob_10d) * 100), model_confidence: "moderate", top_risk_drivers: parseJsonArray(result.top_drivers_10d), shap_attribution: parseJsonObject(result.shap_attribution_10d) },
-        "30d": { failure_probability: Number(result.prob_30d), risk_level: result.risk_level_30d, risk_score: Math.round(Number(result.prob_30d) * 100), model_confidence: "high",     top_risk_drivers: parseJsonArray(result.top_drivers_30d), shap_attribution: parseJsonObject(result.shap_attribution_30d) },
-        "60d": { failure_probability: Number(result.prob_60d), risk_level: result.risk_level_60d, risk_score: Math.round(Number(result.prob_60d) * 100), model_confidence: "very high", top_risk_drivers: parseJsonArray(result.top_drivers_60d), shap_attribution: parseJsonObject(result.shap_attribution_60d) },
+        "10d": { failure_probability: Number(result.prob_10d), risk_level: result.risk_level_10d, risk_score: Math.round(Number(result.prob_10d) * 100), model_confidence: confidence("10"), top_risk_drivers: parseJsonArray(result.top_drivers_10d), shap_attribution: parseJsonObject(result.shap_attribution_10d) },
+        "30d": { failure_probability: Number(result.prob_30d), risk_level: result.risk_level_30d, risk_score: Math.round(Number(result.prob_30d) * 100), model_confidence: confidence("30"), top_risk_drivers: parseJsonArray(result.top_drivers_30d), shap_attribution: parseJsonObject(result.shap_attribution_30d) },
+        "60d": { failure_probability: Number(result.prob_60d), risk_level: result.risk_level_60d, risk_score: Math.round(Number(result.prob_60d) * 100), model_confidence: confidence("60"), top_risk_drivers: parseJsonArray(result.top_drivers_60d), shap_attribution: parseJsonObject(result.shap_attribution_60d) },
       },
     };
   });
@@ -637,7 +641,9 @@ export default function PredictiveMaintenanceDashboard() {
             ? ` trained on ${pipelineStatus.trainedOn.toLocaleString()} labeled snapshots.`
             : "."}
           <span className="ml-1 font-medium">
-            10d: high confidence · 30d: high · 60d: high
+            {modelMetrics?.horizons && `Holdout ROC-AUC: ${["10", "30", "60"]
+              .map((d) => `${d}d ${modelMetrics.horizons?.[d]?.rocAuc?.toFixed(2) ?? "n/a"}`)
+              .join(" · ")}`}
             {pipelineStatus?.modelStatus && (
               <span className="ml-1 text-blue-600">· {pipelineStatus.modelStatus}</span>
             )}

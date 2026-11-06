@@ -47,6 +47,6 @@ describe("daysSinceRecentService", () => {
 
   it("keeps the same window as the advisor", () => {
     const advisor = readFileSync(join(__dirname, "../../../ml-service/engine/genai_advisor.py"), "utf-8");
-    expect(advisor).toContain(`_RECENT_SERVICE_DAYS = ${RECENT_SERVICE_DAYS}`);
+    expect(advisor).toContain(`RECENT_SERVICE_DAYS = ${RECENT_SERVICE_DAYS}`);
   });
 });

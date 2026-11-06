@@ -41,7 +41,7 @@ _ACTION_BY_RISK = {
 # A MEDIUM unit fresh from a major service was told to book a service within two
 # weeks: the band's timeframe outranked a softer "do not repeat it" line. Below
 # HIGH, a recent service replaces the band's response level outright.
-_RECENT_SERVICE_DAYS = 30
+RECENT_SERVICE_DAYS = 30
 _RECENTLY_SERVICED = (
     "Just serviced. That work is done, so do not book another service or "
     "inspection. Name what to watch for in normal operation, and return the unit "
@@ -77,7 +77,7 @@ def _build_prompt(snapshot: dict, prediction: dict, horizon_days: int = 30) -> s
     drivers_text = "\n".join(f"- {d}" for d in drivers) if drivers else "- No specific drivers flagged"
     action = _ACTION_BY_RISK.get(risk_level, _ACTION_BY_RISK["MEDIUM"])
     service_label = _SERVICE_LABELS.get(snapshot.get("last_service_type"))
-    if service_label and risk_level != "HIGH" and days_since_maint <= _RECENT_SERVICE_DAYS:
+    if service_label and risk_level != "HIGH" and days_since_maint <= RECENT_SERVICE_DAYS:
         action = _RECENTLY_SERVICED
     service_line = (
         f"Last service: {service_label}, {int(days_since_maint)} days ago"

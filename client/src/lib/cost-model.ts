@@ -23,7 +23,7 @@ export const DEFAULT_PM_COST = 700;
 export const FAILURE_DOWNTIME_DAYS = 7;
 
 // Below HIGH, a service this recent means the work is done. Matches
-// _RECENT_SERVICE_DAYS in ml-service/engine/genai_advisor.py, so the advice and
+// RECENT_SERVICE_DAYS in ml-service/engine/genai_advisor.py, so the advice and
 // the callout beside it agree.
 export const RECENT_SERVICE_DAYS = 30;
 

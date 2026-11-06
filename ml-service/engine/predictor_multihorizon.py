@@ -44,6 +44,8 @@ def _confidence_label(roc_auc: Optional[float]) -> str:
     return f"low (holdout ROC-AUC {roc_auc:.2f})"
 
 
+from engine.genai_advisor import RECENT_SERVICE_DAYS
+
 _RISK_RANK = {"LOW": 0, "MEDIUM": 1, "HIGH": 2}
 
 
@@ -423,6 +425,14 @@ class MultiHorizonPredictor:
         age   = snapshot.get("asset_age_years", 0)
         hours = snapshot.get("total_hours_lifetime", 0)
         days  = snapshot.get("days_since_last_maintenance", 0) or 0
+
+        # The same rule as the advisor, for batch runs and LLM fallbacks.
+        if (worst_risk != "HIGH" and snapshot.get("last_service_type")
+                and days <= RECENT_SERVICE_DAYS):
+            return (
+                "Recently serviced, so no further maintenance is needed yet. "
+                "Monitor for wear escalation and keep to the regular schedule."
+            )
 
         if worst_risk == "HIGH":
             return (

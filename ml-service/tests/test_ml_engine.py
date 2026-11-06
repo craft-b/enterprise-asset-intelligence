@@ -213,6 +213,17 @@ class TestTrendAndWorstHorizon:
         preds = self._preds(("HIGH", 0.21), ("MEDIUM", 0.40), ("MEDIUM", 0.60))
         assert worst_horizon(preds) == "10d"
 
+    @pytest.mark.parametrize("level,serviced,expected", [
+        ("MEDIUM", {"last_service_type": "MAJOR_SERVICE", "days_since_last_maintenance": 2}, "Recently serviced"),
+        ("LOW", {"last_service_type": "MINOR_SERVICE", "days_since_last_maintenance": 2}, "Recently serviced"),
+        ("HIGH", {"last_service_type": "MAJOR_SERVICE", "days_since_last_maintenance": 2}, "HIGH failure probability"),
+        ("MEDIUM", {"last_service_type": "MAJOR_SERVICE", "days_since_last_maintenance": 45}, "within 2 weeks"),
+        ("MEDIUM", {"days_since_last_maintenance": 2}, "within 2 weeks"),
+    ])
+    def test_the_template_follows_the_recent_service_rule(self, level, serviced, expected):
+        text = MultiHorizonPredictor._generate_recommendation(None, serviced, level, "60d")
+        assert expected in text
+
     def test_within_one_band_the_highest_probability_wins(self):
         preds = self._preds(("LOW", 0.04), ("LOW", 0.10), ("LOW", 0.24))
         assert worst_horizon(preds) == "60d"
