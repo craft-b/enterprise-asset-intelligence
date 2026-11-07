@@ -33,6 +33,7 @@ import { getModelStatus } from "./services/model-status";
 import { timingSafeEqual } from "crypto";
 import { registerTestLogin } from "./test-login";
 import { getSimulationDate } from "./services/simulation-clock";
+import { runExclusive, pipelineBusy, busyMessage } from "./services/pipeline-lock";
 import { scoreFleetMultiHorizon, toMlSnapshot } from "./services/multi-horizon-scoring";
 import { IMPUTATION_DEFAULTS, isColdStart, coldStartMultiHorizon } from "./services/imputation";
 import { riskBand } from "@shared/risk-bands";
@@ -248,6 +249,13 @@ export async function registerRoutes(
   // ended, which is the kind of thing a second copy invites.
 
   // ── SIMULATION ────────────────────────────────────────────────────────────
+
+  // Pipeline writes run one at a time; see services/pipeline-lock.ts.
+  const exclusive = (name: string, handler: (req: Request, res: Response) => Promise<unknown>) =>
+    async (req: Request, res: Response) => {
+      const run = await runExclusive(name, () => handler(req, res));
+      if (!run.ok) res.status(409).json(busyMessage(run.busy));
+    };
   app.get("/api/simulate/state", requireAuth, async (req, res) => {
     try {
       const [state] = await db.execute(sql`SELECT * FROM simulation_state WHERE id = 1`) as any;
@@ -257,7 +265,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/simulate/day", requireAuth, requireAdmin, async (req, res) => {
+  app.post("/api/simulate/day", requireAuth, requireAdmin, exclusive("simulation", async (req, res) => {
     try {
       const days = Math.min(Math.max(parseInt(req.body.days) || 1, 1), 30);
 
@@ -431,7 +439,7 @@ export async function registerRoutes(
       console.error("[SIMULATE]", e);
       res.status(500).json({ message: "Simulation failed", error: e.message });
     }
-  });
+  }));
 
   // ── PREVENTIVE MAINTENANCE SIMULATION ────────────────────────────────────
   // Advances the simulation cursor by N days and auto-logs SCHEDULED_PM events
@@ -444,7 +452,7 @@ export async function registerRoutes(
   //   4. PM config evaluated — feature thresholds can shorten base intervals
   //   5. Triggered types get a maintenance_event logged (eventSource=SCHEDULED_PM)
   //
-  app.post('/api/simulate/advance-pm', requireAuth, requireAdmin, async (req, res) => {
+  app.post('/api/simulate/advance-pm', requireAuth, requireAdmin, exclusive("PM advance", async (req, res) => {
     try {
       const days = Math.min(Math.max(parseInt(req.body.days) || 1, 1), 30);
 
@@ -564,7 +572,7 @@ export async function registerRoutes(
       console.error("[SIMULATE-PM]", e);
       res.status(500).json({ message: "PM simulation failed", error: e.message });
     }
-  });
+  }));
 
   // ── HEALTH ────────────────────────────────────────────────────────────────
   // "healthy" answered the wrong question. After a push, the old instance
@@ -1492,7 +1500,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post('/api/predictive-maintenance/generate-snapshots', requireAdmin, async (req, res) => {
+  app.post('/api/predictive-maintenance/generate-snapshots', requireAdmin, exclusive("snapshot generation", async (req, res) => {
     try {
       if (req.body.snapshotDate) {
         const snapshotDate = new Date(req.body.snapshotDate);
@@ -1542,16 +1550,17 @@ export async function registerRoutes(
     } catch (error) {
       res.status(500).json({ message: 'Failed to generate snapshots' });
     }
-  });
+  }));
 
-  app.post('/api/predictive-maintenance/label-snapshots', requireAdmin, async (req, res) => {
+  app.post('/api/predictive-maintenance/label-snapshots', requireAdmin, exclusive("labeling", async (req, res) => {
     try {
+      const duplicatesRemoved = await featureEngineeringService.removeDuplicateSnapshots();
       const labeled = await featureEngineeringService.labelSnapshots();
-      res.json({ message: `Labeled ${labeled} historical snapshots`, count: labeled });
+      res.json({ message: `Labeled ${labeled} historical snapshots`, count: labeled, duplicatesRemoved });
     } catch (error) {
       res.status(500).json({ message: 'Failed to label snapshots' });
     }
-  });
+  }));
 
   app.get('/api/predictive-maintenance/equipment-with-risk', requireAuth, async (req, res) => {
     try {
@@ -2742,6 +2751,8 @@ export async function registerRoutes(
   // owns the reset button.
   app.post("/api/admin/seed", requireAdmin, async (req, res) => {
     try {
+      const busy = pipelineBusy();
+      if (busy && busy !== "demo seed") return res.status(409).json(busyMessage(busy));
       const result = await startSeedJob();
       res.json(result);
     } catch (e: any) {

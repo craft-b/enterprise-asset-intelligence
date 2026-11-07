@@ -441,23 +441,28 @@ class FeatureEngineeringService {
    *   - Rows whose 60d window hasn't elapsed yet are marked censored_horizon and
    *     re-evaluated on later runs as the simulation cursor advances.
    */
+  /**
+   * Deletes all but the oldest copy of any snapshot stored twice for the same
+   * unit and timestamp. Overlapping backfills used to write duplicates, which
+   * train as extra weight on those units. Returns the number removed.
+   */
+  async removeDuplicateSnapshots(): Promise<number> {
+    const [result] = await db.execute(sql`
+      DELETE s1 FROM asset_feature_snapshots s1
+      JOIN asset_feature_snapshots s2
+        ON s1.equipment_id = s2.equipment_id
+       AND s1.snapshot_ts = s2.snapshot_ts
+       AND s1.id > s2.id
+    `) as any;
+    return Number(result?.affectedRows ?? 0);
+  }
+
   async labelSnapshots(): Promise<number> {
-    // Use simulation cursor as reference, not wall clock
-    const [stateRows] = await db.execute(
-      sql`SELECT cursor_date FROM simulation_state WHERE id = 1`
-    ) as any;
-    const simCursor = stateRows[0]?.cursor_date
-      ? new Date(stateRows[0].cursor_date)
-      : new Date();
-
-    // Full 60d outcome window must have elapsed for a definitive label
-    const cutoffDate = new Date(simCursor.getTime() - 60 * 24 * 60 * 60 * 1000);
-
     // Candidates: never evaluated, or horizon-censored rows whose window may
     // have elapsed since the last run. (Legacy rows labeled under the old
     // any-MAJOR_SERVICE rule have label_status NULL and get relabeled too.)
     const candidates = await db
-      .select()
+      .select({ id: assetFeatureSnapshots.id, labelStatus: assetFeatureSnapshots.labelStatus })
       .from(assetFeatureSnapshots)
       .where(
         sql`(${assetFeatureSnapshots.labelStatus} IS NULL
@@ -467,9 +472,39 @@ class FeatureEngineeringService {
     let labeled = 0;
 
     for (const snapshot of candidates) {
-      const snapshotDate = new Date(snapshot.snapshotTs);
+      // All date arithmetic happens in SQL, against the stored values. Doing it
+      // in JS mixed timezones: Drizzle reads timestamps as UTC while raw query
+      // parameters are sent as local time, so on a server not on UTC every
+      // window shifted by the offset and failures on a window's last day, or
+      // on the snapshot's own day, got the wrong label.
+      //
+      // Reference is the simulation cursor, not the wall clock. The full 60d
+      // outcome window must have elapsed for a definitive label. Failures count
+      // from the day after the snapshot: strict > excludes day-0 events.
+      const [rows] = await db.execute(sql`
+        SELECT
+          s.snapshot_ts > DATE_SUB(
+            COALESCE((SELECT cursor_date FROM simulation_state WHERE id = 1), CURDATE()),
+            INTERVAL 60 DAY) AS censored,
+          (SELECT DATEDIFF(MIN(m.maintenance_date), DATE(s.snapshot_ts))
+             FROM maintenance_events m
+            WHERE m.equipment_id = s.equipment_id
+              AND m.event_source = 'REACTIVE_REPAIR'
+              AND m.maintenance_date > s.snapshot_ts
+              AND m.maintenance_date <= DATE_ADD(s.snapshot_ts, INTERVAL 60 DAY)) AS failDays,
+          (SELECT DATEDIFF(MIN(m.maintenance_date), DATE(s.snapshot_ts))
+             FROM maintenance_events m
+            WHERE m.equipment_id = s.equipment_id
+              AND m.event_source = 'PREDICTIVE_INTERVENTION'
+              AND m.maintenance_date > s.snapshot_ts
+              AND m.maintenance_date <= DATE_ADD(s.snapshot_ts, INTERVAL 60 DAY)) AS interventionDays
+        FROM asset_feature_snapshots s
+        WHERE s.id = ${snapshot.id}
+      `) as any;
+      const row = (rows as any[])[0];
+      if (!row) continue;
 
-      if (snapshotDate > cutoffDate) {
+      if (Number(row.censored) === 1) {
         if (snapshot.labelStatus !== 'censored_horizon') {
           await db
             .update(assetFeatureSnapshots)
@@ -479,36 +514,10 @@ class FeatureEngineeringService {
         continue;
       }
 
-      const window60End = new Date(snapshotDate.getTime() + 60 * 24 * 60 * 60 * 1000);
+      const daysToFailure = row.failDays != null ? Number(row.failDays) : null;
+      const daysToIntervention = row.interventionDays != null ? Number(row.interventionDays) : null;
 
-      // First actual breakdown in (ts, ts+60] — strict > excludes day-0 events
-      const [failRows] = await db.execute(sql`
-        SELECT MIN(maintenance_date) AS first_event
-        FROM maintenance_events
-        WHERE equipment_id = ${snapshot.equipmentId}
-          AND event_source = 'REACTIVE_REPAIR'
-          AND maintenance_date > ${snapshotDate}
-          AND maintenance_date <= ${window60End}
-      `) as any;
-
-      // First model-driven intervention in the same window
-      const [intRows] = await db.execute(sql`
-        SELECT MIN(maintenance_date) AS first_event
-        FROM maintenance_events
-        WHERE equipment_id = ${snapshot.equipmentId}
-          AND event_source = 'PREDICTIVE_INTERVENTION'
-          AND maintenance_date > ${snapshotDate}
-          AND maintenance_date <= ${window60End}
-      `) as any;
-
-      const firstFailure: Date | null = failRows[0]?.first_event
-        ? new Date(failRows[0].first_event) : null;
-      const firstIntervention: Date | null = intRows[0]?.first_event
-        ? new Date(intRows[0].first_event) : null;
-
-      // Intervention before any observed failure → counterfactual unknown.
-      // Censor the row entirely rather than record a negative we can't defend.
-      if (firstIntervention && (!firstFailure || firstIntervention < firstFailure)) {
+      if (daysToIntervention !== null && (daysToFailure === null || daysToIntervention < daysToFailure)) {
         await db
           .update(assetFeatureSnapshots)
           .set({
@@ -521,14 +530,6 @@ class FeatureEngineeringService {
         labeled++;
         continue;
       }
-
-      // Calendar-day distance from snapshot date to first failure
-      const snapMidnight = new Date(
-        snapshotDate.getFullYear(), snapshotDate.getMonth(), snapshotDate.getDate()
-      );
-      const daysToFailure = firstFailure
-        ? Math.round((firstFailure.getTime() - snapMidnight.getTime()) / (24 * 60 * 60 * 1000))
-        : null;
 
       const labelFor = (h: number) =>
         daysToFailure !== null && daysToFailure >= 1 && daysToFailure <= h ? 1 : 0;

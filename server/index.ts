@@ -16,6 +16,7 @@ import { evaluatePMSchedule, generatePMDescription, samplePMCost, MaintenanceTyp
 import { mlFetch } from "./services/ml-client";
 import { registerChampionIfMissing } from "./services/champion-metrics";
 import { getSeedStatus } from "./services/seed-orchestrator";
+import { runExclusive } from "./services/pipeline-lock";
 import {
   planCatchUp,
   PM_ADVANCE_DAYS,
@@ -254,7 +255,14 @@ async function runDriftRescore() {
 
 
 
+// Skipped, not queued, when another pipeline job is writing: the catch-up
+// below applies the missed days on the next run.
 async function runPMSimulation(days: number = PM_ADVANCE_DAYS, realTimeMark?: Date) {
+  const run = await runExclusive("PM advance", () => runPMSimulationUnlocked(days, realTimeMark));
+  if (!run.ok) log(`[PM-CRON] Skipped: ${run.busy} is running`, "cron");
+}
+
+async function runPMSimulationUnlocked(days: number, realTimeMark?: Date) {
   log(`[PM-CRON] Starting PM simulation — advancing ${days} simulation day(s)`, "cron");
 
   try {
