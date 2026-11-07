@@ -155,9 +155,8 @@ export default function CommandCenter() {
     localStorage.setItem("cc-density", next);
   };
 
-  const asOf = sim.data?.cursor_date
-    ? calendarDate(sim.data.cursor_date)
-    : new Date();
+  // The simulated "today". Shown only once loaded, so the real date never flashes in its place.
+  const asOf = sim.data?.cursor_date ? calendarDate(sim.data.cursor_date) : null;
 
   const rows: FleetRow[] = (predictions ?? []).map((p: any) => {
     const id = p.equipmentId ?? p.equipment_id;
@@ -236,10 +235,19 @@ export default function CommandCenter() {
             Fleet health, predicted failures, and this week&apos;s maintenance priorities
           </p>
         </div>
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Calendar className="h-4 w-4" />
-          <span className="tabular-nums">As of {format(asOf, "MMM d, yyyy")}</span>
-        </div>
+        <TooltipProvider delayDuration={200}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className="flex items-center gap-2 text-sm text-muted-foreground cursor-default">
+                <Calendar className="h-4 w-4" />
+                <span className="tabular-nums">Simulated date: {asOf ? format(asOf, "MMM d, yyyy") : "…"}</span>
+              </div>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="max-w-xs text-xs leading-relaxed">
+              This demo runs on a simulated clock that advances one day at a time, so its dates can run ahead of today's.
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       </div>
 
       {/* KPI strip */}
