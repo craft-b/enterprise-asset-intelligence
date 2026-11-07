@@ -398,7 +398,16 @@ export default function CommandCenter() {
                 <div className="w-[220px] shrink-0">Asset</div>
                 <div className="flex-1 min-w-0 hidden lg:block">Primary risk driver</div>
                 <div className="w-[210px] shrink-0 text-center">Failure probability · 10 / 30 / 60d</div>
-                <div className="w-[64px] shrink-0 text-center">High by</div>
+                <TooltipProvider delayDuration={200}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div className="w-[72px] shrink-0 text-center cursor-default">Reaches High</div>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-xs text-xs leading-relaxed normal-case tracking-normal font-normal">
+                      The soonest window in which the model rates this unit High risk. The model estimates the chance of failure within 10, 30 and 60 days, not a failure date.
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
                 <div className="w-[118px] shrink-0 text-right">Status</div>
                 {isAdmin && <div className="w-9 shrink-0" />}
               </div>
@@ -484,13 +493,13 @@ export default function CommandCenter() {
                       </div>
 
                       {/* Lead-time estimate: earliest horizon at HIGH */}
-                      <div className="hidden xl:block w-[64px] shrink-0 text-center">
+                      <div className="hidden xl:block w-[72px] shrink-0 text-center">
                         {win ? (
                           <span className="font-mono text-xs font-semibold tabular-nums text-risk-high">
                             ≤ {win}
                           </span>
                         ) : (
-                          <span className="text-xs text-muted-foreground/50">—</span>
+                          <span className="text-xs text-muted-foreground/60">Not high</span>
                         )}
                       </div>
 

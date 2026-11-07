@@ -326,13 +326,15 @@ async function runPMSimulation(days: number = PM_ADVANCE_DAYS, realTimeMark?: Da
           }
         }
 
-        const triggered = evaluatePMSchedule(category, snapshot, lastPMByType);
+        const triggered = evaluatePMSchedule(category, snapshot, lastPMByType, { unitId: equip.id, date: cursorDate });
 
         for (const item of triggered) {
           const description = generatePMDescription(item.maintenanceType, item, category);
           const cost = samplePMCost(category, item.maintenanceType);
-          const nextDueDays = { MAJOR_SERVICE: 180, MINOR_SERVICE: 90, INSPECTION: 60 }[item.maintenanceType];
-          const nextDue = new Date(cursorDate.getTime() + nextDueDays * 24 * 3600 * 1000)
+          // The interval just used to trigger this service, which varies by
+          // category and condition. A flat 60/90/180 here put every unit
+          // serviced on the same day on the same due date.
+          const nextDue = new Date(cursorDate.getTime() + item.effectiveDays * 24 * 3600 * 1000)
             .toISOString().split("T")[0];
 
           try {

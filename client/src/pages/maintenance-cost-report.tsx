@@ -50,12 +50,17 @@ export default function MaintenanceCostReport() {
     cost: Number(d.totalCost),
     events: Number(d.eventCount),
   }));
+  // The query covers the last 12 months, but records may begin partway through.
+  const firstMonth = byMonth[0]?.month as string | undefined;
+  const fullYear = byMonth.length >= 12;
+  const monthLabel = (m: string) =>
+    new Date(Number(m.slice(0, 4)), Number(m.slice(5, 7)) - 1, 1).toLocaleString("en-US", { month: "long", year: "numeric" });
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
       <div>
         <h2 className="text-3xl font-bold tracking-tight">Maintenance Cost Report</h2>
-        <p className="text-muted-foreground">Fleet maintenance spend analysis — 12-month rolling view</p>
+        <p className="text-muted-foreground">Fleet maintenance spend by month, category and unit</p>
       </div>
 
       {/* Summary — neutral stat tiles; cost is data, not danger */}
@@ -105,9 +110,13 @@ export default function MaintenanceCostReport() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <BarChart2 className="h-5 w-5 text-muted-foreground" />
-            Monthly Maintenance Spend (12 Months)
+            Monthly Maintenance Spend
           </CardTitle>
-          <CardDescription>Cost trend over the last 12 months</CardDescription>
+          <CardDescription>
+            {fullYear || !firstMonth
+              ? "Cost per month over the last 12 months"
+              : `Cost per month since records begin in ${monthLabel(firstMonth)}`}
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="h-[280px]">

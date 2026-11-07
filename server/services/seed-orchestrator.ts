@@ -29,6 +29,7 @@ import { predictiveMaintenanceService } from "./predictive-maintenance-fixed";
 import { mlFetch, describeMlFailure, ML_SLOW_TIMEOUT_MS } from "./ml-client";
 import { waitForMl, nudgeMlAwake } from "./ml-wake";
 import { registerChampionMetrics } from "./champion-metrics";
+import { PM_CONFIG, DEFAULT_CONFIG } from "./pm-scheduler";
 import { scoreFleetMultiHorizon } from "./multi-horizon-scoring";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -787,7 +788,9 @@ async function seedEquipment(cursorDate: Date) {
       const cursorStr = cursorDate.toISOString().split("T")[0];
       const lastMaint = new Date(cursorDate.getTime() - (e.hours > 5000 ? 120 : 60) * 24 * 3600 * 1000)
         .toISOString().split("T")[0];
-      const nextDue   = new Date(cursorDate.getTime() + 60 * 24 * 3600 * 1000)
+      // Due one category interval after the service, as the PM job dates it.
+      const minorDays = (PM_CONFIG[e.category] ?? DEFAULT_CONFIG).MINOR_SERVICE.baseDays;
+      const nextDue   = new Date(new Date(lastMaint).getTime() + minorDays * 24 * 3600 * 1000)
         .toISOString().split("T")[0];
 
       // A minor service, not an inspection: days_since_last_maintenance counts

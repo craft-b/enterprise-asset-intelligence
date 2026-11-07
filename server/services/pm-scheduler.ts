@@ -406,7 +406,7 @@ export const PM_CONFIG: PMConfig = {
 };
 
 // Fallback config for unknown categories
-const DEFAULT_CONFIG: Record<MaintenanceTypeKey, PMTypeConfig> = {
+export const DEFAULT_CONFIG: Record<MaintenanceTypeKey, PMTypeConfig> = {
   INSPECTION:    { baseDays: 30,  triggers: AGE_INSPECTION_TRIGGERS },
   MINOR_SERVICE: { baseDays: 90,  triggers: AGE_MINOR_TRIGGERS },
   MAJOR_SERVICE: { baseDays: 365, triggers: AGE_MAJOR_TRIGGERS },
@@ -480,11 +480,15 @@ export function computeEffectiveDays(
  * @param category         Equipment category (Excavator, Crane, etc.)
  * @param snapshot         Latest feature snapshot
  * @param lastPMByType     Days since last PM for each maintenance type (null = never done)
+ * @param stagger          The unit and day being scheduled. When given, a service
+ *                         never done before falls on a unit-specific day within one
+ *                         interval instead of on the first day for every unit at once.
  */
 export function evaluatePMSchedule(
   category: string,
   snapshot: EnhancedFeatureSnapshot,
   lastPMByType: Record<MaintenanceTypeKey, number | null>,
+  stagger?: { unitId: number; date: Date },
 ): TriggeredPM[] {
   const triggered: TriggeredPM[] = [];
   const types: MaintenanceTypeKey[] = ["INSPECTION", "MINOR_SERVICE", "MAJOR_SERVICE"];
@@ -492,6 +496,23 @@ export function evaluatePMSchedule(
   for (const maintenanceType of types) {
     const { effectiveDays, firedTriggers } = computeEffectiveDays(category, maintenanceType, snapshot);
     const daysSince = lastPMByType[maintenanceType];
+
+    // Treating every never-done service as overdue fired it for the whole
+    // fleet on the same day, so every unit then came due on the same day too,
+    // indefinitely. With a unit and date, each unit gets its own day instead.
+    if (daysSince == null && stagger) {
+      const day = Math.floor(stagger.date.getTime() / 86_400_000);
+      // 7919 is prime, so consecutive unit ids land on different days for any interval.
+      if ((day + stagger.unitId * 7919) % effectiveDays !== 0) continue;
+      triggered.push({
+        maintenanceType,
+        effectiveDays,
+        daysSinceLastPM: effectiveDays,
+        triggers: firedTriggers,
+        urgency: "DUE",
+      });
+      continue;
+    }
 
     // Never done = treat as overdue at 2× the effective interval
     const effectiveDaysSince = daysSince ?? effectiveDays * 2;

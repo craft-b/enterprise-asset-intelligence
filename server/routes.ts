@@ -19,7 +19,7 @@ import { predictiveMaintenanceService } from './services/predictive-maintenance-
 import { featureEngineeringService } from './services/feature-engineering';
 import { assetRiskPredictions } from "@shared/schema";
 import { enhancedFeatureService } from "./services/feature-engineering-enhanced";
-import { evaluatePMSchedule, generatePMDescription, samplePMCost, MaintenanceTypeKey } from "./services/pm-scheduler";
+import { evaluatePMSchedule, generatePMDescription, samplePMCost, MaintenanceTypeKey, PM_CONFIG, DEFAULT_CONFIG } from "./services/pm-scheduler";
 import { startSeedJob, getSeedStatus, getLastSeedRun, getSystemStatus, resetSystem } from "./services/seed-orchestrator";
 import { featureDrift, predictionDrift, biasDrift } from "./services/drift-read";
 import { readModelCard, readRegistryChampion } from "./services/model-card";
@@ -513,7 +513,7 @@ export async function registerRoutes(
           }
 
           // Evaluate PM schedule
-          const triggered = evaluatePMSchedule(category, snapshot, lastPMByType);
+          const triggered = evaluatePMSchedule(category, snapshot, lastPMByType, { unitId: equip.id, date: cursorDate });
           if (triggered.length === 0) continue;
 
           const createdTypes: string[] = [];
@@ -521,8 +521,8 @@ export async function registerRoutes(
           for (const item of triggered) {
             const description = generatePMDescription(item.maintenanceType, item, category);
             const cost = samplePMCost(category, item.maintenanceType);
-            const nextDueDays = { MAJOR_SERVICE: 180, MINOR_SERVICE: 90, INSPECTION: 60 }[item.maintenanceType];
-            const nextDue = new Date(cursorDate.getTime() + nextDueDays * 24 * 3600 * 1000)
+            // The interval that triggered this service; see runPMSimulation.
+            const nextDue = new Date(cursorDate.getTime() + item.effectiveDays * 24 * 3600 * 1000)
               .toISOString().split("T")[0];
 
             await db.execute(sql`
@@ -1170,18 +1170,15 @@ export async function registerRoutes(
       if (!parsed.success) return res.status(400).json({ message: validationMessage(parsed.error) });
       const input = parsed.data;
 
-      if (!(await storage.getEquipment(input.equipmentId))) {
+      const unit = await storage.getEquipment(input.equipmentId);
+      if (!unit) {
         return res.status(404).json({ message: 'Equipment not found' });
       }
 
-      // Auto-calculate nextDueDate from simulation cursor when not provided
+      // Without a due date, the next one falls a category interval after this
+      // service, the base interval the PM schedule uses.
       if (!input.nextDueDate) {
-        const intervals: Record<string, number> = {
-          MAJOR_SERVICE: 180,
-          MINOR_SERVICE: 90,
-          INSPECTION: 60,
-        };
-        const days = intervals[input.maintenanceType] ?? 90;
+        const days = (PM_CONFIG[unit.category ?? ""] ?? DEFAULT_CONFIG)[input.maintenanceType as MaintenanceTypeKey]?.baseDays ?? 90;
         const base = new Date(input.maintenanceDate);
         base.setDate(base.getDate() + days);
         input.nextDueDate = base.toISOString().split('T')[0];
@@ -2394,15 +2391,19 @@ export async function registerRoutes(
         -- subquery in the ON clause. TiDB rejects the latter outright:
         --   ER_UNKNOWN_ERROR: ON condition doesn't support subqueries yet
         -- MySQL accepts it, so this only failed once deployed.
+        --
+        -- The soonest due date across service types: an inspection logged
+        -- after a minor service must not hide that the minor one is due first.
         JOIN (
-          SELECT m.equipment_id, m.next_due_date
+          SELECT m.equipment_id, MIN(m.next_due_date) AS next_due_date
           FROM maintenance_events m
           JOIN (
-            SELECT equipment_id, MAX(id) AS id
+            SELECT equipment_id, maintenance_type, MAX(id) AS id
             FROM maintenance_events
             WHERE next_due_date IS NOT NULL
-            GROUP BY equipment_id
+            GROUP BY equipment_id, maintenance_type
           ) latest ON latest.id = m.id
+          GROUP BY m.equipment_id
         ) me ON me.equipment_id = e.id
         WHERE me.next_due_date <= DATE_ADD(${cursorDate}, INTERVAL 30 DAY)
         ORDER BY me.next_due_date ASC

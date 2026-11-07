@@ -41,6 +41,7 @@ import { Plus, Search, AlertTriangle, Edit, Trash2 } from "lucide-react";
 import { EquipmentForm } from "@/components/equipment-form";
 import { EquipmentDetailView } from "@/components/equipment-detail-view";
 import { cn } from "@/lib/utils";
+import { nextService } from "@/lib/next-service";
 import { SensorUpload } from "@/components/sensor-upload";
 
 // Risk Badge Component — receives pre-fetched prediction row, no per-unit fetch
@@ -117,8 +118,8 @@ export default function EquipmentList() {
           return p ? parseFloat(p.prob_30d) : -1;
         },
         "nextService": (e) => {
-          const d = dueSoonMap.get(e.id);
-          return d ? Number(d.daysUntilDue) : 9999;
+          const s = nextService(dueSoonMap.get(e.id), predMap.get(e.id));
+          return s ? s.days : 9999;
         },
         "dailyRate": (e) => parseFloat(e.dailyRate ?? "0"),
       }
@@ -247,8 +248,18 @@ export default function EquipmentList() {
                   <TableCell>
                     {(() => {
                       const due = dueSoonMap.get(equip.id);
-                      if (!due) return <span className="text-xs text-muted-foreground">—</span>;
-                      const days = Number(due.daysUntilDue);
+                      const s = nextService(due, predMap.get(equip.id));
+                      if (!s) return <span className="text-xs text-muted-foreground">—</span>;
+                      if (s.moveUp) return (
+                        <Badge
+                          variant="outline"
+                          className="bg-red-100 text-red-800 border-red-300 text-xs"
+                          title={`${due ? `Scheduled in ${Number(due.daysUntilDue)}d. ` : ""}The model rates this unit High risk within ${s.days} days.`}
+                        >
+                          Move up: ≤ {s.days}d
+                        </Badge>
+                      );
+                      const days = s.days;
                       if (days < 0) return (
                         <Badge variant="outline" className="bg-red-100 text-red-800 border-red-300 text-xs">
                           Overdue {Math.abs(days)}d
