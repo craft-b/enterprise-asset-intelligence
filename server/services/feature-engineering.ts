@@ -8,7 +8,7 @@ import {
   vendors,
   jobSites
 } from "@shared/schema";
-import { eq, and, sql, gte, lte, count, sum, avg } from "drizzle-orm";
+import { eq, and, sql, gte, lte, count, sum, avg, inArray } from "drizzle-orm";
 import { enhancedFeatureService } from './feature-engineering-enhanced';
 
 export interface FeatureSnapshot {
@@ -447,64 +447,64 @@ class FeatureEngineeringService {
    * train as extra weight on those units. Returns the number removed.
    */
   async removeDuplicateSnapshots(): Promise<number> {
-    const [result] = await db.execute(sql`
-      DELETE s1 FROM asset_feature_snapshots s1
+    // Find, then delete by id: a plain SELECT and DELETE, rather than a
+    // multi-table DELETE, so TiDB and MySQL run it the same way.
+    const [rows] = await db.execute(sql`
+      SELECT DISTINCT s1.id
+      FROM asset_feature_snapshots s1
       JOIN asset_feature_snapshots s2
         ON s1.equipment_id = s2.equipment_id
        AND s1.snapshot_ts = s2.snapshot_ts
        AND s1.id > s2.id
     `) as any;
-    return Number(result?.affectedRows ?? 0);
+    const ids = (rows as any[]).map((r) => Number(r.id));
+    for (let i = 0; i < ids.length; i += 500) {
+      await db.delete(assetFeatureSnapshots).where(inArray(assetFeatureSnapshots.id, ids.slice(i, i + 500)));
+    }
+    return ids.length;
   }
 
   async labelSnapshots(): Promise<number> {
+    // All date arithmetic happens in SQL, on dates passed as strings. Doing it
+    // in JS mixed timezones: Drizzle reads timestamps as UTC while raw query
+    // parameters are sent as local time, so on a server not on UTC every
+    // window shifted by the offset and failures on a window's last day, or on
+    // the snapshot's own day, got the wrong label.
+    //
+    // Plain queries only, no correlated subqueries: TiDB rejected the version
+    // that computed everything in one statement per snapshot, and local MySQL
+    // accepted it, so it only failed once deployed.
+
+    // Reference is the simulation cursor, not the wall clock. The full 60d
+    // outcome window must have elapsed for a definitive label.
+    const [stateRows] = await db.execute(sql`
+      SELECT DATE_FORMAT(DATE_SUB(cursor_date, INTERVAL 60 DAY), '%Y-%m-%d') AS cutoff
+      FROM simulation_state WHERE id = 1
+    `) as any;
+    let cutoff: string | undefined = (stateRows as any[])[0]?.cutoff;
+    if (!cutoff) {
+      const [nowRows] = await db.execute(sql`
+        SELECT DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 60 DAY), '%Y-%m-%d') AS cutoff
+      `) as any;
+      cutoff = (nowRows as any[])[0].cutoff as string;
+    }
+
     // Candidates: never evaluated, or horizon-censored rows whose window may
     // have elapsed since the last run. (Legacy rows labeled under the old
     // any-MAJOR_SERVICE rule have label_status NULL and get relabeled too.)
-    const candidates = await db
-      .select({ id: assetFeatureSnapshots.id, labelStatus: assetFeatureSnapshots.labelStatus })
-      .from(assetFeatureSnapshots)
-      .where(
-        sql`(${assetFeatureSnapshots.labelStatus} IS NULL
-             OR ${assetFeatureSnapshots.labelStatus} = 'censored_horizon')`
-      );
+    const [candidateRows] = await db.execute(sql`
+      SELECT id, equipment_id AS equipmentId, label_status AS labelStatus,
+             DATE_FORMAT(snapshot_ts, '%Y-%m-%d %H:%i:%s') AS ts,
+             snapshot_ts > ${cutoff} AS censored
+      FROM asset_feature_snapshots
+      WHERE label_status IS NULL OR label_status = 'censored_horizon'
+    `) as any;
+    const candidates = candidateRows as Array<{ id: number; equipmentId: number; labelStatus: string | null; ts: string; censored: number }>;
 
     let labeled = 0;
 
     for (const snapshot of candidates) {
-      // All date arithmetic happens in SQL, against the stored values. Doing it
-      // in JS mixed timezones: Drizzle reads timestamps as UTC while raw query
-      // parameters are sent as local time, so on a server not on UTC every
-      // window shifted by the offset and failures on a window's last day, or
-      // on the snapshot's own day, got the wrong label.
-      //
-      // Reference is the simulation cursor, not the wall clock. The full 60d
-      // outcome window must have elapsed for a definitive label. Failures count
-      // from the day after the snapshot: strict > excludes day-0 events.
-      const [rows] = await db.execute(sql`
-        SELECT
-          s.snapshot_ts > DATE_SUB(
-            COALESCE((SELECT cursor_date FROM simulation_state WHERE id = 1), CURDATE()),
-            INTERVAL 60 DAY) AS censored,
-          (SELECT DATEDIFF(MIN(m.maintenance_date), DATE(s.snapshot_ts))
-             FROM maintenance_events m
-            WHERE m.equipment_id = s.equipment_id
-              AND m.event_source = 'REACTIVE_REPAIR'
-              AND m.maintenance_date > s.snapshot_ts
-              AND m.maintenance_date <= DATE_ADD(s.snapshot_ts, INTERVAL 60 DAY)) AS failDays,
-          (SELECT DATEDIFF(MIN(m.maintenance_date), DATE(s.snapshot_ts))
-             FROM maintenance_events m
-            WHERE m.equipment_id = s.equipment_id
-              AND m.event_source = 'PREDICTIVE_INTERVENTION'
-              AND m.maintenance_date > s.snapshot_ts
-              AND m.maintenance_date <= DATE_ADD(s.snapshot_ts, INTERVAL 60 DAY)) AS interventionDays
-        FROM asset_feature_snapshots s
-        WHERE s.id = ${snapshot.id}
-      `) as any;
-      const row = (rows as any[])[0];
-      if (!row) continue;
-
-      if (Number(row.censored) === 1) {
+      if (Number(snapshot.censored) === 1) {
         if (snapshot.labelStatus !== 'censored_horizon') {
           await db
             .update(assetFeatureSnapshots)
@@ -513,6 +513,19 @@ class FeatureEngineeringService {
         }
         continue;
       }
+
+      // Days from the snapshot's date to the first failure and the first
+      // intervention in (ts, ts+60]. Strict > excludes day-0 events.
+      const [rows] = await db.execute(sql`
+        SELECT
+          DATEDIFF(MIN(CASE WHEN event_source = 'REACTIVE_REPAIR' THEN maintenance_date END), DATE(${snapshot.ts})) AS failDays,
+          DATEDIFF(MIN(CASE WHEN event_source = 'PREDICTIVE_INTERVENTION' THEN maintenance_date END), DATE(${snapshot.ts})) AS interventionDays
+        FROM maintenance_events
+        WHERE equipment_id = ${snapshot.equipmentId}
+          AND maintenance_date > ${snapshot.ts}
+          AND maintenance_date <= DATE_ADD(${snapshot.ts}, INTERVAL 60 DAY)
+      `) as any;
+      const row = (rows as any[])[0] ?? {};
 
       const daysToFailure = row.failDays != null ? Number(row.failDays) : null;
       const daysToIntervention = row.interventionDays != null ? Number(row.interventionDays) : null;
