@@ -81,7 +81,9 @@ const EVENT_SOURCE_STYLES: Record<string, { label: string; className: string }> 
 };
 
 function TrendIcon({ trend }: { trend: string }) {
-  if (trend === "INCREASING") return <TrendingUp className="h-4 w-4 text-risk-high" />;
+  // INCREASING means a higher risk band at 60 days than at 10, not risk rising
+  // over time, so it is amber and says so on hover rather than an alarm.
+  if (trend === "INCREASING") return <TrendingUp className="h-4 w-4 text-risk-medium" aria-label="Higher risk band at 60 days than at 10" />;
   if (trend === "DECREASING") return <TrendingDown className="h-4 w-4 text-risk-low" />;
   return <Minus className="h-4 w-4 text-muted-foreground" />;
 }
@@ -280,8 +282,7 @@ export default function AssetDetail() {
                 <span className="ml-2 inline-flex items-center gap-1 align-middle">
                   <TrendIcon trend={trend} />
                   <span className="text-xs">
-                    {/* INCREASING means a worse risk band at 60 days than at 10. */}
-                    {trend === "INCREASING" ? "worsens a risk band by 60 days" : "stable across horizons"}
+                    {trend === "INCREASING" ? "higher risk band at 60 days than at 10" : "same risk band at every horizon"}
                   </span>
                 </span>
               ) : null}

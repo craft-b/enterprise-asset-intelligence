@@ -95,7 +95,9 @@ function safeDrivers(raw: unknown): string[] {
 }
 
 function TrendIcon({ trend }: { trend: FleetRow["trend"] }) {
-  if (trend === "INCREASING") return <TrendingUp className="h-4 w-4 text-risk-high" />;
+  // INCREASING means a higher risk band at 60 days than at 10, not risk rising
+  // over time, so it is amber and says so on hover rather than an alarm.
+  if (trend === "INCREASING") return <TrendingUp className="h-4 w-4 text-risk-medium" aria-label="Higher risk band at 60 days than at 10" />;
   if (trend === "DECREASING") return <TrendingDown className="h-4 w-4 text-risk-low" />;
   return <Minus className="h-4 w-4 text-muted-foreground" />;
 }

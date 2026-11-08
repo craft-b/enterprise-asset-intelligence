@@ -972,12 +972,21 @@ export default function MLPerformanceDashboard() {
   const hyperparameters = modelMetrics.hyperparameters ?? null;
 
   // Failure-class performance per horizon (the class that matters operationally)
-  const failureClassPerformance = horizonRows.map(r => ({
-    horizon: r.label,
-    precision: r.precisionFailure ?? 0,
-    recall: r.recallFailure ?? 0,
-    f1: r.f1Failure ?? 0,
-  }));
+  // At the 0.5 cutoff a short horizon can predict no failures at all, since
+  // its calibrated probabilities stay near the base rate. Precision is then
+  // 0/0: shown as no bar and named below the chart, not drawn as 0%.
+  const failureClassPerformance = horizonRows.map(r => {
+    const c = (r as any).confusion;
+    const nonePredicted = c != null && Number(c.tp) + Number(c.fp) === 0;
+    return {
+      horizon: r.label,
+      precision: nonePredicted ? null : r.precisionFailure ?? 0,
+      recall: r.recallFailure ?? 0,
+      f1: nonePredicted ? null : r.f1Failure ?? 0,
+      nonePredicted,
+    };
+  });
+  const noFailuresPredicted = failureClassPerformance.filter(r => r.nonePredicted).map(r => r.horizon);
 
   // Insight inputs
   const topFeature    = featureImportance[0]?.feature;
@@ -1274,7 +1283,7 @@ export default function MLPerformanceDashboard() {
           <CardHeader>
             <CardTitle>Failure-Class Performance by Horizon</CardTitle>
             <CardDescription>
-              Precision, recall, and F1 on the failure class — per prediction window (temporal holdout)
+              Precision, recall, and F1 on the failure class at a 0.5 probability cutoff — per prediction window (temporal holdout)
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -1285,7 +1294,7 @@ export default function MLPerformanceDashboard() {
                   <XAxis dataKey="horizon" stroke={CHART.axis.stroke} tick={CHART.axis.tick} tickLine={false} axisLine={false} />
                   <YAxis domain={[0, 1]} tickFormatter={(value) => `${(value * 100).toFixed(0)}%`} stroke={CHART.axis.stroke} tick={CHART.axis.tick} tickLine={false} axisLine={false} />
                   <Tooltip
-                    formatter={(value: number) => `${(value * 100).toFixed(1)}%`}
+                    formatter={(value: any) => value == null ? "n/a" : `${(Number(value) * 100).toFixed(1)}%`}
                     {...CHART.tooltip}
                   />
                   <Legend wrapperStyle={{ fontSize: 12 }} iconType="circle" iconSize={8} />
@@ -1296,6 +1305,13 @@ export default function MLPerformanceDashboard() {
                 </BarChart>
               </ResponsiveContainer>
             </div>
+            {noFailuresPredicted.length > 0 && (
+              <p className="mt-3 text-xs text-muted-foreground">
+                {noFailuresPredicted.join(", ")}: no unit reaches 0.5, so nothing is flagged at this cutoff and
+                precision is undefined. In the app this horizon flags HIGH at a lower threshold; Operator Metrics
+                shows precision inside the weekly work queue instead.
+              </p>
+            )}
             <div className="mt-4 grid grid-cols-3 gap-4 text-center text-xs">
               <div>
                 <div className="font-medium">Precision</div>

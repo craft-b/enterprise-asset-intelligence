@@ -120,7 +120,9 @@ const RISK_ROW_COLORS: Record<RiskLevel, string> = {
 };
 
 function TrendIcon({ trend }: { trend: RiskTrend }) {
-  if (trend === "INCREASING") return <TrendingUp className="h-4 w-4 text-risk-high" />;
+  // INCREASING means a higher risk band at 60 days than at 10, not risk rising
+  // over time, so it is amber and says so on hover rather than an alarm.
+  if (trend === "INCREASING") return <TrendingUp className="h-4 w-4 text-risk-medium" aria-label="Higher risk band at 60 days than at 10" />;
   if (trend === "DECREASING") return <TrendingDown className="h-4 w-4 text-risk-low" />;
   return <Minus className="h-4 w-4 text-muted-foreground" />;
 }
@@ -762,7 +764,7 @@ export default function PredictiveMaintenanceDashboard() {
                             </div>
                           </TooltipTrigger>
                           <TooltipContent>
-                            <p>Risk trend: {result.riskTrend ?? "STABLE"}</p>
+                            <p>{result.riskTrend === "INCREASING" ? "Higher risk band at 60 days than at 10" : "Same risk band at every horizon"}</p>
                           </TooltipContent>
                         </Tooltip>
                       </TooltipProvider>
@@ -975,11 +977,11 @@ export default function PredictiveMaintenanceDashboard() {
                 {selectedResult.category} · {selectedResult.equipmentCode} ·{" "}
                 <span className={cn(
                   "font-medium",
-                  selectedResult.riskTrend === "INCREASING" && "text-risk-high",
-                  selectedResult.riskTrend === "DECREASING" && "text-risk-low",
-                  selectedResult.riskTrend === "STABLE"     && "text-muted-foreground",
+                  selectedResult.riskTrend === "INCREASING" ? "text-risk-medium" : "text-muted-foreground",
                 )}>
-                  Risk {selectedResult.riskTrend?.toLowerCase() ?? "stable"} across horizons
+                  {selectedResult.riskTrend === "INCREASING"
+                    ? "Higher risk band at 60 days than at 10"
+                    : "Same risk band at every horizon"}
                 </span>
               </DialogDescription>
             </DialogHeader>
