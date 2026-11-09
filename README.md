@@ -320,7 +320,7 @@ A discrete-event simulator advances a cursor date day by day:
 │   │   └── genai_advisor.py           # Groq recommendation generation
 │   ├── training/
 │   │   └── train_model_multihorizon.py  # Training pipeline — TimeSeriesSplit CV + MLflow logging + DQ gate
-│   ├── tests/                     # 193 tests total (pytest)
+│   ├── tests/                     # 280 tests total (pytest)
 │   │   ├── test_ml_engine.py          # inference, monotonicity, risk ordering, batch, schema
 │   │   ├── test_train_smoke.py        # full training pipeline on synthetic data
 │   │   ├── test_data_quality.py       # all 8 DQ checks + report structure
@@ -405,12 +405,12 @@ Authenticated with `Authorization: Bearer <AGENT_API_KEY>`. Designed for program
 ## Testing
 
 ```bash
-# Python — ml-service (276 tests: inference, training smoke test, point-in-time
+# Python — ml-service (280 tests: inference, training smoke test, point-in-time
 # correctness, leakage canaries, data-quality gate, model registry, drift reference)
 cd ml-service
 pytest tests/ -v
 
-# Node/TypeScript — server + shared client logic (77 files: 962 pass with no
+# Node/TypeScript — server + shared client logic (80 files: 977 pass with no
 # database; 47 more need DATABASE_URL pointed at a live one and skip without it)
 npm test
 
