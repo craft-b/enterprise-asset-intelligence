@@ -21,9 +21,8 @@ except ImportError:
 REGISTRY = Path(__file__).parent.parent / "registry"
 HORIZONS = [10, 30, 60]
 
-# Uniform thresholds across all horizons.
-# Monotonic enforcement (p10 ≤ p30 ≤ p60) guarantees risk levels are also
-# non-decreasing — no separate per-horizon compensation needed.
+# Per-horizon cutoffs: the windows are cumulative, so a 20% chance of failing
+# within 10 days is as alarming as 70% within 60.
 RISK_THRESHOLDS = {
     # Mirrors shared/risk-bands.ts, which explains the values;
     # tests/test_risk_band_parity.py keeps the two in step.

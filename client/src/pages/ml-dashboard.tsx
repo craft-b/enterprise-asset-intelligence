@@ -1203,8 +1203,9 @@ export default function MLPerformanceDashboard() {
             </table>
           </div>
           <p className="mt-3 text-xs text-muted-foreground">
-            "n/a" means the metric had nothing to measure on that split (e.g. no evaluable failure
-            events) — never a fabricated default.
+            Recall @ HIGH, lead time and failures flagged use each horizon's own HIGH cutoff, the one
+            the app flags with: 20%, 45% and 70% at 10, 30 and 60 days. "n/a" means the metric had
+            nothing to measure on that split (e.g. no evaluable failure events) — never a fabricated default.
           </p>
         </CardContent>
       </Card>

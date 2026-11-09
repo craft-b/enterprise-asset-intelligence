@@ -102,13 +102,17 @@ if str(SCRIPT_DIR) not in sys.path:
 
 # ML-6: the single shared feature transform, used identically at train and serve
 from engine.feature_transform import transform_features  # noqa: E402
+from engine.predictor_multihorizon import RISK_THRESHOLDS  # noqa: E402
 
 HORIZONS = [10, 30, 60]  # days
 
 # ── Operating point & shop-capacity budget (ML-3 operator metrics) ────────────
-# HIGH band threshold used by the serving layer (predictor risk bands 0.30/0.60).
-# Operator metrics are evaluated where the business acts: the HIGH flag.
-OPERATING_THRESHOLD = 0.60
+# Operator metrics are evaluated where the business acts: the HIGH flag, at
+# each horizon's own HIGH cutoff from the serving layer's risk bands. A single
+# 0.60 for every horizon was left over from uniform bands: the 10-day model's
+# calibrated probabilities never reach it, so it reported 0% recall at HIGH
+# while the app flagged 10-day HIGH at 20%.
+OPERATING_THRESHOLDS = {h: RISK_THRESHOLDS[h]["HIGH"] for h in (10, 30, 60)}
 # precision@budget: the shop can realistically service ~10% of the fleet per
 # week; precision inside that top-K queue is the "will my mechanic trust this
 # list" number, unlike global AUC.
@@ -346,10 +350,11 @@ def prepare_features(df: pd.DataFrame, model_version: str):
 
 def compute_operator_metrics(y_true, y_prob, snapshot_ts, equipment_ids,
                              failures_df: pd.DataFrame, horizon_days: int,
-                             threshold: float = OPERATING_THRESHOLD) -> dict:
+                             threshold: float | None = None) -> dict:
     """
     Metrics evaluated at the operating point, not averaged over all thresholds:
-      - recall_failure_operating: share of actual failures flagged HIGH (≥ threshold).
+      - recall_failure_operating: share of actual failures flagged HIGH (≥ the
+        horizon's HIGH cutoff unless `threshold` is given).
         Missed failures are the expensive error class.
       - precision_at_budget: per snapshot date, take the top-K units by predicted
         probability (K = PM_BUDGET_FRACTION of units scored that date — the shop's
@@ -360,6 +365,8 @@ def compute_operator_metrics(y_true, y_prob, snapshot_ts, equipment_ids,
         HIGH flag at any point in the `horizon_days` before the event.
     All inputs are positional (same order); NaNs must be pre-masked.
     """
+    if threshold is None:
+        threshold = OPERATING_THRESHOLDS[horizon_days]
     y_true = np.asarray(y_true).astype(int)
     y_prob = np.asarray(y_prob, dtype=float)
     frame = pd.DataFrame({
@@ -712,7 +719,7 @@ def train_horizon_model(X: pd.DataFrame, y: pd.Series, horizon_days: int,
     op_temporal = compute_operator_metrics(
         y_test.to_numpy(), y_prob, ts_test, eq_test, failures_df, horizon_days
     )
-    print(f"[OPERATOR] recall@{OPERATING_THRESHOLD:.2f} (HIGH): "
+    print(f"[OPERATOR] recall@{op_temporal['operating_threshold']:.2f} (HIGH): "
           f"{_fmt(op_temporal['recall_failure_operating'])}  "
           f"precision@budget({PM_BUDGET_FRACTION:.0%}): {_fmt(op_temporal['precision_at_budget'])}")
     print(f"[OPERATOR] lead time median: {_fmt(op_temporal['lead_time_median_days'])}d  "

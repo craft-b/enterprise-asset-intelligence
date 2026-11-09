@@ -549,17 +549,13 @@ Seeds:
 - six months of sensor readings and maintenance history per asset, with failure events
 - the fleet scored at all three horizons (10d / 30d / 60d), with SHAP attribution and a drift reference baseline
 
-The **"Train model" step may still report itself as skipped, and says why**. At
-ten assets it was refused on row count: the data-quality gate wants 500 labelled
-rows and the seed produced about 230, because a snapshot cannot be labelled until
-its 60-day horizon has elapsed. Sixty assets produce about 1,380, which clears
-that gate — so the step now attempts a real training run rather than being turned
-away. On a 512MB instance it is expected to fail anyway, on memory rather than
-rows, partway through three 200-tree forests with SHAP loaded. Either way the
-fleet is
-scored by the v2.0 champion that ships inside the ML image — trained offline
-on 23,040 snapshots — and its metrics are copied into `model_metrics` so the ML
-dashboard shows what the system actually has. Nothing here is trained on the
+The **"Train model" step does not train by default**. The fleet is scored by the
+v2.0 champion that ships inside the ML image — trained offline on 23,040
+snapshots — and the step copies its metrics into `model_metrics` so the ML
+dashboard shows what the system actually has. A run on the demo data could only
+ever add a challenger, and on Cloud Run it outlasted the step's 7-minute limit,
+so every hosted seed finished "with gaps". `SEED_TRAIN_MODEL=on` restores it;
+**Retrain** in the ML pipeline controls trains on demand. Nothing here is trained on the
 demo data, and the seed log says so rather than letting a green checkmark imply
 otherwise.
 
@@ -821,9 +817,9 @@ recency, and still scores lower (0.253 against 0.328). Category and the sensor t
 there that a single-feature story does not capture.
 
 Two things were deliberately not done to produce a tidier distribution: the age-weighted hazard in
-the simulator was left alone, and the band thresholds were left alone. The HIGH cut of 0.60 is the
-operating point the published recall and precision-at-budget were measured at, so moving it would
-invalidate the numbers on the model page. Recalibrating operating points to a deployment's own base
+the simulator was left alone, and the band thresholds were left alone. Each horizon's HIGH cut
+(20%, 45% and 70% at 10, 30 and 60 days) is the operating point the published recall and lead time
+are measured at, so moving one would invalidate the numbers on the model page. Recalibrating operating points to a deployment's own base
 rate is a reasonable next step — it just has to be done by measuring that deployment, not by picking
 a cut that makes a screenshot look better.
 

@@ -8,7 +8,7 @@
 //   5.  Historical sensor data (90 days)
 //   6.  Feature snapshots (backfill)
 //   7.  Label snapshots
-//   8.  Train model (polls ML service until complete)
+//   8.  Train model (only with SEED_TRAIN_MODEL=on; otherwise registers the shipped champion)
 //   9.  Batch predictions
 //   10. Drift reference
 //
@@ -568,42 +568,63 @@ async function runSeedPipeline() {
     // baseline down with it, leaving a seeded fleet with an empty risk queue
     // and nothing to look at. The service ships a trained champion in its
     // image, so the steps below work regardless of whether this one does.
-    setStep(7, "running", "Contacting ML service...");
-    try {
-      await trainAndPoll();
-      setStep(7, "completed", "Model trained successfully");
-    } catch (err: any) {
-      const why = err?.message ?? String(err);
-      console.warn("[SEED] training step failed; continuing with the model the ML service already has:", why);
-
-      // Register the shipped champion's own evaluation instead. Without this
-      // the ML dashboard shows a "train the model" checklist forever: it reads
-      // model_metrics, and only a training run writes that table. The model
-      // itself is loaded and fully evaluated; only the paperwork was missing.
-      //
-      // This used to be reached because the data-quality gate refused the run
-      // on row count -- fast, clean, and free. The sixty-asset fleet produces
-      // about 1,380 labelled rows and clears that gate, so the likely failure
-      // here is now memory partway through three 200-tree forests with SHAP
-      // loaded. Step 8 already re-wakes and retries for exactly that reason,
-      // but this path is no longer the cheap one it was.
-      let registered = "";
+    //
+    // Off unless SEED_TRAIN_MODEL=on. The run never changed what scores the
+    // fleet -- a new model only becomes a challenger -- and on Cloud Run it
+    // outlasted the step's 7-minute limit, so every hosted seed ended "with
+    // gaps" for a result nobody used. Retraining stays one click away in the
+    // ML pipeline controls.
+    if (process.env.SEED_TRAIN_MODEL !== "on") {
+      setStep(7, "running", "Registering the shipped champion...");
       try {
         const champion = (await registerChampionMetrics())!;
-        registered =
-          ` Registered ${champion.version} (trained ` +
-          `${champion.trainedAt.toISOString().slice(0, 10)}, ` +
-          `${champion.datasetSize?.toLocaleString() ?? "?"} rows) so its metrics are visible.`;
-        setStep(7, "failed", `Skipped — ${why} · registered ${champion.version}`.slice(0, 300));
-      } catch (regErr: any) {
-        console.warn("[SEED] could not register champion metrics:", regErr?.message ?? regErr);
-        setStep(7, "failed", `Skipped — ${why}`.slice(0, 300));
+        setStep(7, "completed",
+          `Scoring with ${champion.version}, trained offline on ` +
+          `${champion.datasetSize?.toLocaleString() ?? "?"} snapshots; not retrained on demo data`);
+      } catch (err: any) {
+        const why = err?.message ?? String(err);
+        console.warn("[SEED] could not register champion metrics:", why);
+        setStep(7, "failed", `Could not register the champion's metrics — ${why}`.slice(0, 300));
+        addWarning(`The champion's metrics were not registered (${why}); the ML dashboard may show a setup checklist.`);
       }
+    } else {
+      setStep(7, "running", "Contacting ML service...");
+      try {
+        await trainAndPoll();
+        setStep(7, "completed", "Model trained successfully");
+      } catch (err: any) {
+        const why = err?.message ?? String(err);
+        console.warn("[SEED] training step failed; continuing with the model the ML service already has:", why);
 
-      addWarning(
-        `The model was not retrained (${why}) — the fleet is scored with the ` +
-        `champion model shipped in the ML service image.${registered}`
-      );
+        // Register the shipped champion's own evaluation instead. Without this
+        // the ML dashboard shows a "train the model" checklist forever: it reads
+        // model_metrics, and only a training run writes that table. The model
+        // itself is loaded and fully evaluated; only the paperwork was missing.
+        //
+        // This used to be reached because the data-quality gate refused the run
+        // on row count -- fast, clean, and free. The sixty-asset fleet produces
+        // about 1,380 labelled rows and clears that gate, so the likely failure
+        // here is now memory partway through three 200-tree forests with SHAP
+        // loaded. Step 8 already re-wakes and retries for exactly that reason,
+        // but this path is no longer the cheap one it was.
+        let registered = "";
+        try {
+          const champion = (await registerChampionMetrics())!;
+          registered =
+            ` Registered ${champion.version} (trained ` +
+            `${champion.trainedAt.toISOString().slice(0, 10)}, ` +
+            `${champion.datasetSize?.toLocaleString() ?? "?"} rows) so its metrics are visible.`;
+          setStep(7, "failed", `Skipped — ${why} · registered ${champion.version}`.slice(0, 300));
+        } catch (regErr: any) {
+          console.warn("[SEED] could not register champion metrics:", regErr?.message ?? regErr);
+          setStep(7, "failed", `Skipped — ${why}`.slice(0, 300));
+        }
+
+        addWarning(
+          `The model was not retrained (${why}) — the fleet is scored with the ` +
+          `champion model shipped in the ML service image.${registered}`
+        );
+      }
     }
 
     // ── Step 8: Batch predictions ──────────────────────────────────────────

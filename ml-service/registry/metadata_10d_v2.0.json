@@ -9,12 +9,12 @@
   "embargo_days": 10,
   "embargoed_rows": 192,
   "operator_metrics_temporal": {
-    "recall_failure_operating": 0.0,
+    "recall_failure_operating": 0.3938879456706282,
     "precision_at_budget": 0.31664456233421745,
-    "lead_time_median_days": null,
-    "lead_time_failures_flagged_pct": 0.0,
+    "lead_time_median_days": 7.0,
+    "lead_time_failures_flagged_pct": 0.40492170022371365,
     "lead_time_failures_evaluable": 447,
-    "operating_threshold": 0.6,
+    "operating_threshold": 0.2,
     "budget_fraction": 0.1
   },
   "by_asset": {
@@ -23,12 +23,12 @@
     "positive_rate": 0.10729166666666666,
     "n_evaluated": 23040,
     "n_folds": 5,
-    "recall_failure_operating": 0.0,
+    "recall_failure_operating": 0.29894822006472493,
     "precision_at_budget": 0.2738715277777778,
-    "lead_time_median_days": null,
-    "lead_time_failures_flagged_pct": 0.0,
+    "lead_time_median_days": 7.0,
+    "lead_time_failures_flagged_pct": 0.3186571271326362,
     "lead_time_failures_evaluable": 1817,
-    "operating_threshold": 0.6,
+    "operating_threshold": 0.2,
     "budget_fraction": 0.1
   },
   "accuracy": 0.8722,
