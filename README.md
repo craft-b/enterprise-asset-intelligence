@@ -584,6 +584,7 @@ pipeline, and generating predictions in the right order.
 | `SLACK_WEBHOOK_URL` | — | Incoming webhook URL for `monitor.py` alerts. If unset, Slack notifications are silently skipped. |
 | `ENABLE_API_DOCS` | — | Serves `/docs`, `/redoc` and `/openapi.json` on the ML service. Off unless truthy; these paths bypass the service-token check, so leave it off anywhere reachable. |
 | `ALLOWED_ORIGINS` | — | Comma-separated browser origins allowed to call the API with cookies. Only needed when the SPA is hosted separately. A wildcard is refused at boot. |
+| `PUBLIC_APP_URL` | — | The SPA's public origin when it is hosted separately. Set, the API answers browser page requests outside `/api` with a 308 to that origin, so a visitor on the container's own URL gets the site with the waking screen rather than a blank cold start. Unset, the container serves the SPA itself. |
 | `SEED_DEMO_USERS` | — | Creates the `admin`/`viewer` accounts the login page advertises. Off unless truthy. These are published passwords on an account that can modify data, so enable it only on a demo holding synthetic data. Idempotent — existing accounts are never overwritten. |
 | `VITE_API_URL` | — | Client-side, baked in at build time. API origin when the SPA is hosted separately; unset means same-origin. |
 | `PYTHONIOENCODING` | — | Set to `utf-8` on Windows to avoid codec errors |

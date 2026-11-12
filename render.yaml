@@ -96,6 +96,11 @@ services:
       # blank -- and because a wrong value here fails the boot by design.
       - key: ALLOWED_ORIGINS
         value: ""
+      # The SPA's origin on the static host. Browser page requests that reach
+      # this service are redirected there; /api is unaffected. Set in the
+      # dashboard alongside ALLOWED_ORIGINS.
+      - key: PUBLIC_APP_URL
+        sync: false
 
       # Full https:// origin of the ML service. Since 2026-11 that is the
       # private Cloud Run service infrastructure/cloud-run/deploy-ml.sh
